@@ -9,6 +9,7 @@
  */
 
 #include "DeviceList.h"
+#include "USBHIDDevice.h"
 
 #include <KernelExport.h>
 #include <Drivers.h>
@@ -76,10 +77,22 @@ usb_hid_device_added(usb_device device, void **cookie)
 
 		if (interfaceClass == USB_INTERFACE_CLASS_HID) {
 			mutex_lock(&sDriverLock);
+			
+			HIDDevice* hidDevice = NULL;
+			
+			hidDevice = new(std::nothrow) USBHIDDevice();
+			if (hidDevice == NULL) {
+				TRACE("no memory for hidDevice\n");
+				mutex_unlock(&sDriverLock);
+				return B_ERROR;
+			}
+			
+			hidDevice->SetParentCookie(sParentCookie);
+			
 			char path[128];
 			sprintf(path,"/dev/input/hid/usb%" B_PRId32,sParentCookie);
 			TRACE("publishing HID device %s\n",path);
-			gDeviceList->AddDevice(path, NULL);
+			gDeviceList->AddDevice(path, hidDevice);
 			*cookie = (void *)(addr_t)sParentCookie;
 			sParentCookie++;
 			deviceFound=true;
@@ -101,6 +114,17 @@ usb_hid_device_removed(void *cookie)
 	int32 parentCookie = (int32)(addr_t)cookie;
 	TRACE("device_removed(%" B_PRId32 ")\n", parentCookie);
 	
+	for (int32 i = 0; i < gDeviceList->CountDevices(); i++) {
+		HIDDevice* device = (HIDDevice *)gDeviceList->DeviceAt(i);
+		
+		if (!device)
+			continue;
+			
+		if (device->ParentCookie() == parentCookie) {
+			gDeviceList->RemoveDevice(NULL,device);
+			break;
+		}
+	}
 
 	mutex_unlock(&sDriverLock);
 
@@ -160,7 +184,15 @@ const char **
 publish_devices(void)
 {
 	TRACE("publish_devices\n");
-	return NULL;
+	const char **publishList = gDeviceList->PublishDevices();
+
+	int32 index = 0;
+	while (publishList[index] != NULL) {
+		TRACE("publishing %s\n", publishList[index]);
+		index++;
+	}
+
+	return publishList;
 }
 
 
