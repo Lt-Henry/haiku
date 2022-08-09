@@ -1,4 +1,4 @@
-SubDir HAIKU_TOP src add-ons kernel drivers input hid;
+SubDir HAIKU_TOP src add-ons kernel drivers input hid ;
 
 SubDirC++Flags -fno-rtti -DKEYBOARD_SUPPORTS_KDL -DUSB_KDL ;
 
@@ -7,6 +7,7 @@ SubDirSysHdrs $(HAIKU_TOP) src add-ons kernel drivers input hid_shared ;
 UsePrivateHeaders [ FDirName kernel util ] input drivers device ;
 UsePrivateKernelHeaders ;
 
-KernelAddon hid:
+KernelAddon hid :
 	Driver.cpp
+	DeviceList.cpp
 ;

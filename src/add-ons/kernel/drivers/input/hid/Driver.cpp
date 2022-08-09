@@ -8,6 +8,8 @@
  *		Lt_Henry
  */
 
+#include "DeviceList.h"
+
 #include <KernelExport.h>
 #include <Drivers.h>
 #include <USB3.h>
@@ -15,15 +17,20 @@
 #include <util/Vector.h>
 #include <lock.h>
 
-#define TRACE(x...)	dprintf("usb_hid_raw" ": " x)
+#include <stdio.h>
+
+#define TRACE(x...)	dprintf("hid" ": " x)
 
 #define USB_INTERFACE_CLASS_HID			3
+#define USB_DEFAULT_CONFIGURATION		0
+
 
 int32 api_version = B_CUR_DRIVER_API_VERSION;
 
 usb_module_info *gUSBModule;
 static int32 sParentCookie = 0;
 static mutex sDriverLock;
+DeviceList *gDeviceList = NULL;
 
 /* usb module hooks */
 
@@ -31,6 +38,7 @@ status_t
 usb_hid_device_added(usb_device device, void **cookie)
 {
 	TRACE("device_added\n");
+	bool deviceFound = false;
 
 	const usb_device_descriptor *deviceDescriptor
 		= gUSBModule->get_device_descriptor(device);
@@ -48,14 +56,14 @@ usb_hid_device_added(usb_device device, void **cookie)
 	// ensure default configuration is set
 	status_t result = gUSBModule->set_configuration(device, config);
 	if (result != B_OK) {
-		TRACE_ALWAYS("set_configuration() failed 0x%08" B_PRIx32 "\n", result);
+		TRACE("set_configuration() failed 0x%08" B_PRIx32 "\n", result);
 		return result;
 	}
 
 	// refresh config
 	config = gUSBModule->get_configuration(device);
 	if (config == NULL) {
-		TRACE_ALWAYS("cannot get current configuration\n");
+		TRACE("cannot get current configuration\n");
 		return B_ERROR;
 	}
 
@@ -68,11 +76,20 @@ usb_hid_device_added(usb_device device, void **cookie)
 
 		if (interfaceClass == USB_INTERFACE_CLASS_HID) {
 			mutex_lock(&sDriverLock);
-			
+			char path[128];
+			sprintf(path,"/dev/input/hid/usb%" B_PRId32,sParentCookie);
+			TRACE("publishing HID device %s\n",path);
+			gDeviceList->AddDevice(path, NULL);
+			*cookie = (void *)(addr_t)sParentCookie;
+			sParentCookie++;
+			deviceFound=true;
 			mutex_unlock(&sDriverLock);
 		}
 
 	}
+
+	if (!deviceFound)
+		return B_ERROR;
 
 	return B_OK;
 }
@@ -80,7 +97,13 @@ usb_hid_device_added(usb_device device, void **cookie)
 status_t
 usb_hid_device_removed(void *cookie)
 {
-	TRACE("device_removed\n");
+	mutex_lock(&sDriverLock);
+	int32 parentCookie = (int32)(addr_t)cookie;
+	TRACE("device_removed(%" B_PRId32 ")\n", parentCookie);
+	
+
+	mutex_unlock(&sDriverLock);
+
 	return B_OK;
 }
 
@@ -168,6 +191,12 @@ init_driver(void)
 	if (get_module(B_USB_MODULE_NAME, (module_info **)&gUSBModule) != B_OK)
 		return B_ERROR;
 
+	gDeviceList = new(std::nothrow) DeviceList();
+	if (gDeviceList == NULL) {
+		put_module(B_USB_MODULE_NAME);
+		return B_NO_MEMORY;
+	}
+
 	mutex_init(&sDriverLock, "usb hid raw driver lock");
 
 	static usb_support_descriptor genericHIDSupportDescriptor = {
@@ -196,4 +225,6 @@ uninit_driver(void)
 	gUSBModule->uninstall_notify("usb_hid_raw");
 	put_module(B_USB_MODULE_NAME);
 	mutex_destroy(&sDriverLock);
+
+	delete gDeviceList;
 }
