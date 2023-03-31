@@ -29,6 +29,7 @@ struct device_cookie {
 
 int32 api_version = B_CUR_DRIVER_API_VERSION;
 usb_module_info *gUSBModule = NULL;
+hid_module_info *gHIDModule = NULL;
 DeviceList *gDeviceList = NULL;
 static int32 sParentCookie = 0;
 static mutex sDriverLock;
@@ -179,6 +180,10 @@ usb_hid_device_added(usb_device device, void **cookie)
 
 	if (!devicesFound)
 		return B_ERROR;
+
+	TRACE_ALWAYS("adding a usb hid device...\n");
+	if (gHIDModule)
+		gHIDModule->add_device(B_HID_BUS_USB);
 
 	*cookie = (void *)(addr_t)parentCookie;
 	return B_OK;
@@ -347,7 +352,11 @@ init_driver()
 	if (get_module(B_USB_MODULE_NAME, (module_info **)&gUSBModule) != B_OK)
 		return B_ERROR;
 
-	gDeviceList = new(std::nothrow) DeviceList();
+	if (get_module(B_HID_MODULE_NAME, (module_info **)&gHIDModule) != B_OK) {
+		TRACE_ALWAYS("Can not load HID module\n");
+	}
+
+		gDeviceList = new(std::nothrow) DeviceList();
 	if (gDeviceList == NULL) {
 		put_module(B_USB_MODULE_NAME);
 		return B_NO_MEMORY;
@@ -398,6 +407,7 @@ uninit_driver()
 	TRACE("uninit_driver()\n");
 	gUSBModule->uninstall_notify(DRIVER_NAME);
 	put_module(B_USB_MODULE_NAME);
+	put_module(B_HID_MODULE_NAME);
 	delete[] sSupportDescriptors;
 	sSupportDescriptors = NULL;
 	delete gDeviceList;

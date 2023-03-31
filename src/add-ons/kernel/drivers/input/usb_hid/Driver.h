@@ -10,6 +10,7 @@
 #include <KernelExport.h>
 #include <OS.h>
 #include <USB3.h>
+#include <HID.h>
 #include <util/kernel_cpp.h>
 
 #include "DeviceList.h"
@@ -24,6 +25,7 @@
 #define USB_VENDOR_WACOM				0x056a
 
 extern usb_module_info *gUSBModule;
+extern hid_module_info *gHIDModule;
 extern DeviceList *gDeviceList;
 
 extern "C" {

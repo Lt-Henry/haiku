@@ -23,7 +23,7 @@ struct hid_module_info {
 	module_info module;
 	status_t (*add_device)(uint32 bus);
 	status_t (*remove_device)(uint32 bus);
-}
+};
 
 /*
 struct hid_module_info {
