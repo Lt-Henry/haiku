@@ -19,6 +19,7 @@
 #include "KeyboardProtocolHandler.h"
 #include "MouseProtocolHandler.h"
 #include "TabletProtocolHandler.h"
+#include "RawProtocolHandler.h"
 
 
 ProtocolHandler::ProtocolHandler(HIDDevice *device, const char *basePath,
@@ -97,6 +98,7 @@ ProtocolHandler::AddHandlers(HIDDevice &device, ProtocolHandler *&handlerList,
 		JoystickProtocolHandler::AddHandlers(device, *collection, handlerList);
 		MouseProtocolHandler::AddHandlers(device, *collection, handlerList);
 		TabletProtocolHandler::AddHandlers(device, *collection, handlerList);
+		RawProtocolHandler::AddHandlers(device, *collection, handlerList);
 	}
 
 	handlerCount = 0;

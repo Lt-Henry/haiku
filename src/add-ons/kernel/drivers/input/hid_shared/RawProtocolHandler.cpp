@@ -14,6 +14,8 @@
 #include <new>
 #include <kernel.h>
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include <usb/USB_hid.h>
 
 #include <keyboard_mouse_driver.h>
@@ -30,6 +32,11 @@ void
 RawProtocolHandler::AddHandlers(HIDDevice &device, HIDCollection &collection,
 	ProtocolHandler *&handlerList)
 {
+	HIDParser &parser = device.Parser();
+	uint32 maxReportCount = parser.CountReports(HID_REPORT_TYPE_INPUT);
+	if (maxReportCount == 0)
+		return;
+
 	uint32 inputReportCount = 0;
 	HIDReport *inputReports[maxReportCount];
 	collection.BuildReportList(HID_REPORT_TYPE_INPUT, inputReports,
@@ -78,13 +85,23 @@ status_t
 RawProtocolHandler::Read(uint32 *cookie, off_t position,void *buffer,
 								size_t *numBytes) {
 
-	uint8	tmp[64];
+	char	tmp[64];
+	//TRACE("read report\n");
 	status_t status = _ReadReport(tmp,cookie);
-	sprintf(tmp,"report size:%" B_PRIu32 "\n",Device().Parser().ReportSize());
-	if (user_strlcpy((char *)buffer, tmp, strlen(tmp)) > 0)
-		return B_OK;
+	snprintf(tmp,64,"ID:%" B_PRIu32 " report size:%" B_PRIuSIZE "\n",fReport.ID(),fReport.ReportSize());
+	*numBytes = 1 + strlen(tmp);
+	status = user_strlcpy((char *)buffer, tmp, *numBytes);
 
-	return B_ERROR;
+	fReport.DoneProcessing();
+
+	return status;
+}
+
+status_t
+RawProtocolHandler::Close(uint32 *cookie)
+{
+	TRACE("yolo\n");
+	return B_OK;
 }
 
 status_t

@@ -30,9 +30,11 @@ public:
 	virtual	status_t		Read(uint32 *cookie, off_t position,
 									void *buffer, size_t *numBytes);
 
+	virtual	status_t		Close(uint32 *cookie);
+
 private:
 	status_t				_ReadReport(void *buffer, uint32 *cookie);
-			//HIDReport &		fReport;
+			HIDReport &		fReport;
 			//HIDDevice *		fDevice;
 };
 
