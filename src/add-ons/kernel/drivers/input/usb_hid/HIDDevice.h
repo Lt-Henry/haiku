@@ -24,6 +24,9 @@ public:
 			void				SetParentCookie(int32 cookie);
 			int32				ParentCookie() const { return fParentCookie; }
 
+			uint8 *				ReportDescriptor() const { return fReportDescriptor; }
+			size_t				ReportDescriptorLength() const { return fReportDescriptorLength; }
+
 			status_t			InitCheck() const { return fStatus; }
 
 			bool				IsOpen() const { return fOpenCount > 0; }
@@ -71,6 +74,9 @@ private:
 
 			uint32				fProtocolHandlerCount;
 			ProtocolHandler *	fProtocolHandlerList;
+
+			uint8 *				fReportDescriptor;
+			size_t				fReportDescriptorLength;
 };
 
 

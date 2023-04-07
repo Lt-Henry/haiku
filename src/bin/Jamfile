@@ -266,6 +266,7 @@ SubInclude HAIKU_TOP src bin keymap ;
 SubInclude HAIKU_TOP src bin keystore ;
 SubInclude HAIKU_TOP src bin listdev ;
 SubInclude HAIKU_TOP src bin listusb ;
+SubInclude HAIKU_TOP src bin listhid ;
 SubInclude HAIKU_TOP src bin locale ;
 SubInclude HAIKU_TOP src bin makebootable ;
 SubInclude HAIKU_TOP src bin mail_utils ;

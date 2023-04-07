@@ -19,6 +19,7 @@
 #include <usb/USB_hid.h>
 
 #include <keyboard_mouse_driver.h>
+#include <HID.h>
 
 
 RawProtocolHandler::RawProtocolHandler(HIDReport &report) :
@@ -71,11 +72,18 @@ RawProtocolHandler::Control(uint32 *cookie, uint32 op, void *buffer,
 		}
 		break;
 
-		case HID_GET_REPORT_DESCRIPTOR:
-		{
-			
+		case B_HID_IO_GET_INFO: {
+			hid_info info;
+			info.bus = B_HID_BUS_USB;
+			info.vid = 0x00;
+			info.pid = 0x00;
+			info.id = fReport.ID();
+
+			status_t status = user_strlcpy((char *)buffer, (char *)&info, sizeof(hid_info));
+			return status;
 		}
 		break;
+
 	}
 
 	return B_ERROR;
@@ -85,13 +93,20 @@ status_t
 RawProtocolHandler::Read(uint32 *cookie, off_t position,void *buffer,
 								size_t *numBytes) {
 
-	char	tmp[64];
+	char	tmp[256];
 	//TRACE("read report\n");
 	status_t status = _ReadReport(tmp,cookie);
-	snprintf(tmp,64,"ID:%" B_PRIu32 " report size:%" B_PRIuSIZE "\n",fReport.ID(),fReport.ReportSize());
+	uint8 *report = fReport.CurrentReport();
+	size_t reportSize = fReport.ReportSize();
+	size_t p = snprintf(tmp,256,"ID:%" B_PRIu32 " report size:%" B_PRIuSIZE "\n",fReport.ID(),reportSize);
+
+	for (size_t n=0; n<reportSize; n++) {
+		p+=snprintf(tmp+p,256-p,"%x ",report[n]);
+	}
+
+	p+=snprintf(tmp+p,256-p,"\n");
 	*numBytes = 1 + strlen(tmp);
 	status = user_strlcpy((char *)buffer, tmp, *numBytes);
-
 	fReport.DoneProcessing();
 
 	return status;
