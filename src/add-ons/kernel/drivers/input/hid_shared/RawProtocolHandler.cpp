@@ -63,6 +63,7 @@ status_t
 RawProtocolHandler::Control(uint32 *cookie, uint32 op, void *buffer,
 									size_t length) {
 
+	TRACE("ioctl:%" B_PRIu32 "\n",op);
 	switch (op) {
 
 		case B_GET_DEVICE_NAME:
@@ -78,8 +79,9 @@ RawProtocolHandler::Control(uint32 *cookie, uint32 op, void *buffer,
 			info.vid = 0x00;
 			info.pid = 0x00;
 			info.id = fReport.ID();
+			TRACE("hid info of: %" B_PRIu32 "\n",info.id);
 
-			status_t status = user_strlcpy((char *)buffer, (char *)&info, sizeof(hid_info));
+			status_t status = user_memcpy(buffer, &info, sizeof(hid_info));
 			return status;
 		}
 		break;
@@ -98,10 +100,9 @@ RawProtocolHandler::Read(uint32 *cookie, off_t position,void *buffer,
 	status_t status = _ReadReport(tmp,cookie);
 	uint8 *report = fReport.CurrentReport();
 	size_t reportSize = fReport.ReportSize();
-	size_t p = snprintf(tmp,256,"ID:%" B_PRIu32 " report size:%" B_PRIuSIZE "\n",fReport.ID(),reportSize);
-
+	size_t p = 0;
 	for (size_t n=0; n<reportSize; n++) {
-		p+=snprintf(tmp+p,256-p,"%x ",report[n]);
+		p+=snprintf(p + tmp,256-p,"%2x ",report[n]);
 	}
 
 	p+=snprintf(tmp+p,256-p,"\n");

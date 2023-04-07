@@ -1,8 +1,9 @@
 SubDir HAIKU_TOP src bin listhid ;
 
-UsePrivateHeaders shared usb ;
-UsePrivateHeaders drivers ;
-UseHeaders [ FDirName $(HAIKU_TOP) src add-ons kernel bus_managers usb ] ;
+# UsePrivateHeaders shared usb ;
+# UsePrivateHeaders drivers ;
+UsePrivateHeaders input ;
+# UseHeaders [ FDirName $(HAIKU_TOP) src add-ons kernel bus_managers usb ] ;
 
 BinCommand listhid :
 	listhid.cpp
