@@ -18,10 +18,9 @@ class HIDReportItem;
 
 class RawProtocolHandler : public ProtocolHandler {
 public:
-							RawProtocolHandler(HIDReport &report);
+							RawProtocolHandler(HIDDevice &device);
 
 	static	void			AddHandlers(HIDDevice &device,
-									HIDCollection &collection,
 									ProtocolHandler *&handlerList);
 
 	virtual	status_t		Control(uint32 *cookie, uint32 op, void *buffer,
@@ -34,8 +33,8 @@ public:
 
 private:
 	status_t				_ReadReport(void *buffer, uint32 *cookie);
-			HIDReport &		fReport;
-			//HIDDevice *		fDevice;
+			//HIDReport &		fReport;
+			HIDDevice &		fDevice;
 };
 
 #endif

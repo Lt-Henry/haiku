@@ -38,6 +38,7 @@ public:
 			bool				IsRemoved() const { return fRemoved; }
 
 			status_t			MaybeScheduleTransfer(HIDReport*);
+			status_t			WaitForTransfer(bigtime_t timeout, uint8 **buffer,size_t *length);
 
 			status_t			SendReport(HIDReport *report);
 
@@ -65,6 +66,7 @@ private:
 			int32				fTransferScheduled;
 			size_t				fTransferBufferSize;
 			uint8 *				fTransferBuffer;
+			size_t				fActualSize;
 
 			int32				fParentCookie;
 			int32				fOpenCount;

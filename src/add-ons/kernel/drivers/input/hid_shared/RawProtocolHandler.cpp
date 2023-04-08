@@ -22,41 +22,27 @@
 #include <HID.h>
 
 
-RawProtocolHandler::RawProtocolHandler(HIDReport &report) :
-	ProtocolHandler(report.Device(), "input/hid/" DEVICE_PATH_SUFFIX "/", 0),
-	fReport(report)
+RawProtocolHandler::RawProtocolHandler(HIDDevice &device) :
+	ProtocolHandler(&device, "input/hid/" DEVICE_PATH_SUFFIX "/", 0),
+	fDevice(device)
 {
 	TRACE("raw HID handler at %s\n",PublishPath());
 }
 
 void
-RawProtocolHandler::AddHandlers(HIDDevice &device, HIDCollection &collection,
-	ProtocolHandler *&handlerList)
+RawProtocolHandler::AddHandlers(HIDDevice &device, ProtocolHandler *&handlerList)
 {
-	HIDParser &parser = device.Parser();
-	uint32 maxReportCount = parser.CountReports(HID_REPORT_TYPE_INPUT);
-	if (maxReportCount == 0)
+
+	ProtocolHandler *newHandler = new(std::nothrow) RawProtocolHandler(device);
+
+	if (newHandler == NULL) {
+		TRACE("failed to allocated raw protocol handler\n");
 		return;
-
-	uint32 inputReportCount = 0;
-	HIDReport *inputReports[maxReportCount];
-	collection.BuildReportList(HID_REPORT_TYPE_INPUT, inputReports,
-		inputReportCount);
-
-	for (uint32 i = 0; i < inputReportCount; i++) {
-		HIDReport *inputReport = inputReports[i];
-
-		ProtocolHandler *newHandler = new(std::nothrow) RawProtocolHandler(
-			*inputReport);
-
-		if (newHandler == NULL) {
-			TRACE("failed to allocated raw protocol handler\n");
-			continue;
-		}
-
-		newHandler->SetNextHandler(handlerList);
-		handlerList = newHandler;
 	}
+
+	newHandler->SetNextHandler(handlerList);
+	handlerList = newHandler;
+
 }
 
 status_t
@@ -78,7 +64,7 @@ RawProtocolHandler::Control(uint32 *cookie, uint32 op, void *buffer,
 			info.bus = B_HID_BUS_USB;
 			info.vid = 0x00;
 			info.pid = 0x00;
-			info.id = fReport.ID();
+			//info.id = fReport.ID();
 			TRACE("hid info of: %" B_PRIu32 "\n",info.id);
 
 			status_t status = user_memcpy(buffer, &info, sizeof(hid_info));
@@ -94,9 +80,9 @@ RawProtocolHandler::Control(uint32 *cookie, uint32 op, void *buffer,
 status_t
 RawProtocolHandler::Read(uint32 *cookie, off_t position,void *buffer,
 								size_t *numBytes) {
-
+/*
 	char	tmp[256];
-	//TRACE("read report\n");
+	
 	status_t status = _ReadReport(tmp,cookie);
 	uint8 *report = fReport.CurrentReport();
 	size_t reportSize = fReport.ReportSize();
@@ -111,6 +97,29 @@ RawProtocolHandler::Read(uint32 *cookie, off_t position,void *buffer,
 	fReport.DoneProcessing();
 
 	return status;
+	*/
+
+	status_t status;
+
+	uint8 *report;
+	size_t length;
+
+	if(fDevice.MaybeScheduleTransfer(NULL) != B_OK)
+		return B_ERROR;
+
+	fDevice.WaitForTransfer(0,&report,&length);
+
+	char	tmp[256];
+	size_t p = 0;
+	for (size_t n=0; n<length; n++) {
+		p+=snprintf(p + tmp,256-p,"%02x ",report[n]);
+	}
+
+	p+=snprintf(tmp+p,256-p,"\n");
+	*numBytes = 1 + strlen(tmp);
+	status = user_strlcpy((char *)buffer, tmp, *numBytes);
+
+	return status;
 }
 
 status_t
@@ -123,6 +132,7 @@ RawProtocolHandler::Close(uint32 *cookie)
 status_t
 RawProtocolHandler::_ReadReport(void *buffer, uint32 *cookie)
 {
+/*
 	status_t result = fReport.WaitForReport(B_INFINITE_TIMEOUT);
 
 	if (result != B_OK) {
@@ -144,6 +154,6 @@ RawProtocolHandler::_ReadReport(void *buffer, uint32 *cookie)
 		return B_INTERRUPTED;
 	}
 
-
+*/
 	return B_OK;
 }

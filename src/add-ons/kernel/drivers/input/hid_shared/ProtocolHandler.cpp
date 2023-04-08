@@ -74,6 +74,8 @@ ProtocolHandler::AddHandlers(HIDDevice &device, ProtocolHandler *&handlerList,
 	if (rootCollection == NULL)
 		return;
 
+	RawProtocolHandler::AddHandlers(device, handlerList);
+
 	uint32 appCollectionCount = rootCollection->CountChildrenFlat(
 		COLLECTION_APPLICATION);
 	TRACE("root collection holds %" B_PRIu32 " application collection%s\n",
@@ -98,7 +100,7 @@ ProtocolHandler::AddHandlers(HIDDevice &device, ProtocolHandler *&handlerList,
 		JoystickProtocolHandler::AddHandlers(device, *collection, handlerList);
 		MouseProtocolHandler::AddHandlers(device, *collection, handlerList);
 		TabletProtocolHandler::AddHandlers(device, *collection, handlerList);
-		RawProtocolHandler::AddHandlers(device, *collection, handlerList);
+		//RawProtocolHandler::AddHandlers(device, *collection, handlerList);
 	}
 
 	handlerCount = 0;
