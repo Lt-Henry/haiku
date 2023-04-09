@@ -343,6 +343,11 @@ HIDDevice::_TransferCallback(void *cookie, status_t status, void *data,
 
 	device->fActualSize = actualLength;
 	atomic_set(&device->fTransferScheduled, 0);
+
+	for (uint32 n = 0; n < device->fProtocolHandlerCount; n++) {
+		ProtocolHandler *ph = device->ProtocolHandlerAt(n);
+		ph->TransferCallback(device->fTransferBuffer, actualLength);
+	}
 	device->fParser.SetReport(status, device->fTransferBuffer, actualLength);
 }
 

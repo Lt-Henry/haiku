@@ -24,7 +24,8 @@
 
 RawProtocolHandler::RawProtocolHandler(HIDDevice &device) :
 	ProtocolHandler(&device, "input/hid/" DEVICE_PATH_SUFFIX "/", 0),
-	fDevice(device)
+	fDevice(device),
+	fBusy(0)
 {
 	TRACE("raw HID handler at %s\n",PublishPath());
 }
@@ -101,18 +102,18 @@ RawProtocolHandler::Read(uint32 *cookie, off_t position,void *buffer,
 
 	status_t status;
 
-	uint8 *report;
-	size_t length;
-
 	if(fDevice.MaybeScheduleTransfer(NULL) != B_OK)
 		return B_ERROR;
+	fBusy = 1;
+	while (fBusy != 0)
+		snooze(1000);
 
-	fDevice.WaitForTransfer(0,&report,&length);
+	//fDevice.WaitForTransfer(0,&report,&length);
 
 	char	tmp[256];
 	size_t p = 0;
-	for (size_t n=0; n<length; n++) {
-		p+=snprintf(p + tmp,256-p,"%02x ",report[n]);
+	for (size_t n=0; n<fReportLength; n++) {
+		p+=snprintf(p + tmp,256-p,"%02x ",fReportBuffer[n]);
 	}
 
 	p+=snprintf(tmp+p,256-p,"\n");
@@ -127,6 +128,14 @@ RawProtocolHandler::Close(uint32 *cookie)
 {
 	TRACE("yolo\n");
 	return B_OK;
+}
+
+void
+RawProtocolHandler::TransferCallback(uint8 *buffer, size_t length)
+{
+	fReportLength = length;
+	fReportBuffer = buffer;
+	fBusy = 0;
 }
 
 status_t

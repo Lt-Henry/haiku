@@ -46,6 +46,8 @@ public:
 	virtual	status_t			Control(uint32 *cookie, uint32 op, void *buffer,
 									size_t length);
 
+	virtual void				TransferCallback(uint8 *buffer, size_t length);
+
 			int32				RingBufferReadable();
 			status_t			RingBufferRead(void *buffer, size_t length);
 			status_t			RingBufferWrite(const void *buffer,

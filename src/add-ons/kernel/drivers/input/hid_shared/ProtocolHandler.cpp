@@ -163,6 +163,10 @@ ProtocolHandler::Control(uint32 *cookie, uint32 op, void *buffer, size_t length)
 	return B_ERROR;
 }
 
+void
+ProtocolHandler::TransferCallback(uint8 *buffer, size_t length)
+{
+}
 
 int32
 ProtocolHandler::RingBufferReadable()

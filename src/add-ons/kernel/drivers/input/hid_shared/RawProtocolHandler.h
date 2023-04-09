@@ -31,10 +31,15 @@ public:
 
 	virtual	status_t		Close(uint32 *cookie);
 
+	virtual	void			TransferCallback(uint8 *buffer, size_t length);
+
 private:
 	status_t				_ReadReport(void *buffer, uint32 *cookie);
 			//HIDReport &		fReport;
 			HIDDevice &		fDevice;
+			uint32	fBusy;
+			uint8	*fReportBuffer;
+			size_t	fReportLength;
 };
 
 #endif
