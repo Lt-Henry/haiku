@@ -47,6 +47,9 @@ public:
 			// only to be used for the kernel debugger information
 			usb_pipe			InterruptPipe() const { return fInterruptPipe; }
 
+			uint16 				Vendor() const { return fVendor; }
+			uint16				Product() const { return fProduct; }
+
 private:
 	static	void				_TransferCallback(void *cookie,
 									status_t status, void *data,
@@ -77,6 +80,9 @@ private:
 
 			uint8 *				fReportDescriptor;
 			size_t				fReportDescriptorLength;
+			
+			uint16				fVendor;
+			uint16				fProduct;
 };
 
 

@@ -27,7 +27,6 @@ typedef struct {
 	uint8 bus;
 	uint16 vid;
 	uint16 pid;
-	uint8 id;
 } hid_info;
 
 #endif

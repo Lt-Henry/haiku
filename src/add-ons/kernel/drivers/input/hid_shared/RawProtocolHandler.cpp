@@ -64,16 +64,17 @@ RawProtocolHandler::Control(uint32 *cookie, uint32 op, void *buffer,
 		case B_HID_IO_GET_INFO: {
 			hid_info info;
 			info.bus = B_HID_BUS_USB;
-			info.vid = 0x00;
-			info.pid = 0x00;
-			//info.id = fReport.ID();
-			TRACE("hid info of: %" B_PRIu32 "\n",info.id);
+			info.vid = fDevice.Vendor();
+			info.pid = fDevice.Product();
 
 			status_t status = user_memcpy(buffer, &info, sizeof(hid_info));
 			return status;
 		}
 		break;
 
+		case B_HID_IO_GET_REPORT_DESCRIPTOR: {
+		}
+		break;
 	}
 
 	return B_ERROR;
@@ -82,24 +83,6 @@ RawProtocolHandler::Control(uint32 *cookie, uint32 op, void *buffer,
 status_t
 RawProtocolHandler::Read(uint32 *cookie, off_t position,void *buffer,
 								size_t *numBytes) {
-/*
-	char	tmp[256];
-	
-	status_t status = _ReadReport(tmp,cookie);
-	uint8 *report = fReport.CurrentReport();
-	size_t reportSize = fReport.ReportSize();
-	size_t p = 0;
-	for (size_t n=0; n<reportSize; n++) {
-		p+=snprintf(p + tmp,256-p,"%2x ",report[n]);
-	}
-
-	p+=snprintf(tmp+p,256-p,"\n");
-	*numBytes = 1 + strlen(tmp);
-	status = user_strlcpy((char *)buffer, tmp, *numBytes);
-	fReport.DoneProcessing();
-
-	return status;
-	*/
 
 	status_t status;
 	

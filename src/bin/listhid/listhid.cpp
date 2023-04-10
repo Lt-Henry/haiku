@@ -5,10 +5,19 @@
 #include <String.h>
 
 #include <iostream>
+#include <iomanip>
+#include <map>
 
 #include <HID.h>
 
 using namespace std;
+
+map<int,string> sBusName = {
+	{B_HID_BUS_VIRTUAL,"virtual"},
+	{B_HID_BUS_USB,"usb"},
+	{B_HID_BUS_I2C,"i2c"},
+	{B_HID_BUS_SPI,"spi"}
+};
 
 status_t
 hid_get_info(const char *device,hid_info *info)
@@ -46,7 +55,8 @@ explore_dir(BDirectory dir)
 			hid_info info;
 			
 			if (hid_get_info(path.Path(),&info) == B_OK) {
-				cout<<path.Path()<<":"<<(int)info.bus<<":"<<(int)info.id<<endl;
+				cout<<path.Path()<<" "<<std::dec<<sBusName[info.bus]<<" "<<std::hex<<std::setfill('0')<<std::setw(4)<<info.vid<<":";
+				cout<<std::hex<<std::setfill('0')<<std::setw(4)<<info.pid<<endl;
 			}
 		}
 	}

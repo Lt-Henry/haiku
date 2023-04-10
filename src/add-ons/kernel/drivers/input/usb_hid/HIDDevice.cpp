@@ -36,13 +36,18 @@ HIDDevice::HIDDevice(usb_device device, const usb_configuration_info *config,
 		fRemoved(false),
 		fParser(this),
 		fProtocolHandlerCount(0),
-		fProtocolHandlerList(NULL)
+		fProtocolHandlerList(NULL),
+		fVendor(0),
+		fProduct(0)
 {
 	uint8 *reportDescriptor = NULL;
 	size_t descriptorLength = 0;
 
 	const usb_device_descriptor *deviceDescriptor
 		= gUSBModule->get_device_descriptor(device);
+
+	fVendor = deviceDescriptor->vendor_id;
+	fProduct = deviceDescriptor->product_id;
 
 	HIDWriter descriptorWriter;
 	bool hasFixedDescriptor = false;
