@@ -11,6 +11,8 @@
 
 #include "ProtocolHandler.h"
 
+#include <condition_variable.h>
+
 class HIDDevice;
 class HIDCollection;
 class HIDReportItem;
@@ -37,9 +39,10 @@ private:
 	status_t				_ReadReport(void *buffer, uint32 *cookie);
 			//HIDReport &		fReport;
 			HIDDevice &		fDevice;
-			uint32	fBusy;
-			uint8	*fReportBuffer;
+			int32	fBusy;
+			uint8	fReportBuffer[64];
 			size_t	fReportLength;
+			ConditionVariable		fConditionVariable;
 };
 
 #endif

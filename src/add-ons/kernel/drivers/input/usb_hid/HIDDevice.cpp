@@ -341,7 +341,6 @@ HIDDevice::_TransferCallback(void *cookie, status_t status, void *data,
 		return;
 	}
 
-	device->fActualSize = actualLength;
 	atomic_set(&device->fTransferScheduled, 0);
 
 	for (uint32 n = 0; n < device->fProtocolHandlerCount; n++) {
@@ -349,15 +348,4 @@ HIDDevice::_TransferCallback(void *cookie, status_t status, void *data,
 		ph->TransferCallback(device->fTransferBuffer, actualLength);
 	}
 	device->fParser.SetReport(status, device->fTransferBuffer, actualLength);
-}
-
-status_t
-HIDDevice::WaitForTransfer(bigtime_t timeout, uint8 **buffer,size_t *length)
-{
-	while (atomic_get(&fTransferScheduled) != 0)
-		snooze(100);
-
-	*buffer = fTransferBuffer;
-	*length = fActualSize;
-	return B_OK;
 }

@@ -28,6 +28,7 @@ RawProtocolHandler::RawProtocolHandler(HIDDevice &device) :
 	fBusy(0)
 {
 	TRACE("raw HID handler at %s\n",PublishPath());
+	fConditionVariable.Init(this,"HID raw handler");
 }
 
 void
@@ -101,13 +102,24 @@ RawProtocolHandler::Read(uint32 *cookie, off_t position,void *buffer,
 	*/
 
 	status_t status;
-
-	if(fDevice.MaybeScheduleTransfer(NULL) != B_OK)
+	
+	ConditionVariableEntry conditionVariableEntry;
+	fConditionVariable.Add(&conditionVariableEntry);
+	
+	if(fDevice.MaybeScheduleTransfer(NULL) != B_OK) {
+		conditionVariableEntry.Wait(B_RELATIVE_TIMEOUT, 0);
 		return B_ERROR;
-	fBusy = 1;
-	while (fBusy != 0)
-		snooze(1000);
+	}
+	
+	status = conditionVariableEntry.Wait(B_RELATIVE_TIMEOUT, 10000000);
+	if (status!=B_OK) {
+		return status;
+	}
+	//atomic_set(&fBusy ,1);
 
+	//while (atomic_get(&fBusy) != 0)
+		//snooze(1000);
+	
 	//fDevice.WaitForTransfer(0,&report,&length);
 
 	char	tmp[256];
@@ -134,8 +146,10 @@ void
 RawProtocolHandler::TransferCallback(uint8 *buffer, size_t length)
 {
 	fReportLength = length;
-	fReportBuffer = buffer;
-	fBusy = 0;
+	//fReportBuffer = buffer;
+	memcpy(fReportBuffer,buffer,length);
+	//atomic_set(&fBusy,0);
+	fConditionVariable.NotifyAll();
 }
 
 status_t
