@@ -139,6 +139,17 @@ HIDDevice::HIDDevice(usb_device device, const usb_configuration_info *config,
 		TRACE_ALWAYS("found quirky device, using patched descriptor\n");
 	}
 
+	fReportDescriptorLength = descriptorLength;
+	fReportDescriptor = (uint8 *)malloc(descriptorLength);
+
+	if (fReportDescriptor == NULL) {
+		fReportDescriptorLength = 0;
+		TRACE_ALWAYS("failed to allocate buffer for report descriptor\n");
+		return;
+	}
+
+	memcpy(fReportDescriptor,reportDescriptor,descriptorLength);
+
 #if 1
 	// save report descriptor for troubleshooting
 	char outputFile[128];
@@ -230,6 +241,7 @@ HIDDevice::~HIDDevice()
 	}
 
 	free(fTransferBuffer);
+	free(fReportDescriptor);
 }
 
 

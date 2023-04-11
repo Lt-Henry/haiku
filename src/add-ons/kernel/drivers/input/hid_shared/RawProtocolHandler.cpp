@@ -66,13 +66,19 @@ RawProtocolHandler::Control(uint32 *cookie, uint32 op, void *buffer,
 			info.bus = B_HID_BUS_USB;
 			info.vid = fDevice.Vendor();
 			info.pid = fDevice.Product();
-
+			info.report_size = fDevice.ReportDescriptorLength();
 			status_t status = user_memcpy(buffer, &info, sizeof(hid_info));
 			return status;
 		}
 		break;
 
 		case B_HID_IO_GET_REPORT_DESCRIPTOR: {
+			size_t reportDescriptorLength = fDevice.ReportDescriptorLength();
+			if (reportDescriptorLength > length) {
+				return B_BUFFER_OVERFLOW;
+			}
+
+			return user_memcpy(buffer, fDevice.ReportDescriptor(), reportDescriptorLength);
 		}
 		break;
 	}
