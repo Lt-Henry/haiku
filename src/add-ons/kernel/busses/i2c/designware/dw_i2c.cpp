@@ -21,19 +21,49 @@ device_manager_info* gDeviceManager;
 i2c_for_controller_interface* gI2c;
 acpi_module_info* gACPI;
 
-/*
+
 static void
 enable_device(dw_i2c_sim_info* bus, bool enable)
 {
+	uint32 status = enable ? 1 : 0;
+	for (int tries = 100; tries >= 0; tries--) {
+		write32(bus->registers + DW_IC_ENABLE, status);
+		if ((read32(bus->registers + DW_IC_ENABLE_STATUS) & 1) == status)
+			return;
+		snooze(25);
+	}
 
+	ERROR("enable_device failed\n");
 }
-*/
+
 
 static int32
 dw_i2c_interrupt_handler(dw_i2c_sim_info* bus)
 {
 	int32 handled = B_HANDLED_INTERRUPT;
-	TRACE_ALWAYS("interrupt\n");
+	
+	// Check if this interrupt is ours
+	uint32 enable = read32(bus->registers + DW_IC_ENABLE);
+	if (enable == 0)
+		return B_UNHANDLED_INTERRUPT;
+	
+	uint32 status = read32(bus->registers + DW_IC_INTR_STAT);
+	
+	//TODO: clear bits?
+	
+	TRACE_ALWAYS("interrupt status %x\n",status);
+	
+	if ((status & ~DW_IC_INTR_STAT_ACTIVITY) == 0)
+		return handled;
+	
+	if ((status & DW_IC_INTR_STAT_RX_FULL) != 0)
+		ConditionVariable::NotifyAll(&bus->readwait, B_OK);
+	if ((status & DW_IC_INTR_STAT_TX_EMPTY) != 0)
+		ConditionVariable::NotifyAll(&bus->writewait, B_OK);
+	if ((status & DW_IC_INTR_STAT_STOP_DET) != 0) {
+		bus->busy = 0;
+		ConditionVariable::NotifyAll(&bus->busy, B_OK);
+		
 	return handled;
 }
 
@@ -220,7 +250,15 @@ init_bus(device_node* node, void** bus_cookie)
 		B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
 		(void **)&bus->registers);
 	
+	enable_device(bus, false);
 
+	bus->masterConfig = DW_IC_CON_MASTER | DW_IC_CON_SLAVE_DISABLE |
+	    DW_IC_CON_RESTART_EN | DW_IC_CON_SPEED_FAST;
+	write32(bus->registers + DW_IC_CON, bus->masterConfig);
+	
+	write32(bus->registers + DW_IC_INTR_MASK, 0);
+	read32(bus->registers + DW_IC_CLR_INTR);
+	
 	status = install_io_interrupt_handler(bus->irq,
 		(interrupt_handler)dw_i2c_interrupt_handler, bus, 0);
 	if (status != B_OK) {
