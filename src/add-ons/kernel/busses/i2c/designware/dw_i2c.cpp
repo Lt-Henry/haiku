@@ -49,9 +49,28 @@ dw_i2c_interrupt_handler(dw_i2c_sim_info* bus)
 	
 	uint32 status = read32(bus->registers + DW_IC_INTR_STAT);
 	
-	//TODO: clear bits?
+	if ((status & DW_IC_INTR_STAT_RX_UNDER) != 0)
+		write32(bus->registers + DW_IC_CLR_RX_UNDER, 0);
+	if ((status & DW_IC_INTR_STAT_RX_OVER) != 0)
+		write32(bus->registers + DW_IC_CLR_RX_OVER, 0);
+	if ((status & DW_IC_INTR_STAT_TX_OVER) != 0)
+		write32(bus->registers + DW_IC_CLR_TX_OVER, 0);
+	if ((status & DW_IC_INTR_STAT_RD_REQ) != 0)
+		write32(bus->registers + DW_IC_CLR_RD_REQ, 0);
+	if ((status & DW_IC_INTR_STAT_TX_ABRT) != 0)
+		write32(bus->registers + DW_IC_CLR_TX_ABRT, 0);
+	if ((status & DW_IC_INTR_STAT_RX_DONE) != 0)
+		write32(bus->registers + DW_IC_CLR_RX_DONE, 0);
+	if ((status & DW_IC_INTR_STAT_ACTIVITY) != 0)
+		write32(bus->registers + DW_IC_CLR_ACTIVITY, 0);
+	if ((status & DW_IC_INTR_STAT_STOP_DET) != 0)
+		write32(bus->registers + DW_IC_CLR_STOP_DET, 0);
+	if ((status & DW_IC_INTR_STAT_START_DET) != 0)
+		write32(bus->registers + DW_IC_CLR_START_DET, 0);
+	if ((status & DW_IC_INTR_STAT_GEN_CALL) != 0)
+		write32(bus->registers + DW_IC_CLR_GEN_CALL, 0);
 	
-	TRACE_ALWAYS("interrupt status %x\n",status);
+	TRACE("interrupt status %x\n",status);
 	
 	if ((status & ~DW_IC_INTR_STAT_ACTIVITY) == 0)
 		return handled;
@@ -92,7 +111,7 @@ exec_command(i2c_bus_cookie cookie, i2c_op op, i2c_addr slaveAddress,
 	if (atomic_test_and_set(&bus->busy, 1, 0) != 0)
 		return B_BUSY;
 
-	TRACE_ALWAYS("exec_command: acquired busy flag\n");
+	TRACE("exec_command: acquired busy flag\n");
 
 	uint32 status = 0;
 	for (int tries = 100; tries >= 0; tries--) {
@@ -107,7 +126,7 @@ exec_command(i2c_bus_cookie cookie, i2c_op op, i2c_addr slaveAddress,
 		return B_BUSY;
 	}
 
-	TRACE_ALWAYS("exec_command: write slave address\n");
+	TRACE("exec_command: write slave address\n");
 	
 	enable_device(bus, false);
 	write32(bus->registers + DW_IC_CON,
@@ -122,7 +141,114 @@ exec_command(i2c_bus_cookie cookie, i2c_op op, i2c_addr slaveAddress,
 	read32(bus->registers + DW_IC_CLR_INTR);
 	write32(bus->registers + DW_IC_INTR_MASK, DW_IC_INTR_STAT_TX_EMPTY);
 
-	return B_ERROR;
+	if (cmdLength > 0) {
+		TRACE("exec_command: write command buffer\n");
+		uint16 txLimit = bus->tx_fifo_depth
+			- read32(bus->registers + DW_IC_TXFLR);
+		if (cmdLength > txLimit) {
+			ERROR("exec_command can't write, cmd too long %" B_PRIuSIZE
+				" (max %d)\n", cmdLength, txLimit);
+			bus->busy = 0;
+			return B_BAD_VALUE;
+		}
+
+		uint8* buffer = (uint8*)cmdBuffer;
+		for (size_t i = 0; i < cmdLength; i++) {
+			uint32 cmd = buffer[i];
+			if (i == cmdLength - 1 && dataLength == 0 && IS_STOP_OP(op))
+				cmd |= DW_IC_DATA_CMD_STOP;
+			write32(bus->registers + DW_IC_DATA_CMD, cmd);
+		}
+	}
+	
+	TRACE("exec_command: processing buffer %" B_PRIuSIZE " bytes\n",
+		dataLength);
+	uint16 txLimit = bus->tx_fifo_depth
+		- read32(bus->registers + DW_IC_TXFLR);
+	uint8* buffer = (uint8*)dataBuffer;
+	size_t readPos = 0;
+	size_t i = 0;
+	
+	while (i < dataLength) {
+		uint32 cmd = DW_IC_DATA_CMD_READ;
+		if (IS_WRITE_OP(op))
+			cmd = buffer[i];
+
+		if (i == 0 && cmdLength > 0 && IS_READ_OP(op))
+			cmd |= DW_IC_DATA_CMD_RESTART;
+
+		if (i == (dataLength - 1) && IS_STOP_OP(op))
+			cmd |= DW_IC_DATA_CMD_STOP;
+
+		write32(bus->registers + DW_IC_DATA_CMD, cmd);
+
+		if (IS_READ_OP(op) && IS_BLOCK_OP(op) && readPos == 0)
+			txLimit = 1;
+		txLimit--;
+		i++;
+
+		// here read the data if needed
+		while (IS_READ_OP(op) && (txLimit == 0 || i == dataLength)) {
+			write32(bus->registers + DW_IC_INTR_MASK,
+				DW_IC_INTR_STAT_RX_FULL);
+
+			// sleep until wake up by intr handler
+			struct ConditionVariable condition;
+			condition.Publish(&bus->readwait, "dw_i2c");
+			ConditionVariableEntry variableEntry;
+			status_t status = variableEntry.Wait(&bus->readwait,
+				B_RELATIVE_TIMEOUT, 500000L);
+			condition.Unpublish();
+			if (status != B_OK)
+				ERROR("exec_command timed out waiting for read\n");
+			uint32 rxBytes = read32(bus->registers + DW_IC_RXFLR);
+			if (rxBytes == 0) {
+				ERROR("exec_command timed out reading %" B_PRIuSIZE " bytes\n",
+					dataLength - readPos);
+				bus->busy = 0;
+				return B_ERROR;
+			}
+			for (; rxBytes > 0; rxBytes--) {
+				uint32 read = read32(bus->registers + DW_IC_DATA_CMD);
+				if (readPos < dataLength)
+					buffer[readPos++] = read;
+			}
+
+			if (IS_BLOCK_OP(op) && readPos > 0 && dataLength > buffer[0])
+				dataLength = buffer[0] + 1;
+			if (readPos >= dataLength)
+				break;
+
+			TRACE("exec_command %" B_PRIuSIZE" bytes to be read\n",
+				dataLength - readPos);
+			txLimit = bus->tx_fifo_depth
+				- read32(bus->registers + DW_IC_TXFLR);
+		}
+	}
+	
+	status_t err = B_OK;
+	if (IS_STOP_OP(op) && IS_WRITE_OP(op)) {
+		TRACE("exec_command: waiting busy condition\n");
+		while (bus->busy == 1) {
+			write32(bus->registers + DW_IC_INTR_MASK,
+				DW_IC_INTR_STAT_STOP_DET);
+
+			// sleep until wake up by intr handler
+			struct ConditionVariable condition;
+			condition.Publish(&bus->busy, "dw_i2c");
+			ConditionVariableEntry variableEntry;
+			err = variableEntry.Wait(&bus->busy, B_RELATIVE_TIMEOUT,
+				500000L);
+			condition.Unpublish();
+			if (err != B_OK)
+				ERROR("exec_command timed out waiting for busy\n");
+		}
+	}
+	TRACE("exec_command: processing done\n");
+
+	bus->busy = 0;
+	
+	return err;
 }
 
 
@@ -298,6 +424,20 @@ init_bus(device_node* node, void** bus_cookie)
 		bus->fs_hcnt, bus->fs_lcnt, bus->sda_hold_time);
 	
 	enable_device(bus, false);
+
+	{
+		bus->tx_fifo_depth = 32;
+		bus->rx_fifo_depth = 32;
+		uint32 reg = read32(bus->registers + DW_IC_COMP_PARAM1);
+		uint8 rx_fifo_depth = DW_IC_COMP_PARAM1_RX(reg);
+		uint8 tx_fifo_depth = DW_IC_COMP_PARAM1_TX(reg);
+		if (rx_fifo_depth > 1 && rx_fifo_depth < bus->rx_fifo_depth)
+			bus->rx_fifo_depth = rx_fifo_depth;
+		if (tx_fifo_depth > 1 && tx_fifo_depth < bus->tx_fifo_depth)
+			bus->tx_fifo_depth = tx_fifo_depth;
+		write32(bus->registers + DW_IC_RX_TL, 0);
+		write32(bus->registers + DW_IC_TX_TL, bus->tx_fifo_depth / 2);
+	}
 
 	bus->masterConfig = DW_IC_CON_MASTER | DW_IC_CON_SLAVE_DISABLE |
 	    DW_IC_CON_RESTART_EN | DW_IC_CON_SPEED_FAST;
