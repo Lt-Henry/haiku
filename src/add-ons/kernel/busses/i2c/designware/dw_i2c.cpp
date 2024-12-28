@@ -63,7 +63,8 @@ dw_i2c_interrupt_handler(dw_i2c_sim_info* bus)
 	if ((status & DW_IC_INTR_STAT_STOP_DET) != 0) {
 		bus->busy = 0;
 		ConditionVariable::NotifyAll(&bus->busy, B_OK);
-		
+	}
+	
 	return handled;
 }
 
@@ -86,9 +87,40 @@ exec_command(i2c_bus_cookie cookie, i2c_op op, i2c_addr slaveAddress,
 	size_t dataLength)
 {
 	CALLED();
-	//dw_i2c_sim_info* bus = (dw_i2c_sim_info*)cookie;
+	dw_i2c_sim_info* bus = (dw_i2c_sim_info*)cookie;
 
+	if (atomic_test_and_set(&bus->busy, 1, 0) != 0)
+		return B_BUSY;
+
+	TRACE_ALWAYS("exec_command: acquired busy flag\n");
+
+	uint32 status = 0;
+	for (int tries = 100; tries >= 0; tries--) {
+		status = read32(bus->registers + DW_IC_STATUS);
+		if ((status & DW_IC_STATUS_MASTER_ACTIVITY) == 0)
+			break;
+		snooze(1000);
+	}
+
+	if ((status & DW_IC_STATUS_MASTER_ACTIVITY) != 0) {
+		bus->busy = 0;
+		return B_BUSY;
+	}
+
+	TRACE_ALWAYS("exec_command: write slave address\n");
 	
+	enable_device(bus, false);
+	write32(bus->registers + DW_IC_CON,
+		read32(bus->registers + DW_IC_CON) & ~DW_IC_CON_10BITADDR_MASTER);
+	write32(bus->registers + DW_IC_TAR, slaveAddress);
+	
+	write32(bus->registers + DW_IC_INTR_MASK, 0);
+	read32(bus->registers + DW_IC_CLR_INTR);
+
+	enable_device(bus, true);
+
+	read32(bus->registers + DW_IC_CLR_INTR);
+	write32(bus->registers + DW_IC_INTR_MASK, DW_IC_INTR_STAT_TX_EMPTY);
 
 	return B_ERROR;
 }
@@ -249,6 +281,21 @@ init_bus(device_node* node, void** bus_cookie)
 		bus->base_addr, bus->map_size, B_ANY_KERNEL_ADDRESS,
 		B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
 		(void **)&bus->registers);
+	
+	
+	if (bus->ss_hcnt == 0)
+		bus->ss_hcnt = read32(bus->registers + DW_IC_SS_SCL_HCNT);
+	if (bus->ss_lcnt == 0)
+		bus->ss_lcnt = read32(bus->registers + DW_IC_SS_SCL_LCNT);
+	if (bus->fs_hcnt == 0)
+		bus->fs_hcnt = read32(bus->registers + DW_IC_FS_SCL_HCNT);
+	if (bus->fs_lcnt == 0)
+		bus->fs_lcnt = read32(bus->registers + DW_IC_FS_SCL_LCNT);
+	if (bus->sda_hold_time == 0)
+		bus->sda_hold_time = read32(bus->registers + DW_IC_SDA_HOLD);
+	TRACE_ALWAYS("init_bus() 0x%04" B_PRIx16 " 0x%04" B_PRIx16 " 0x%04" B_PRIx16
+		" 0x%04" B_PRIx16 " 0x%08" B_PRIx32 "\n", bus->ss_hcnt, bus->ss_lcnt,
+		bus->fs_hcnt, bus->fs_lcnt, bus->sda_hold_time);
 	
 	enable_device(bus, false);
 
