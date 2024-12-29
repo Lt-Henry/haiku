@@ -425,6 +425,21 @@ init_bus(device_node* node, void** bus_cookie)
 	
 	enable_device(bus, false);
 
+	write32(bus->registers + DW_IC_SS_SCL_HCNT, bus->ss_hcnt);
+	write32(bus->registers + DW_IC_SS_SCL_LCNT, bus->ss_lcnt);
+	write32(bus->registers + DW_IC_FS_SCL_HCNT, bus->fs_hcnt);
+	write32(bus->registers + DW_IC_FS_SCL_LCNT, bus->fs_lcnt);
+	if (bus->hs_hcnt > 0)
+		write32(bus->registers + DW_IC_HS_SCL_HCNT, bus->hs_hcnt);
+	if (bus->hs_lcnt > 0)
+		write32(bus->registers + DW_IC_HS_SCL_LCNT, bus->hs_lcnt);
+	{
+		uint32 reg = read32(bus->registers + DW_IC_COMP_VERSION);
+		TRACE_ALWAYS("version: %x\n",reg);
+		//if (reg >= PCH_IC_COMP_VERSION_MIN)
+			write32(bus->registers + DW_IC_SDA_HOLD, bus->sda_hold_time);
+	}
+
 	{
 		bus->tx_fifo_depth = 32;
 		bus->rx_fifo_depth = 32;

@@ -207,7 +207,8 @@ supports_device(device_node* parent)
 	TRACE("found an acpi device hid %s\n", name);
 
 	if (strcmp(name, "AMDI0010") == 0
-		|| strcmp(name, "AMDI0510") == 0) {
+		|| strcmp(name, "AMDI0510") == 0
+		|| strcmp(name, "ELAN0647") == 0) {
 		TRACE("DesignWare I2C device found! name %s\n", name);
 		return 0.6f;
 	}
