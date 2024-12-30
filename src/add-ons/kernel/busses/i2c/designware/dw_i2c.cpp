@@ -1,5 +1,5 @@
 /*
- * Copyright 2024, Enrique Medina, quique@necos.es.
+ * Copyright 2024, Enrique Medina Gremaldos, quique@necos.es.
  * Distributed under the terms of the MIT License.
  */
 
@@ -435,21 +435,27 @@ init_bus(device_node* node, void** bus_cookie)
 		write32(bus->registers + DW_IC_HS_SCL_LCNT, bus->hs_lcnt);
 	{
 		uint32 reg = read32(bus->registers + DW_IC_COMP_VERSION);
-		TRACE_ALWAYS("version: %x\n",reg);
+		TRACE_ALWAYS("version: 0x%08" B_PRIx32 "\n",reg);
 		//if (reg >= PCH_IC_COMP_VERSION_MIN)
-			write32(bus->registers + DW_IC_SDA_HOLD, bus->sda_hold_time);
+			//write32(bus->registers + DW_IC_SDA_HOLD, bus->sda_hold_time);
 	}
 
 	{
 		bus->tx_fifo_depth = 32;
 		bus->rx_fifo_depth = 32;
 		uint32 reg = read32(bus->registers + DW_IC_COMP_PARAM1);
-		uint8 rx_fifo_depth = DW_IC_COMP_PARAM1_RX(reg);
-		uint8 tx_fifo_depth = DW_IC_COMP_PARAM1_TX(reg);
+		uint32 rx_fifo_depth = DW_IC_COMP_PARAM1_RX(reg);
+		uint32 tx_fifo_depth = DW_IC_COMP_PARAM1_TX(reg);
+		
+		TRACE_ALWAYS("comp1: 0x%08" B_PRIx32 "\n",reg);
+		TRACE_ALWAYS("rx fifo depth: 0x%04" B_PRIx16 "\n",rx_fifo_depth);
+		TRACE_ALWAYS("tx fifo depth: 0x%04" B_PRIx16 "\n",tx_fifo_depth);
+		
 		if (rx_fifo_depth > 1 && rx_fifo_depth < bus->rx_fifo_depth)
 			bus->rx_fifo_depth = rx_fifo_depth;
 		if (tx_fifo_depth > 1 && tx_fifo_depth < bus->tx_fifo_depth)
 			bus->tx_fifo_depth = tx_fifo_depth;
+			
 		write32(bus->registers + DW_IC_RX_TL, 0);
 		write32(bus->registers + DW_IC_TX_TL, bus->tx_fifo_depth / 2);
 	}

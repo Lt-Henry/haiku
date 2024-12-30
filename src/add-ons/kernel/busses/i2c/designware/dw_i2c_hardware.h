@@ -1,5 +1,5 @@
 /*
- * Copyright 2024, Enrique Medina, quique@necos.es.
+ * Copyright 2024, Enrique Medina Gremaldos, quique@necos.es.
  *
  * Distributed under the terms of the MIT License.
  */

@@ -1,5 +1,5 @@
 /*
- * Copyright 2024, Enrique Medina, quique@necos.es.
+ * Copyright 2024, Enrique Medina Gremaldos, quique@necos.es.
  *
  * Distributed under the terms of the MIT License.
  */
@@ -19,12 +19,12 @@ extern "C" {
 
 //#define TRACE_DW_I2C
 #ifdef TRACE_DW_I2C
-#	define TRACE(x...) dprintf("\33[33mdw_i2c:\33[0m " x)
+#	define TRACE(x...) dprintf("dw_i2c: " x)
 #else
 #	define TRACE(x...) ;
 #endif
-#define TRACE_ALWAYS(x...)	dprintf("\33[33mdw_i2c:\33[0m " x)
-#define ERROR(x...)			dprintf("\33[33mdw_i2c:\33[0m " x)
+#define TRACE_ALWAYS(x...)	dprintf("dw_i2c: " x)
+#define ERROR(x...)			dprintf("dw_i2c: " x)
 #define CALLED(x...)		TRACE("CALLED %s\n", __PRETTY_FUNCTION__)
 
 
