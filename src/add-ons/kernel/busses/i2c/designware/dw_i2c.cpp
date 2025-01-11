@@ -191,6 +191,7 @@ exec_command(i2c_bus_cookie cookie, i2c_op op, i2c_addr slaveAddress,
 		while (IS_READ_OP(op) && (txLimit == 0 || i == dataLength)) {
 			write32(bus->registers + DW_IC_INTR_MASK,
 				DW_IC_INTR_STAT_RX_FULL);
+			
 
 			// sleep until wake up by intr handler
 			struct ConditionVariable condition;
@@ -209,7 +210,7 @@ exec_command(i2c_bus_cookie cookie, i2c_op op, i2c_addr slaveAddress,
 				return B_ERROR;
 			}
 			for (; rxBytes > 0; rxBytes--) {
-				uint32 read = read32(bus->registers + DW_IC_DATA_CMD);
+				uint32 read = read32(bus->registers + DW_IC_DATA_CMD) & 0xFF;
 				if (readPos < dataLength)
 					buffer[readPos++] = read;
 			}
@@ -225,6 +226,21 @@ exec_command(i2c_bus_cookie cookie, i2c_op op, i2c_addr slaveAddress,
 				- read32(bus->registers + DW_IC_TXFLR);
 		}
 	}
+	
+	/*
+	size_t pdump = dataLength<32 ? dataLength : 32;
+	
+	char txt[1024];
+	char tmp[32];
+
+	sprintf(txt,"read: [%ld]:",dataLength);
+	for (uint32 q=0;q<pdump;q++) {
+		sprintf(tmp,"%02x ",buffer[q]);
+		strcat(txt,tmp);
+	}
+	
+	TRACE_ALWAYS("%s\n",txt);
+	*/
 	
 	status_t err = B_OK;
 	if (IS_STOP_OP(op) && IS_WRITE_OP(op)) {
@@ -408,6 +424,13 @@ init_bus(device_node* node, void** bus_cookie)
 		B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
 		(void **)&bus->registers);
 	
+	uint32 clock_frequency = 400000;
+	uint32 thigh = 600;
+	uint32 tfall = 300;
+	uint32 tlow = 1300;
+	
+	bus->fs_hcnt = (clock_frequency * (thigh + tfall) + 500000) / 1000000 - 3;
+	bus->fs_lcnt = (clock_frequency * (tlow + tfall) + 500000) / 1000000 - 1;
 	
 	if (bus->ss_hcnt == 0)
 		bus->ss_hcnt = read32(bus->registers + DW_IC_SS_SCL_HCNT);
@@ -419,16 +442,18 @@ init_bus(device_node* node, void** bus_cookie)
 		bus->fs_lcnt = read32(bus->registers + DW_IC_FS_SCL_LCNT);
 	if (bus->sda_hold_time == 0)
 		bus->sda_hold_time = read32(bus->registers + DW_IC_SDA_HOLD);
+	TRACE_ALWAYS("spklen:%08x\n",read32(bus->registers + DW_IC_FS_SPKLEN));
 	TRACE_ALWAYS("init_bus() 0x%04" B_PRIx16 " 0x%04" B_PRIx16 " 0x%04" B_PRIx16
 		" 0x%04" B_PRIx16 " 0x%08" B_PRIx32 "\n", bus->ss_hcnt, bus->ss_lcnt,
 		bus->fs_hcnt, bus->fs_lcnt, bus->sda_hold_time);
 	
 	enable_device(bus, false);
 
-	write32(bus->registers + DW_IC_SS_SCL_HCNT, bus->ss_hcnt);
 	write32(bus->registers + DW_IC_SS_SCL_LCNT, bus->ss_lcnt);
-	write32(bus->registers + DW_IC_FS_SCL_HCNT, bus->fs_hcnt);
+	write32(bus->registers + DW_IC_SS_SCL_HCNT, bus->ss_hcnt);
 	write32(bus->registers + DW_IC_FS_SCL_LCNT, bus->fs_lcnt);
+	write32(bus->registers + DW_IC_FS_SCL_HCNT, bus->fs_hcnt);
+	
 	if (bus->hs_hcnt > 0)
 		write32(bus->registers + DW_IC_HS_SCL_HCNT, bus->hs_hcnt);
 	if (bus->hs_lcnt > 0)
@@ -441,8 +466,8 @@ init_bus(device_node* node, void** bus_cookie)
 	}
 
 	{
-		bus->tx_fifo_depth = 32;
-		bus->rx_fifo_depth = 32;
+		bus->tx_fifo_depth = 128;
+		bus->rx_fifo_depth = 128;
 		uint32 reg = read32(bus->registers + DW_IC_COMP_PARAM1);
 		uint32 rx_fifo_depth = DW_IC_COMP_PARAM1_RX(reg);
 		uint32 tx_fifo_depth = DW_IC_COMP_PARAM1_TX(reg);

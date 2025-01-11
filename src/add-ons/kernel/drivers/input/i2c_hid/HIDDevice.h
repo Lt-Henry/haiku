@@ -49,6 +49,8 @@ private:
 
 			status_t			_Reset();
 			status_t			_SetPower(uint8 power);
+			status_t			_WriteReport(uint8 type, uint8 id, void *data,
+									size_t reportSize);
 			status_t			_FetchBuffer(uint8* cmd, size_t cmdLength,
 									void* buffer, size_t bufferLength);
 			status_t			_FetchReport(uint8 type, uint8 id,

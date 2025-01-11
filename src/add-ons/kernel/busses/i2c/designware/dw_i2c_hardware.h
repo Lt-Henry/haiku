@@ -40,6 +40,7 @@
 #define DW_IC_RXFLR				0x78
 #define DW_IC_SDA_HOLD			0x7c
 #define DW_IC_ENABLE_STATUS		0x9c
+#define DW_IC_FS_SPKLEN			0xa0
 #define DW_IC_COMP_PARAM1		0xf4
 #define DW_IC_COMP_VERSION		0xf8
 #define DW_IC_COMP_TYPE			0xfc
