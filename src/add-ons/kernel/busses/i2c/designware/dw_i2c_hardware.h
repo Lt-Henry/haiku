@@ -7,6 +7,11 @@
 #define _DW_I2C_HARDWARE_H
 
 
+#define DW_CLK_STANDARD		100000
+#define DW_CLK_FAST			400000
+#define DW_CLK_HIGH			1000000
+
+
 #define DW_IC_CON				0x00
 #define DW_IC_TAR				0x04
 #define DW_IC_SAR				0x08

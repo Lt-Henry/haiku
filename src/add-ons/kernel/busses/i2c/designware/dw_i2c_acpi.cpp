@@ -14,6 +14,24 @@
 
 #include "dw_i2c.h"
 
+typedef struct {
+	const char *hid;
+	uint32 flags;
+} dw_device_info;
+
+dw_device_info device_list[] = {
+	{"INT33C2", 0},
+	{"INT33C3", 0},
+	{"INT3432", 0},
+	{"INT3433", 0},
+	{"80860F41", 0},
+	{"808622C1", 0},
+	{"AMD0010", 0},
+	{"AMDI0010", 0},
+	{"AMDI0510", 0},
+	{"APMC0D0F", 0},
+	{0, 0}
+};
 
 typedef struct {
 	dw_i2c_sim_info info;
@@ -81,7 +99,7 @@ register_child_devices(void* cookie)
 	dw_i2c_acpi_sim_info* bus = (dw_i2c_acpi_sim_info*)cookie;
 	device_node* node = bus->info.driver_node;
 
-	char prettyName[25];
+	char prettyName[32];
 	sprintf(prettyName, "DesignWare I2C Controller");
 
 	device_attr attrs[] = {
@@ -206,10 +224,15 @@ supports_device(device_node* parent)
 	}
 	TRACE("found an acpi device hid %s\n", name);
 
-	if (strcmp(name, "AMDI0010") == 0
-		|| strcmp(name, "AMDI0510") == 0) {
-		TRACE("DesignWare I2C device found! name %s\n", name);
-		return 0.6f;
+	dw_device_info *device_info = device_list;
+
+	while (device_info && device_info->hid) {
+		if (strcmp(name, device_info->hid) == 0) {
+			TRACE("DesignWare I2C device found! name %s\n", name);
+			return 0.6f;
+		}
+
+		device_info++;
 	}
 
 	return 0.0f;

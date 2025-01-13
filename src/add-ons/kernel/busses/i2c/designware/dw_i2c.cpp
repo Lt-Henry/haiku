@@ -16,6 +16,7 @@
 
 #include "dw_i2c.h"
 
+#define DW_COMPUTE_SCL true
 
 device_manager_info* gDeviceManager;
 i2c_for_controller_interface* gI2c;
@@ -41,14 +42,14 @@ static int32
 dw_i2c_interrupt_handler(dw_i2c_sim_info* bus)
 {
 	int32 handled = B_HANDLED_INTERRUPT;
-	
+
 	// Check if this interrupt is ours
 	uint32 enable = read32(bus->registers + DW_IC_ENABLE);
 	if (enable == 0)
 		return B_UNHANDLED_INTERRUPT;
-	
+
 	uint32 status = read32(bus->registers + DW_IC_INTR_STAT);
-	
+
 	if ((status & DW_IC_INTR_STAT_RX_UNDER) != 0)
 		write32(bus->registers + DW_IC_CLR_RX_UNDER, 0);
 	if ((status & DW_IC_INTR_STAT_RX_OVER) != 0)
@@ -69,12 +70,12 @@ dw_i2c_interrupt_handler(dw_i2c_sim_info* bus)
 		write32(bus->registers + DW_IC_CLR_START_DET, 0);
 	if ((status & DW_IC_INTR_STAT_GEN_CALL) != 0)
 		write32(bus->registers + DW_IC_CLR_GEN_CALL, 0);
-	
+
 	TRACE("interrupt status %x\n",status);
-	
+
 	if ((status & ~DW_IC_INTR_STAT_ACTIVITY) == 0)
 		return handled;
-	
+
 	if ((status & DW_IC_INTR_STAT_RX_FULL) != 0)
 		ConditionVariable::NotifyAll(&bus->readwait, B_OK);
 	if ((status & DW_IC_INTR_STAT_TX_EMPTY) != 0)
@@ -83,7 +84,7 @@ dw_i2c_interrupt_handler(dw_i2c_sim_info* bus)
 		bus->busy = 0;
 		ConditionVariable::NotifyAll(&bus->busy, B_OK);
 	}
-	
+
 	return handled;
 }
 
@@ -160,7 +161,7 @@ exec_command(i2c_bus_cookie cookie, i2c_op op, i2c_addr slaveAddress,
 			write32(bus->registers + DW_IC_DATA_CMD, cmd);
 		}
 	}
-	
+
 	TRACE("exec_command: processing buffer %" B_PRIuSIZE " bytes\n",
 		dataLength);
 	uint16 txLimit = bus->tx_fifo_depth
@@ -168,7 +169,7 @@ exec_command(i2c_bus_cookie cookie, i2c_op op, i2c_addr slaveAddress,
 	uint8* buffer = (uint8*)dataBuffer;
 	size_t readPos = 0;
 	size_t i = 0;
-	
+
 	while (i < dataLength) {
 		uint32 cmd = DW_IC_DATA_CMD_READ;
 		if (IS_WRITE_OP(op))
@@ -226,22 +227,7 @@ exec_command(i2c_bus_cookie cookie, i2c_op op, i2c_addr slaveAddress,
 				- read32(bus->registers + DW_IC_TXFLR);
 		}
 	}
-	
-	/*
-	size_t pdump = dataLength<32 ? dataLength : 32;
-	
-	char txt[1024];
-	char tmp[32];
 
-	sprintf(txt,"read: [%ld]:",dataLength);
-	for (uint32 q=0;q<pdump;q++) {
-		sprintf(tmp,"%02x ",buffer[q]);
-		strcat(txt,tmp);
-	}
-	
-	TRACE_ALWAYS("%s\n",txt);
-	*/
-	
 	status_t err = B_OK;
 	if (IS_STOP_OP(op) && IS_WRITE_OP(op)) {
 		TRACE("exec_command: waiting busy condition\n");
@@ -402,6 +388,17 @@ release_bus(i2c_bus_cookie cookie)
 
 //	#pragma mark -
 
+static uint32
+compute_hcnt(uint32 clock_frequency, uint32 high, uint32 fall)
+{
+	return (clock_frequency * (high + fall) + 500000) / 1000000 - 3;
+}
+
+static uint32
+compute_lcnt(uint32 clock_frequency, uint32 low, uint32 fall)
+{
+	return (clock_frequency * (low + fall) + 500000) / 1000000 - 1;
+}
 
 static status_t
 init_bus(device_node* node, void** bus_cookie)
@@ -423,44 +420,43 @@ init_bus(device_node* node, void** bus_cookie)
 		bus->base_addr, bus->map_size, B_ANY_KERNEL_ADDRESS,
 		B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
 		(void **)&bus->registers);
-	
-	uint32 clock_frequency = 400000;
-	uint32 thigh = 600;
-	uint32 tfall = 300;
-	uint32 tlow = 1300;
-	
-	bus->fs_hcnt = (clock_frequency * (thigh + tfall) + 500000) / 1000000 - 3;
-	bus->fs_lcnt = (clock_frequency * (tlow + tfall) + 500000) / 1000000 - 1;
-	
-	if (bus->ss_hcnt == 0)
-		bus->ss_hcnt = read32(bus->registers + DW_IC_SS_SCL_HCNT);
-	if (bus->ss_lcnt == 0)
-		bus->ss_lcnt = read32(bus->registers + DW_IC_SS_SCL_LCNT);
-	if (bus->fs_hcnt == 0)
-		bus->fs_hcnt = read32(bus->registers + DW_IC_FS_SCL_HCNT);
-	if (bus->fs_lcnt == 0)
-		bus->fs_lcnt = read32(bus->registers + DW_IC_FS_SCL_LCNT);
-	if (bus->sda_hold_time == 0)
-		bus->sda_hold_time = read32(bus->registers + DW_IC_SDA_HOLD);
-	TRACE_ALWAYS("spklen:%08x\n",read32(bus->registers + DW_IC_FS_SPKLEN));
+
+	// read current SCL registers
+	bus->ss_hcnt = read32(bus->registers + DW_IC_SS_SCL_HCNT);
+	bus->ss_lcnt = read32(bus->registers + DW_IC_SS_SCL_LCNT);
+	bus->fs_hcnt = read32(bus->registers + DW_IC_FS_SCL_HCNT);
+	bus->fs_lcnt = read32(bus->registers + DW_IC_FS_SCL_LCNT);
+	bus->sda_hold_time = read32(bus->registers + DW_IC_SDA_HOLD);
+
 	TRACE_ALWAYS("init_bus() 0x%04" B_PRIx16 " 0x%04" B_PRIx16 " 0x%04" B_PRIx16
 		" 0x%04" B_PRIx16 " 0x%08" B_PRIx32 "\n", bus->ss_hcnt, bus->ss_lcnt,
 		bus->fs_hcnt, bus->fs_lcnt, bus->sda_hold_time);
-	
+
 	enable_device(bus, false);
+
+	// compute hcnt and lcnt if needed
+	if (bus->ss_hcnt == 0 || DW_COMPUTE_SCL)
+		bus->ss_hcnt = compute_hcnt(DW_CLK_STANDARD, 4000, 300);
+	if (bus->ss_lcnt == 0 || DW_COMPUTE_SCL)
+		bus->ss_lcnt = compute_lcnt(DW_CLK_STANDARD, 4700, 300);
+
+	if (bus->fs_hcnt == 0 || DW_COMPUTE_SCL)
+		bus->fs_hcnt = compute_hcnt(DW_CLK_FAST, 600, 300);
+	if (bus->fs_lcnt == 0 || DW_COMPUTE_SCL)
+		bus->fs_lcnt = compute_lcnt(DW_CLK_FAST, 1300, 300);
 
 	write32(bus->registers + DW_IC_SS_SCL_LCNT, bus->ss_lcnt);
 	write32(bus->registers + DW_IC_SS_SCL_HCNT, bus->ss_hcnt);
 	write32(bus->registers + DW_IC_FS_SCL_LCNT, bus->fs_lcnt);
 	write32(bus->registers + DW_IC_FS_SCL_HCNT, bus->fs_hcnt);
-	
+
 	if (bus->hs_hcnt > 0)
 		write32(bus->registers + DW_IC_HS_SCL_HCNT, bus->hs_hcnt);
 	if (bus->hs_lcnt > 0)
 		write32(bus->registers + DW_IC_HS_SCL_LCNT, bus->hs_lcnt);
 	{
-		uint32 reg = read32(bus->registers + DW_IC_COMP_VERSION);
-		TRACE_ALWAYS("version: 0x%08" B_PRIx32 "\n",reg);
+		//uint32 reg = read32(bus->registers + DW_IC_COMP_VERSION);
+		//TRACE("version: 0x%08" B_PRIx32 "\n",reg);
 		//if (reg >= PCH_IC_COMP_VERSION_MIN)
 			//write32(bus->registers + DW_IC_SDA_HOLD, bus->sda_hold_time);
 	}
@@ -471,16 +467,16 @@ init_bus(device_node* node, void** bus_cookie)
 		uint32 reg = read32(bus->registers + DW_IC_COMP_PARAM1);
 		uint32 rx_fifo_depth = DW_IC_COMP_PARAM1_RX(reg);
 		uint32 tx_fifo_depth = DW_IC_COMP_PARAM1_TX(reg);
-		
-		TRACE_ALWAYS("comp1: 0x%08" B_PRIx32 "\n",reg);
-		TRACE_ALWAYS("rx fifo depth: 0x%04" B_PRIx16 "\n",rx_fifo_depth);
-		TRACE_ALWAYS("tx fifo depth: 0x%04" B_PRIx16 "\n",tx_fifo_depth);
-		
+
+		TRACE("comp1: 0x%08" B_PRIx32 "\n",reg);
+		TRACE("rx fifo depth: 0x%04" B_PRIx16 "\n",rx_fifo_depth);
+		TRACE("tx fifo depth: 0x%04" B_PRIx16 "\n",tx_fifo_depth);
+
 		if (rx_fifo_depth > 1 && rx_fifo_depth < bus->rx_fifo_depth)
 			bus->rx_fifo_depth = rx_fifo_depth;
 		if (tx_fifo_depth > 1 && tx_fifo_depth < bus->tx_fifo_depth)
 			bus->tx_fifo_depth = tx_fifo_depth;
-			
+
 		write32(bus->registers + DW_IC_RX_TL, 0);
 		write32(bus->registers + DW_IC_TX_TL, bus->tx_fifo_depth / 2);
 	}
@@ -488,10 +484,10 @@ init_bus(device_node* node, void** bus_cookie)
 	bus->masterConfig = DW_IC_CON_MASTER | DW_IC_CON_SLAVE_DISABLE |
 	    DW_IC_CON_RESTART_EN | DW_IC_CON_SPEED_FAST;
 	write32(bus->registers + DW_IC_CON, bus->masterConfig);
-	
+
 	write32(bus->registers + DW_IC_INTR_MASK, 0);
 	read32(bus->registers + DW_IC_CLR_INTR);
-	
+
 	status = install_io_interrupt_handler(bus->irq,
 		(interrupt_handler)dw_i2c_interrupt_handler, bus, 0);
 	if (status != B_OK) {
@@ -504,7 +500,7 @@ init_bus(device_node* node, void** bus_cookie)
 	
 	bus_status = read32(bus->registers + DW_IC_STATUS);
 	TRACE_ALWAYS("status %x\n",bus_status);
-	
+
 	return status;
 
 err:
