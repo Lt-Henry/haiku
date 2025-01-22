@@ -1,4 +1,5 @@
 /*
+ * Copyright 2020, Jérôme Duval, jerome.duval@gmail.com.
  * Copyright 2024, Enrique Medina Gremaldos, quique@necos.es.
  *
  * Distributed under the terms of the MIT License.
@@ -44,6 +45,7 @@ extern device_manager_info* gDeviceManager;
 extern i2c_for_controller_interface* gI2c;
 extern acpi_module_info* gACPI;
 extern driver_module_info gDwI2cAcpiDevice;
+extern driver_module_info gDwI2cPchPciDevice;
 
 
 acpi_status dw_i2c_scan_bus_callback(acpi_handle object, uint32 nestingLevel,

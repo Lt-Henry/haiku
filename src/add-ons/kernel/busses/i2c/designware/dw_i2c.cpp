@@ -1,4 +1,5 @@
 /*
+ * Copyright 2020, Jérôme Duval, jerome.duval@gmail.com.
  * Copyright 2024, Enrique Medina Gremaldos, quique@necos.es.
  * Distributed under the terms of the MIT License.
  */
@@ -562,6 +563,7 @@ static i2c_sim_interface sDwI2cDeviceModule = {
 
 module_info* modules[] = {
 	(module_info* )&gDwI2cAcpiDevice,
+	(module_info* )&gDwI2cPchPciDevice,
 	(module_info* )&sDwI2cDeviceModule,
 	NULL
 };

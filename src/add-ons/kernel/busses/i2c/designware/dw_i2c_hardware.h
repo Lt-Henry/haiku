@@ -1,4 +1,5 @@
 /*
+ * Copyright 2020, Jérôme Duval, jerome.duval@gmail.com.
  * Copyright 2024, Enrique Medina Gremaldos, quique@necos.es.
  *
  * Distributed under the terms of the MIT License.

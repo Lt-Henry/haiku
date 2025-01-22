@@ -10,5 +10,6 @@ SubDirHdrs [ FDirName $(SUBDIR) $(DOTDOT) $(DOTDOT) $(DOTDOT) bus_managers acpi 
 
 KernelAddon dw_i2c :
 	dw_i2c_acpi.cpp
+	dw_pch_i2c_pci.cpp
 	dw_i2c.cpp
 ;

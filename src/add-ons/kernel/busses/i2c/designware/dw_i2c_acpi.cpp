@@ -1,4 +1,5 @@
 /*
+ * Copyright 2020, Jérôme Duval, jerome.duval@gmail.com.
  * Copyright 2024, Enrique Medina Gremaldos, quique@necos.es.
  * Distributed under the terms of the MIT License.
  */
@@ -24,6 +25,14 @@ dw_device_info device_list[] = {
 	{"INT33C3", 0},
 	{"INT3432", 0},
 	{"INT3433", 0},
+	{"INT3442", 0},
+	{"INT3443", 0},
+	{"INT3444", 0},
+	{"INT3445", 0},
+	{"INT3446", 0},
+	{"INT3447", 0},
+	{"80860AAC", 0},
+	{"80865AAC", 0},
 	{"80860F41", 0},
 	{"808622C1", 0},
 	{"AMD0010", 0},
