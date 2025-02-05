@@ -76,7 +76,7 @@ HIDDevice::HIDDevice(uint16 descriptorAddress, i2c_device_interface* i2c,
 #if 1
 	// save report descriptor for troubleshooting
 	char outputFile[128];
-	sprintf(outputFile, "/home/i2c_hid_report_descriptor_%04x_%04x.bin",
+	sprintf(outputFile, "/tmp/i2c_hid_report_descriptor_%04x_%04x.bin",
 		fDescriptor.wVendorID, fDescriptor.wProductID);
 	int fd = open(outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (fd >= 0) {
@@ -105,7 +105,7 @@ HIDDevice::HIDDevice(uint16 descriptorAddress, i2c_device_interface* i2c,
 		TRACE_ALWAYS("report claims a report size of 0\n");
 		return;
 	}
-	
+
 	// We pad the allocation size so that we can always read 32 bits at a time
 	// (as done in HIDReportItem) without the need for an additional boundary
 	// check. We don't increase the transfer buffer size though as to not expose
@@ -117,64 +117,66 @@ HIDDevice::HIDDevice(uint16 descriptorAddress, i2c_device_interface* i2c,
 		return;
 	}
 
-	
-	
-
 	for (uint32 i = 0; i < fParser.CountReports(HID_REPORT_TYPE_FEATURE); i++) {
 		HIDReport *report = fParser.ReportAt(HID_REPORT_TYPE_FEATURE, i);
-		
+
 		HIDReportItem *deviceMode = report->FindItem(B_HID_USAGE_PAGE_DIGITIZER,
 			B_HID_UID_DIG_DEVICE_MODE);
-		
+
 		if (deviceMode) {
 			status_t result = MaybeScheduleTransfer(report);
-			
+
 			if (result !=B_OK)
 				continue;
 			TRACE_ALWAYS("Found a trackpad mode configuration\n");
-			
-			deviceMode->Extract();
-			uint32 value = deviceMode->Data();
-			TRACE_ALWAYS("Current device mode:%d\n",value);
-			report->DoneProcessing();
-			deviceMode->SetData(0);
-			result = report->SendReport();
-			
-			
+
+			if (deviceMode->Extract() == B_OK) {
+				uint32 value = deviceMode->Data();
+				TRACE_ALWAYS("Current device mode:%d\n",value);
+				report->DoneProcessing();
+				deviceMode->SetData(0);
+				result = report->SendReport();
+
+				if (result != B_OK) {
+					TRACE_ALWAYS("Failed to set trackpad mode\n");
+				}
+			}
+
 		}
-		
+
 		HIDReportItem *latencyMode = report->FindItem(B_HID_USAGE_PAGE_DIGITIZER,
-			0x60);
+			B_HID_UID_DIG_LATENCY_MODE);
 		
 		if (latencyMode) {
 			status_t result = MaybeScheduleTransfer(report);
 			if (result !=B_OK)
 				continue;
-			latencyMode->Extract();
-			uint32 value = latencyMode->Data();
-			TRACE_ALWAYS("Current latency mode:%d\n",value);
-			report->DoneProcessing();
+
+			if (latencyMode->Extract() == B_OK) {
+				uint32 value = latencyMode->Data();
+				TRACE_ALWAYS("Current latency mode:%d\n",value);
+				report->DoneProcessing();
+			}
 		}
-		
-		HIDReportItem *win8Blob = report->FindItem(0xff00,0xC5);
-		
+
+		// Some trackpads expects this blob to be fetched before running
+		HIDReportItem *win8Blob = report->FindItem(B_HID_USAGE_PAGE_MICROSOFT, 
+			0xC5);
+
 		if (win8Blob) {
-			TRACE_ALWAYS("There is a win8 trackpad blob, trying to fetch it...\n");
-			status_t result = MaybeScheduleTransfer(report);
-			report->DoneProcessing();
 			
+			status_t result = MaybeScheduleTransfer(report);
+
 			if (result !=B_OK)
 				continue;
-			TRACE_ALWAYS("done\n");
-			
+
+			report->DoneProcessing();
+			TRACE_ALWAYS("Fetched a Win8 trackpad blob\n");
+
 		}
-	
+
 	}
-		
-	
-	
-	
-	
+
 	ProtocolHandler::AddHandlers(*this, fProtocolHandlerList,
 		fProtocolHandlerCount);
 	fStatus = B_OK;
@@ -232,9 +234,6 @@ HIDDevice::MaybeScheduleTransfer(HIDReport *report)
 		return B_OK;
 	}
 
-	//snooze_until(fTransferLastschedule, B_SYSTEM_TIMEBASE);
-	//fTransferLastschedule = system_time() + 1000;
-
 	status_t status = _FetchBuffer((uint8*)&fDescriptor.wInputRegister,
 		sizeof(fDescriptor.wInputRegister), fTransferBuffer, fDescriptor.wMaxInputLength);
 	if (status != B_OK) {
@@ -242,44 +241,21 @@ HIDDevice::MaybeScheduleTransfer(HIDReport *report)
 		ERROR("failed to fetch HID report\n");
 		return status;
 	}
-	
+
 	uint16 actualLength = fTransferBuffer[0] | (fTransferBuffer[1] << 8);
 	
 	if (actualLength <= 2 || actualLength == 0xffff)
 		actualLength = 0;
 	else
 		actualLength -= 2;
-	
+
 	atomic_set(&fTransferScheduled, 0);
-	
+
 	fParser.SetReport(status,
 		(uint8*)((addr_t)fTransferBuffer + 2), actualLength);
-	
+
 	return B_OK;
-	/*
-	TRACE("scheduling interrupt transfer of %lu bytes\n",
-		report->ReportSize());
-		
-	uint8 reportType = 0;
-	
-	switch (report ->Type()) {
-		case HID_REPORT_TYPE_INPUT:
-			reportType = 1;
-		break;
-		
-		case HID_REPORT_TYPE_OUTPUT:
-			reportType = 2;
-		break;
-		
-		case HID_REPORT_TYPE_FEATURE:
-			reportType = 3;
-		break;
-	}
-	
-	//TRACE_ALWAYS("report %d, size %ld\n",report->ID(), report->ReportSize());
-	return _FetchReport(reportType, report->ID(), fDescriptor.wMaxInputLength);
-	
-	*/
+
 }
 
 
@@ -287,21 +263,21 @@ status_t
 HIDDevice::SendReport(HIDReport *report)
 {
 	uint8 reportType = 0;
-	
+
 	switch (report ->Type()) {
 		case HID_REPORT_TYPE_INPUT:
 			reportType = 1;
 		break;
-		
+
 		case HID_REPORT_TYPE_OUTPUT:
 			reportType = 2;
 		break;
-		
+
 		case HID_REPORT_TYPE_FEATURE:
 			reportType = 3;
 		break;
 	}
-	
+
 	return _WriteReport(reportType, report->ID(), report->CurrentReport(), 
 		report->ReportSize());
 }
@@ -322,7 +298,7 @@ HIDDevice::ProtocolHandlerAt(uint32 index) const
 	return NULL;
 }
 
-
+/*
 void
 HIDDevice::_UnstallCallback(void *cookie, status_t status, void *data,
 	size_t actualLength)
@@ -346,13 +322,12 @@ HIDDevice::_TransferCallback(void *cookie, status_t status, void *data,
 	atomic_set(&device->fTransferScheduled, 0);
 	device->fParser.SetReport(status, device->fTransferBuffer, actualLength);
 }
-
+*/
 
 status_t
 HIDDevice::_Reset()
 {
 	CALLED();
-	TRACE_ALWAYS("powering on...\n");
 	status_t status = _SetPower(I2C_HID_POWER_ON);
 	if (status != B_OK)
 		return status;
@@ -366,14 +341,12 @@ HIDDevice::_Reset()
 		I2C_HID_CMD_RESET,
 	};
 
-	TRACE_ALWAYS("reseting...\n");
 	status = _ExecCommand(I2C_OP_WRITE_STOP, cmd, sizeof(cmd), NULL, 0);
 	if (status != B_OK) {
 		_SetPower(I2C_HID_POWER_OFF);
 		return status;
 	}
 
-	TRACE_ALWAYS("done\n");
 	snooze(10000);
 	return B_OK;
 }
@@ -416,20 +389,18 @@ HIDDevice::_WriteReport(uint8 type, uint8 id, void *data, size_t reportSize)
 
 	cmd[dataOffset++] = fDescriptor.wDataRegister & 0xff;
 	cmd[dataOffset++] = fDescriptor.wDataRegister >> 8;
-	
-	//size_t bufferLength = reportSize + reportIdLength + 2;
+
 	size_t bufferLength = reportSize + 1 + 2;
 	
 	fTransferBuffer[0] = bufferLength & 0x00ff;
 	fTransferBuffer[1] = (bufferLength & 0xff00) >> 8;
 	fTransferBuffer[2] = id;
-	
+
 	memcpy(fTransferBuffer + 3, data, reportSize);
-	
+
 	status_t status = _ExecCommand(I2C_OP_WRITE_STOP, cmd, cmdLength,
 		fTransferBuffer, bufferLength);
-		
-	
+
 	return status;
 }
 
@@ -473,13 +444,8 @@ HIDDevice::_FetchReport(uint8 type, uint8 id, size_t reportSize)
 	else
 		actualLength -= 2;
 
-	//TRACE_ALWAYS("A %02x %02x %02x %02x\n",fTransferBuffer[0],fTransferBuffer[1],fTransferBuffer[2],fTransferBuffer[3]);
-	//TRACE_ALWAYS("B %02x %02x %02x %02x\n",fTransferBuffer[4],fTransferBuffer[5],fTransferBuffer[6],fTransferBuffer[7]);
-	//TRACE_ALWAYS("C %02x %02x %02x %02x\n",fTransferBuffer[8],fTransferBuffer[9],fTransferBuffer[10],fTransferBuffer[11]);
-
-
 	atomic_set(&fTransferScheduled, 0);
-	
+
 	fParser.SetReport(status,
 		(uint8*)((addr_t)fTransferBuffer + 2), actualLength);
 	return B_OK;

@@ -40,13 +40,14 @@ public:
 			ProtocolHandler *	ProtocolHandlerAt(uint32 index) const;
 
 private:
+/*
 	static	void				_TransferCallback(void *cookie,
 									status_t status, void *data,
 									size_t actualLength);
 	static	void				_UnstallCallback(void *cookie,
 									status_t status, void *data,
 									size_t actualLength);
-
+*/
 			status_t			_Reset();
 			status_t			_SetPower(uint8 power);
 			status_t			_WriteReport(uint8 type, uint8 id, void *data,
