@@ -36,6 +36,7 @@
 #define WMI_DEVICE_MODULE_NAME "drivers/wmi/device/driver_v1"
 
 #define WMI_ASUS_DRIVER_NAME "drivers/wmi/asus/driver_v1"
+#define WMI_QC71_DRIVER_NAME "drivers/wmi/qc71/driver_v1"
 
 #define WMI_BUS_COOKIE "wmi/bus/index"
 
@@ -48,6 +49,7 @@ extern device_manager_info *gDeviceManager;
 extern smbios_module_info *gSMBios;
 extern wmi_device_interface gWMIDeviceModule;
 extern driver_module_info gWMIAsusDriverModule;
+extern driver_module_info gWMIQC71DriverModule;
 
 
 class WMIDevice {

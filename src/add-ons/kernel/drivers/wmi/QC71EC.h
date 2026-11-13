@@ -1,0 +1,25 @@
+/*
+ * Copyright 2026, Slimbook, dev@slimbook.com.
+ * Distributed under the terms of the MIT license.
+ */
+
+#define QC71_BIOS_CTRL_1_ADDR				0x74E
+#define QC71_BIOS_CTRL_1_FN_LOCK_STATUS BIT	0x50
+
+#define QC71_CTRL_1_ADDR					0x741
+#define QC71_CTRL_1_MANUAL_MODE				0x01
+#define QC71_CTRL_1_ITE_KBD_EFFECT_REACTIVE	0x08
+#define QC71_CTRL_1_FAN_ABNORMAL			0x20
+
+#define QC71_FAN_CTRL_ADDR					0x751
+#define QC71_FAN_CTRL_TURBO					0x10
+#define QC71_FAN_CTRL_AUTO					0x20
+#define QC71_FAN_CTRL_FAN_BOOST				0x40
+#define QC71_FAN_CTRL_SILENT_MODE			0x80
+
+#define QC71_SUPPORT_2_ADDR					0x766
+#define QC71_SUPPORT_2_SILENT_MODE			0x01
+#define QC71_SUPPORT_2_USB_CHARGING			0x02
+#define QC71_SUPPORT_2_SINGLE_ZONE_KBD		0x04
+#define QC71_SUPPORT_2_CHINA_MODE			0x20
+#define QC71_SUPPORT_2_MY_BATTERY			0x40

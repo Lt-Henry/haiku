@@ -6,6 +6,7 @@ UsePrivateKernelHeaders ;
 KernelAddon wmi :
 	WMIACPI.cpp
 	WMIAsus.cpp
+	WMIQC71.cpp
 	WMIDevice.cpp
 	;
 

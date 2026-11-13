@@ -481,6 +481,7 @@ static driver_module_info sWMIACPIDriverModule = {
 module_info *modules[] = {
 	(module_info *)&sWMIACPIDriverModule,
 	(module_info *)&gWMIAsusDriverModule,
+	(module_info *)&gWMIQC71DriverModule,
 	(module_info *)&gWMIDeviceModule,
 	NULL
 };
