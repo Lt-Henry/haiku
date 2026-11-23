@@ -1,0 +1,8 @@
+SubDir HAIKU_TOP src add-ons kernel power rapl ;
+
+UsePrivateHeaders drivers ;
+UsePrivateKernelHeaders ;
+
+KernelAddon <driver>rapl :
+	rapl.cpp
+	;
