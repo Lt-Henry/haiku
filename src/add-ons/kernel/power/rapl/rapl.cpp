@@ -124,7 +124,7 @@ static uint32	sVendor;
 //static Package*		sPackages;
 //static int32*		sPackageCpus;
 //static int32		sPackageCount;
-static Vector<Package> sPackages(8);
+static Vector<Package*> sPackages;
 static char**		sDeviceNames;
 static bool			sSupported;
 
@@ -150,7 +150,7 @@ static int32
 find_package_index(int32 packageID)
 {
 	for (int32 i = 0; i < sPackages.Count(); i++) {
-		if (sPackages[i].id == packageID)
+		if (sPackages[i]->id == packageID)
 			return i;
 	}
 	return -1;
@@ -190,7 +190,7 @@ read_package_msr(const Package* package, uint32 msr)
 }
 #endif
 
-static status_t
+status_t
 detect_packages()
 {
 	int32 cpuCount = smp_get_num_cpus();
@@ -206,22 +206,23 @@ detect_packages()
 		int32 index = find_package_index(packageID);
 		if (index < 0) {
 			
-			Package package = {0};
-			package.id = packageID;
-			package.cpu = i;
-			package.domains = domains_for_cpu(&gCPU[i]);
+			Package* package = new (std::nothrow) Package;
+			package->id = packageID;
+			package->cpu = i;
+			package->domains = domains_for_cpu(&gCPU[i]);
 
 			uint64 units = read_msr_on(i, unitMSR);
-			package.powerUnit = 1.0 / (1ULL << ((units >> POWER_UNIT_SHIFT) & UNIT_MASK));
-			package.energyUnit = 1.0 / (1ULL << ((units >> ENERGY_UNIT_SHIFT) & UNIT_MASK));
-			package.timeUnit = 1.0 / (1ULL << ((units >> TIME_UNIT_SHIFT) & UNIT_MASK));
+			package->powerUnit = 1.0 / (1ULL << ((units >> POWER_UNIT_SHIFT) & UNIT_MASK));
+			package->energyUnit = 1.0 / (1ULL << ((units >> ENERGY_UNIT_SHIFT) & UNIT_MASK));
+			package->timeUnit = 1.0 / (1ULL << ((units >> TIME_UNIT_SHIFT) & UNIT_MASK));
 
 			TRACE_ALWAYS("package %" B_PRId32 " (cpu %" B_PRId32
 				"), domains 0x%08" B_PRIx32 ", energy unit %g J\n",
-				package.id, package.cpu, package.domains,
-				package.energyUnit);
+				package->id, package->cpu, package->domains,
+				package->energyUnit);
 			
 			sPackages.PushBack(package);
+			break;
 		}
 	}
 
@@ -249,7 +250,7 @@ publish_package_devices()
 			return B_NO_MEMORY;
 		}
 
-		Package* package = &sPackages[i];
+		Package* package = sPackages[i];
 		snprintf(sDeviceNames[i], size, RAPL_DEVICE_PATH, package->id);
 		package->deviceName = sDeviceNames[i];
 	}
@@ -267,7 +268,7 @@ rapl_open(const char* name, uint32 flags, void** cookie)
 	TRACE("opening:%s\n",name);
 	
 	for (int32 i = 0; i < sPackages.Count(); i++) {
-		Package* package = &sPackages[i];
+		Package* package = sPackages[i];
 		
 		if (strcmp(name,package->deviceName) == 0) {
 			*cookie = package;
@@ -411,7 +412,7 @@ device_hooks*
 find_device(const char* name)
 {
 	for (int32 i = 0; i < sPackages.Count(); i++) {
-		Package* package = &sPackages[i];
+		Package* package = sPackages[i];
 		
 		if (strcmp(name,package->deviceName) == 0) {
 			return &kDeviceHooks;
