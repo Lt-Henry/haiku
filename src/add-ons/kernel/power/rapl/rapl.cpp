@@ -101,10 +101,8 @@ static const ModelDomains kModelDomains[] = {
 
 
 struct Package {
-	int32	id;				/* physical package ID from CPU topology */
-	int32	cpu;			/* lead CPU used for package-scoped MSRs */
-	int32	cpuStart;		/* index into sPackageCpus */
-	int32	cpuCount;		/* CPUs belonging to this package */
+	int32	id;				/* package id */
+	int32	cpu;			/* main cpu */
 	uint32	domains;
 	double	powerUnit;
 	double	energyUnit;
@@ -124,6 +122,20 @@ static int32		sPackageCount;
 static Package* sPackages[RAPL_MAX_PACKAGES];
 static char**		sDeviceNames;
 static bool			sSupported;
+
+
+static int64 
+pow64(int64 value, int32 exp)
+{
+	uint64 result = 1;
+	
+	for (int32 n = 0;n<exp;n++) {
+		result = result * value;
+	}
+	
+	return result;
+}
+
 
 static const char*
 domain_name(uint32 domain)
@@ -229,12 +241,15 @@ detect_packages()
 			package->domains = domains_for_cpu(&gCPU[i]);
 
 			uint64 units = read_msr_on(i, unitMSR);
+			uint64 raw;
+			
 			package->powerUnit = 1.0 / (1ULL << ((units >> POWER_UNIT_SHIFT) & UNIT_MASK));
-			package->energyUnit = 1.0 / (1ULL << ((units >> ENERGY_UNIT_SHIFT) & UNIT_MASK));
+			raw =  ((units >> ENERGY_UNIT_SHIFT) & 0x1F);
+			package->energyUnit = 1000000.0 * (1.0/(double)pow64(2,raw));
 			package->timeUnit = 1.0 / (1ULL << ((units >> TIME_UNIT_SHIFT) & UNIT_MASK));
 
 			TRACE_ALWAYS("package %" B_PRId32 " (cpu %" B_PRId32
-				"), domains 0x%08" B_PRIx32 ", energy unit %g J\n",
+				"), domains 0x%08" B_PRIx32 ", energy unit %.4f uJ\n",
 				package->id, package->cpu, package->domains,
 				package->energyUnit);
 			
@@ -361,10 +376,12 @@ rapl_read(void* cookie, off_t position, void* buffer, size_t* numBytes)
 						
 					}
 					value = raw;
+					value = value * package->energyUnit;
 		
 				} else {
 					uint64 raw = read_package_msr(package, IA32_MSR_PP0_ENERGY_STATUS) & ENERGY_STATUS_MASK;
 					value = raw;
+					value = value * package->energyUnit;
 				}
 			}
 			
