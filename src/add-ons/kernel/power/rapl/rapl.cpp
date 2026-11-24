@@ -120,9 +120,6 @@ struct MsrRequest {
 
 
 static uint32	sVendor;
-//static Package*		sPackages;
-//static int32*		sPackageCpus;
-
 static int32		sPackageCount;
 static Package* sPackages[RAPL_MAX_PACKAGES];
 static char**		sDeviceNames;
@@ -194,7 +191,7 @@ read_msr_on(int32 cpu, uint32 msr)
 	return request.value;
 }
 
-#if 0
+
 static uint64
 read_package_msr(const Package* package, uint32 msr)
 {
@@ -204,16 +201,15 @@ read_package_msr(const Package* package, uint32 msr)
 
 	return read_msr_on(package->cpu, msr);
 }
-#endif
+
 
 status_t
 detect_packages()
 {
-	TRACE("Detecting packages...\n");
 	
 	int32 cpuCount = smp_get_num_cpus();
 	
-	TRACE("CPU count:%" B_PRId32 "\n", cpuCount);
+	TRACE("CPU count:%" B_PRId32 ", mapping packages...\n", cpuCount);
 
 	uint32 unitMSR = sVendor == VENDOR_AMD ? AMD_MSR_RAPL_POWER_UNIT
 		: IA32_MSR_RAPL_POWER_UNIT;
@@ -244,9 +240,6 @@ detect_packages()
 			
 			sPackages[sPackageCount] = package;
 			sPackageCount++;
-			//sPackages.PushBack(package);
-			//sPackages.Put(packageID,package);
-			break;
 		}
 	}
 
@@ -289,8 +282,6 @@ publish_package_devices()
 static status_t
 rapl_open(const char* name, uint32 flags, void** cookie)
 {
-	
-	TRACE("opening:%s\n",name);
 	
 	for (int32 i = 0; i < sPackageCount; i++) {
 		Package* package = sPackages[i];
@@ -345,15 +336,40 @@ rapl_read(void* cookie, off_t position, void* buffer, size_t* numBytes)
 		
 		while (domains[n] != 0) {
 			const char* name = domain_name(domains[n]);
+			double value = 0.0;
 			
-			if ((package->domains & domains[n]) == RAPL_DOMAIN_PKG) {
-				snprintf(str, maxLen,"%s:%.4f\n", name, 0.0);
-				maxLen -= strlen(str);
-				str += strlen(str);
+			uint32 match = package->domains & domains[n];
+			
+			if (match == RAPL_DOMAIN_PKG) {
+				uint32 msr = sVendor == VENDOR_AMD ? AMD_MSR_PKG_ENERGY_STATUS
+					: IA32_MSR_PKG_ENERGY_STATUS;
+				uint64 raw = read_package_msr(package, msr) & ENERGY_STATUS_MASK;
+				value = raw;
 			}
 			
-			if ((package->domains & domains[n]) == RAPL_DOMAIN_PP0) {
-				snprintf(str, maxLen,"%s:%.4f\n", name, 0.0);
+			if (match == RAPL_DOMAIN_PP0) {
+				if (sVendor == VENDOR_AMD) {
+				
+					uint64 raw = 0;
+					for (int32 i = 0; i < smp_get_num_cpus(); i++) {
+						if (gCPU[i].disabled) 
+							continue;
+							
+						if (gCPU[i].topology_id[CPU_TOPOLOGY_PACKAGE] == package->id) {
+							raw += read_msr_on(i,AMD_MSR_CORE_ENERGY_STATUS)  & ENERGY_STATUS_MASK;
+						}
+						
+					}
+					value = raw;
+		
+				} else {
+					uint64 raw = read_package_msr(package, IA32_MSR_PP0_ENERGY_STATUS) & ENERGY_STATUS_MASK;
+					value = raw;
+				}
+			}
+			
+			if (match > 0) {
+				snprintf(str, maxLen,"%s:%.4f\n", name, value);
 				maxLen -= strlen(str);
 				str += strlen(str);
 			}
