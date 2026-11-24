@@ -266,7 +266,8 @@ static status_t
 publish_package_devices()
 {
 	/* One string per package plus the terminating NULL. */
-	sDeviceNames = (char**)malloc(sizeof(char*) * (sPackageCount + 1));
+	//sDeviceNames = (char**)malloc(sizeof(char*) * (sPackageCount + 1));
+	sDeviceNames = new (std::nothrow) char* [sPackageCount + 1];
 	if (sDeviceNames == NULL)
 		return B_NO_MEMORY;
 
@@ -275,11 +276,13 @@ publish_package_devices()
 
 		Package* package = sPackages[i];
 		
-		sDeviceNames[i] = (char*)malloc(size);
+		//sDeviceNames[i] = (char*)malloc(size);
+		sDeviceNames[i] = new (std::nothrow) char [size];
+		
 		if (sDeviceNames[i] == NULL) {
 			while (i-- > 0)
-				free(sDeviceNames[i]);
-			free(sDeviceNames);
+				delete [] sDeviceNames[i];
+			delete [] sDeviceNames;
 			sDeviceNames = NULL;
 			return B_NO_MEMORY;
 		}
@@ -383,6 +386,24 @@ rapl_read(void* cookie, off_t position, void* buffer, size_t* numBytes)
 					value = raw;
 					value = value * package->energyUnit;
 				}
+			}
+			
+			if (match == RAPL_DOMAIN_PP1) {
+				uint64 raw = read_package_msr(package, IA32_MSR_PP1_ENERGY_STATUS) & ENERGY_STATUS_MASK;
+				value = raw;
+				value = value * package->energyUnit;
+			}
+			
+			if (match == RAPL_DOMAIN_DRAM) {
+				uint64 raw = read_package_msr(package, IA32_MSR_DRAM_ENERGY_STATUS) & ENERGY_STATUS_MASK;
+				value = raw;
+				value = value * package->energyUnit;
+			}
+			
+			if (match == RAPL_DOMAIN_PSYS) {
+				uint64 raw = read_package_msr(package, IA32_MSR_PLATFORM_ENERGY_STATUS) & ENERGY_STATUS_MASK;
+				value = raw;
+				value = value * package->energyUnit;
 			}
 			
 			if (match > 0) {
@@ -490,10 +511,10 @@ uninit_driver(void)
 {
 	if (sDeviceNames != NULL) {
 		for (int32 i = 0; i < sPackageCount; i++) {
-			free(sDeviceNames[i]);
+			delete [] sDeviceNames[i];
 			delete sPackages[i];
 		}
-		free(sDeviceNames);
+		delete [] sDeviceNames;
 		sDeviceNames = NULL;
 	}
 
