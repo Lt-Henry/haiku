@@ -8,6 +8,7 @@
 #include <Errors.h>
 #include <KernelExport.h>
 #include <util/Vector.h>
+#include <util/VectorMap.h>
 
 #include <arch_cpu.h>
 #include <cpu.h>
@@ -124,7 +125,7 @@ static uint32	sVendor;
 //static Package*		sPackages;
 //static int32*		sPackageCpus;
 //static int32		sPackageCount;
-static Vector<Package*> sPackages;
+static VectorMap<uint32,Package*> sPackages;
 static char**		sDeviceNames;
 static bool			sSupported;
 
@@ -145,7 +146,7 @@ domains_for_cpu(cpu_ent* cpu)
 	return RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0;
 }
 
-
+#if 0
 static int32
 find_package_index(int32 packageID)
 {
@@ -155,7 +156,7 @@ find_package_index(int32 packageID)
 	}
 	return -1;
 }
-
+#endif
 
 static void
 read_msr_on_cpu(void* data, int /* cpu */)
@@ -203,8 +204,10 @@ detect_packages()
 			continue;
 
 		int32 packageID = gCPU[i].topology_id[CPU_TOPOLOGY_PACKAGE];
-		int32 index = find_package_index(packageID);
-		if (index < 0) {
+		//int32 index = find_package_index(packageID);
+		
+		//if (index < 0) {
+		if (sPackages.Find(packageID) != sPackages.End()) {
 			
 			Package* package = new (std::nothrow) Package;
 			package->id = packageID;
@@ -221,7 +224,8 @@ detect_packages()
 				package->id, package->cpu, package->domains,
 				package->energyUnit);
 			
-			sPackages.PushBack(package);
+			//sPackages.PushBack(package);
+			sPackages.Put(packageID,package);
 			break;
 		}
 	}
@@ -238,8 +242,12 @@ publish_package_devices()
 	if (sDeviceNames == NULL)
 		return B_NO_MEMORY;
 
-	for (int32 i = 0; i < sPackages.Count(); i++) {
+	//for (int32 i = 0; i < sPackages.Count(); i++) {
+	int32 i = 0;
+	for(VectorMap<uint32,Package*>::Iterator I = sPackages.Begin(); I != sPackages.End(); I++) {
 		size_t size = strlen(RAPL_DEVICE_PATH) + 12;
+
+		Package* package = (Package*)I->Value();
 		
 		sDeviceNames[i] = (char*)malloc(size);
 		if (sDeviceNames[i] == NULL) {
@@ -250,9 +258,9 @@ publish_package_devices()
 			return B_NO_MEMORY;
 		}
 
-		Package* package = sPackages[i];
 		snprintf(sDeviceNames[i], size, RAPL_DEVICE_PATH, package->id);
 		package->deviceName = sDeviceNames[i];
+		i++;
 	}
 	
 	sDeviceNames[sPackages.Count()] = NULL;
@@ -267,8 +275,9 @@ rapl_open(const char* name, uint32 flags, void** cookie)
 	
 	TRACE("opening:%s\n",name);
 	
-	for (int32 i = 0; i < sPackages.Count(); i++) {
-		Package* package = sPackages[i];
+	//for (int32 i = 0; i < sPackages.Count(); i++) {
+	for(VectorMap<uint32,Package*>::Iterator I = sPackages.Begin(); I != sPackages.End(); I++) {
+		Package* package = (Package*)I->Value();
 		
 		if (strcmp(name,package->deviceName) == 0) {
 			*cookie = package;
@@ -411,8 +420,10 @@ publish_devices(void)
 device_hooks*
 find_device(const char* name)
 {
-	for (int32 i = 0; i < sPackages.Count(); i++) {
-		Package* package = sPackages[i];
+	//for (int32 i = 0; i < sPackages.Count(); i++) {
+		//Package* package = sPackages[i];
+	for(VectorMap<uint32,Package*>::Iterator I = sPackages.Begin(); I != sPackages.End(); I++) {
+		Package* package = (Package*)I->Value();
 		
 		if (strcmp(name,package->deviceName) == 0) {
 			return &kDeviceHooks;
