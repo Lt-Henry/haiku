@@ -7,8 +7,6 @@
 #include <Drivers.h>
 #include <Errors.h>
 #include <KernelExport.h>
-#include <util/Vector.h>
-#include <util/VectorMap.h>
 
 #include <arch_cpu.h>
 #include <cpu.h>
@@ -124,8 +122,9 @@ struct MsrRequest {
 static uint32	sVendor;
 //static Package*		sPackages;
 //static int32*		sPackageCpus;
-//static int32		sPackageCount;
-static VectorMap<uint32,Package*> sPackages;
+
+static int32		sPackageCount;
+static Package* sPackages[RAPL_MAX_PACKAGES];
 static char**		sDeviceNames;
 static bool			sSupported;
 
@@ -146,17 +145,17 @@ domains_for_cpu(cpu_ent* cpu)
 	return RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0;
 }
 
-#if 0
+
 static int32
 find_package_index(int32 packageID)
 {
-	for (int32 i = 0; i < sPackages.Count(); i++) {
+	for (int32 i = 0; i < sPackageCount; i++) {
 		if (sPackages[i]->id == packageID)
 			return i;
 	}
 	return -1;
 }
-#endif
+
 
 static void
 read_msr_on_cpu(void* data, int /* cpu */)
@@ -194,7 +193,11 @@ read_package_msr(const Package* package, uint32 msr)
 status_t
 detect_packages()
 {
+	TRACE("Detecting packages...\n");
+	
 	int32 cpuCount = smp_get_num_cpus();
+	
+	TRACE("CPU count:%" B_PRId32 "\n", cpuCount);
 
 	uint32 unitMSR = sVendor == VENDOR_AMD ? AMD_MSR_RAPL_POWER_UNIT
 		: IA32_MSR_RAPL_POWER_UNIT;
@@ -204,10 +207,9 @@ detect_packages()
 			continue;
 
 		int32 packageID = gCPU[i].topology_id[CPU_TOPOLOGY_PACKAGE];
-		//int32 index = find_package_index(packageID);
+		int32 index = find_package_index(packageID);
 		
-		//if (index < 0) {
-		if (sPackages.Find(packageID) != sPackages.End()) {
+		if (index < 0) {
 			
 			Package* package = new (std::nothrow) Package;
 			package->id = packageID;
@@ -224,8 +226,10 @@ detect_packages()
 				package->id, package->cpu, package->domains,
 				package->energyUnit);
 			
+			sPackages[sPackageCount] = package;
+			sPackageCount++;
 			//sPackages.PushBack(package);
-			sPackages.Put(packageID,package);
+			//sPackages.Put(packageID,package);
 			break;
 		}
 	}
@@ -238,16 +242,14 @@ static status_t
 publish_package_devices()
 {
 	/* One string per package plus the terminating NULL. */
-	sDeviceNames = (char**)malloc(sizeof(char*) * (sPackages.Count() + 1));
+	sDeviceNames = (char**)malloc(sizeof(char*) * (sPackageCount + 1));
 	if (sDeviceNames == NULL)
 		return B_NO_MEMORY;
 
-	//for (int32 i = 0; i < sPackages.Count(); i++) {
-	int32 i = 0;
-	for(VectorMap<uint32,Package*>::Iterator I = sPackages.Begin(); I != sPackages.End(); I++) {
+	for (int32 i = 0; i < sPackageCount; i++) {
 		size_t size = strlen(RAPL_DEVICE_PATH) + 12;
 
-		Package* package = (Package*)I->Value();
+		Package* package = sPackages[i];
 		
 		sDeviceNames[i] = (char*)malloc(size);
 		if (sDeviceNames[i] == NULL) {
@@ -260,10 +262,9 @@ publish_package_devices()
 
 		snprintf(sDeviceNames[i], size, RAPL_DEVICE_PATH, package->id);
 		package->deviceName = sDeviceNames[i];
-		i++;
 	}
 	
-	sDeviceNames[sPackages.Count()] = NULL;
+	sDeviceNames[sPackageCount] = NULL;
 	
 	return B_OK;
 }
@@ -275,9 +276,8 @@ rapl_open(const char* name, uint32 flags, void** cookie)
 	
 	TRACE("opening:%s\n",name);
 	
-	//for (int32 i = 0; i < sPackages.Count(); i++) {
-	for(VectorMap<uint32,Package*>::Iterator I = sPackages.Begin(); I != sPackages.End(); I++) {
-		Package* package = (Package*)I->Value();
+	for (int32 i = 0; i < sPackageCount; i++) {
+		Package* package = sPackages[i];
 		
 		if (strcmp(name,package->deviceName) == 0) {
 			*cookie = package;
@@ -375,6 +375,8 @@ init_hardware(void)
 		return B_ERROR;
 	}
 
+	TRACE_ALWAYS("Found a CPU with RAPL support\n");
+	
 	sSupported = true;
 	return B_OK;
 }
@@ -400,8 +402,10 @@ void
 uninit_driver(void)
 {
 	if (sDeviceNames != NULL) {
-		for (int32 i = 0; i < sPackages.Count(); i++)
+		for (int32 i = 0; i < sPackageCount; i++) {
 			free(sDeviceNames[i]);
+			delete sPackages[i];
+		}
 		free(sDeviceNames);
 		sDeviceNames = NULL;
 	}
@@ -420,10 +424,8 @@ publish_devices(void)
 device_hooks*
 find_device(const char* name)
 {
-	//for (int32 i = 0; i < sPackages.Count(); i++) {
-		//Package* package = sPackages[i];
-	for(VectorMap<uint32,Package*>::Iterator I = sPackages.Begin(); I != sPackages.End(); I++) {
-		Package* package = (Package*)I->Value();
+	for (int32 i = 0; i < sPackageCount; i++) {
+		Package* package = sPackages[i];
 		
 		if (strcmp(name,package->deviceName) == 0) {
 			return &kDeviceHooks;

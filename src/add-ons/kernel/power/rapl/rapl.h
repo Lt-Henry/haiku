@@ -8,6 +8,7 @@
 
 #define RAPL_DRIVER_NAME	"rapl"
 #define RAPL_DEVICE_PATH "power/rapl/%d"
+#define RAPL_MAX_PACKAGES	16
 
 enum {
 	RAPL_DOMAIN_PKG	 = 1u << 0,	/* whole package */
