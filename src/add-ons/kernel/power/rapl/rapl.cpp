@@ -128,6 +128,22 @@ static Package* sPackages[RAPL_MAX_PACKAGES];
 static char**		sDeviceNames;
 static bool			sSupported;
 
+static const char*
+domain_name(uint32 domain)
+{
+	const DomainName* q = &kDomainNames[0];
+	
+	while (q->domain!=0) {
+	
+		if (q->domain == domain) {
+			return q->name;
+		}
+		
+		q++;
+	}
+	
+	return NULL;
+}
 
 static uint32
 domains_for_cpu(cpu_ent* cpu)
@@ -306,17 +322,55 @@ rapl_free(void* cookie)
 static status_t
 rapl_read(void* cookie, off_t position, void* buffer, size_t* numBytes)
 {
-	//Package* package = (Package*) cookie;
+	Package* package = (Package*) cookie;
 	
-	/*
-	if (user_memcpy(buffer, &info, sizeof(info)) != B_OK) {
-		*numBytes = 0;
-		return B_BAD_ADDRESS;
-	}
+	if (*numBytes < 1)
+		return B_IO_ERROR;
+	
+	if (position == 0) {
+		char text[128];
+		char* str = text;
+		size_t maxLen = sizeof(text);
 
-	*numBytes = sizeof(info);
-	*/
-	*numBytes = 0;
+		const uint32 domains [] = {
+			RAPL_DOMAIN_PKG,
+			RAPL_DOMAIN_PP0,
+			RAPL_DOMAIN_PP1,
+			RAPL_DOMAIN_DRAM,
+			RAPL_DOMAIN_PSYS,
+			0
+		};
+		
+		uint32 n = 0;
+		
+		while (domains[n] != 0) {
+			const char* name = domain_name(domains[n]);
+			
+			if ((package->domains & domains[n]) == RAPL_DOMAIN_PKG) {
+				snprintf(str, maxLen,"%s:%.4f\n", name, 0.0);
+				maxLen -= strlen(str);
+				str += strlen(str);
+			}
+			
+			if ((package->domains & domains[n]) == RAPL_DOMAIN_PP0) {
+				snprintf(str, maxLen,"%s:%.4f\n", name, 0.0);
+				maxLen -= strlen(str);
+				str += strlen(str);
+			}
+			
+			n++;
+		}
+		
+		maxLen = user_strlcpy((char*)buffer, text, *numBytes);
+		
+		if (maxLen < B_OK)
+			return B_BAD_ADDRESS;
+		*numBytes = maxLen;
+	
+	}
+	else {
+		*numBytes = 0;
+	}
 	
 	return B_OK;
 }
