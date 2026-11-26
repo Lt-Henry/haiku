@@ -255,6 +255,11 @@ detect_packages()
 			
 			sPackages[sPackageCount] = package;
 			sPackageCount++;
+			
+			if (sPackageCount == RAPL_MAX_PACKAGES) {
+				TRACE("Package limit reached:%" B_PRId32 ", bad topology info?\n", sPackageCount);
+				break;
+			}
 		}
 	}
 
@@ -266,7 +271,6 @@ static status_t
 publish_package_devices()
 {
 	/* One string per package plus the terminating NULL. */
-	//sDeviceNames = (char**)malloc(sizeof(char*) * (sPackageCount + 1));
 	sDeviceNames = new (std::nothrow) char* [sPackageCount + 1];
 	if (sDeviceNames == NULL)
 		return B_NO_MEMORY;
@@ -276,7 +280,6 @@ publish_package_devices()
 
 		Package* package = sPackages[i];
 		
-		//sDeviceNames[i] = (char*)malloc(size);
 		sDeviceNames[i] = new (std::nothrow) char [size];
 		
 		if (sDeviceNames[i] == NULL) {
