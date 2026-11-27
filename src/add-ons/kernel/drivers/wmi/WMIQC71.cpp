@@ -178,7 +178,7 @@ WMIQC71::_Notify(acpi_handle handle, uint32 notify)
 		case 0x40:
 		break;
 
-		/* decrease volume */
+		/* disable super key (win key) lock */
 		case 0x41:
 		break;
 
@@ -382,8 +382,8 @@ void WMIQC71::TogglePerformanceMode()
 	value = data & ~mask;
 	value = value | target;
 	
-	TRACE_ALWAYS("current 0x%" B_PRIx32 "\n", data);
-	TRACE_ALWAYS("next 0x%" B_PRIx32 "\n", value);
+	TRACE("current 0x%" B_PRIx32 "\n", data);
+	TRACE("next 0x%" B_PRIx32 "\n", value);
 	status = WriteEC(QC71_FAN_CTRL_ADDR, value);
 	
 	if (status != B_OK)
