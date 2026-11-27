@@ -329,7 +329,16 @@ WMIQC71::WriteEC(uint16 addr, uint8 data)
 void WMIQC71::ToggleFnLock()
 {
 	uint8 data;
-	status_t status = ReadEC(QC71_FAN_CTRL_ADDR, &data);
+	status_t status = ReadEC(QC71_BIOS_CTRL_1_ADDR, &data);
+	
+	if (status != B_OK)
+		return;
+
+	uint8 fn = (data ^ QC71_BIOS_CTRL_1_FN_LOCK_STATUS);
+	
+	TRACE_ALWAYS("Fn lock: %" B_PRIx32 "\n", fn);
+	
+	status = WriteEC(QC71_BIOS_CTRL_1_ADDR, fn);
 	
 	if (status != B_OK)
 		return;
