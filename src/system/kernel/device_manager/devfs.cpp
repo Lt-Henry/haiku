@@ -32,6 +32,7 @@
 #include <kdevice_manager.h>
 #include <lock.h>
 #include <Notifications.h>
+#include <StackOrHeapArray.h>
 #include <util/AutoLock.h>
 #include <util/fs_trim_support.h>
 #include <vfs.h>
@@ -235,9 +236,11 @@ scan_for_drivers_if_needed(devfs_vnode* dir)
 
 	// scan for drivers at this path
 	static int32 updateCycle = 1;
-	device_manager_probe(path.Path(), updateCycle++);
-	legacy_driver_probe(path.Path());
+	status_t status = device_manager_probe(path.Path(), updateCycle++);
+	if (status != B_OK)
+		return status;
 
+	legacy_driver_probe(path.Path());
 	dir->stream.u.dir.scanned = scan_mode();
 	return B_OK;
 }
@@ -294,6 +297,9 @@ devfs_delete_vnode(struct devfs* fs, struct devfs_vnode* vnode,
 	// remove it from the global hash table
 	fs->vnode_hash->Remove(vnode);
 
+	// unlock before calling hooks, to avoid lock order inversions
+	recursive_lock_unlock(&fs->lock);
+
 	if (S_ISCHR(vnode->stream.type)) {
 		if (vnode->stream.u.dev.partition == NULL) {
 			// pass the call through to the underlying device
@@ -311,6 +317,7 @@ devfs_delete_vnode(struct devfs* fs, struct devfs_vnode* vnode,
 	free(vnode->name);
 	free(vnode);
 
+	recursive_lock_lock(&fs->lock);
 	return B_OK;
 }
 
@@ -962,7 +969,6 @@ static status_t
 devfs_unmount(fs_volume* _volume)
 {
 	struct devfs* fs = (struct devfs*)_volume->private_volume;
-	struct devfs_vnode* vnode;
 
 	TRACE(("devfs_unmount: entry fs = %p\n", fs));
 
@@ -974,8 +980,11 @@ devfs_unmount(fs_volume* _volume)
 	// delete all of the vnodes
 	NodeTable::Iterator i(fs->vnode_hash);
 	while (i.HasNext()) {
-		vnode = i.Next();
+		struct devfs_vnode* vnode = i.Next();
 		devfs_delete_vnode(fs, vnode, true);
+
+		// devfs_delete_vnode() unlocks temporarily, so reset the iterator
+		i.Rewind();
 	}
 	delete fs->vnode_hash;
 
@@ -1094,13 +1103,12 @@ devfs_remove_vnode(fs_volume* _volume, fs_vnode* _v, bool reenter)
 
 	RecursiveLocker locker(&fs->lock);
 
-	if (vnode->dir_next) {
+	if (vnode->dir_next != NULL) {
 		// can't remove node if it's linked to the dir
-		panic("devfs_removevnode: vnode %p asked to be removed is present in dir\n", vnode);
+		panic("devfs_remove_vnode: vnode %p asked to be removed is present in dir\n", vnode);
 	}
 
 	devfs_delete_vnode(fs, vnode, false);
-
 	return B_OK;
 }
 
@@ -1112,6 +1120,9 @@ devfs_open(fs_volume* _volume, fs_vnode* _vnode, int openMode,
 	struct devfs_vnode* vnode = (struct devfs_vnode*)_vnode->private_node;
 	struct devfs_cookie* cookie;
 	status_t status = B_OK;
+
+	if (S_ISDIR(vnode->stream.type) && (openMode & O_RWMASK) != O_RDONLY)
+		return B_IS_A_DIRECTORY;
 
 	cookie = (struct devfs_cookie*)malloc(sizeof(struct devfs_cookie));
 	if (cookie == NULL)
@@ -1184,7 +1195,7 @@ devfs_free_cookie(fs_volume* _volume, fs_vnode* _vnode, void* _cookie)
 
 
 static status_t
-devfs_fsync(fs_volume* _volume, fs_vnode* _v)
+devfs_fsync(fs_volume* _volume, fs_vnode* _v, bool dataOnly)
 {
 	return B_OK;
 }
@@ -1664,133 +1675,14 @@ devfs_can_page(fs_volume* _volume, fs_vnode* _vnode, void* cookie)
 
 
 static status_t
-devfs_read_pages(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
-	off_t pos, const iovec* vecs, size_t count, size_t* _numBytes)
-{
-	struct devfs_vnode* vnode = (devfs_vnode*)_vnode->private_node;
-	struct devfs_cookie* cookie = (struct devfs_cookie*)_cookie;
-
-	//TRACE(("devfs_read_pages: vnode %p, vecs %p, count = %lu, pos = %lld, size = %lu\n", vnode, vecs, count, pos, *_numBytes));
-
-	if (!S_ISCHR(vnode->stream.type)
-		|| (!vnode->stream.u.dev.device->HasRead()
-			&& !vnode->stream.u.dev.device->HasIO())
-		|| cookie == NULL)
-		return B_NOT_ALLOWED;
-
-	if (pos < 0)
-		return B_BAD_VALUE;
-
-	if (vnode->stream.u.dev.partition != NULL) {
-		if (pos >= vnode->stream.u.dev.partition->info.size)
-			return B_BAD_VALUE;
-
-		translate_partition_access(vnode->stream.u.dev.partition, pos,
-			*_numBytes);
-	}
-
-	if (vnode->stream.u.dev.device->HasIO()) {
-		// TODO: use io_requests for this!
-	}
-
-	// emulate read_pages() using read()
-
-	status_t error = B_OK;
-	size_t bytesTransferred = 0;
-
-	size_t remainingBytes = *_numBytes;
-	for (size_t i = 0; i < count && remainingBytes > 0; i++) {
-		size_t toRead = min_c(vecs[i].iov_len, remainingBytes);
-		size_t length = toRead;
-
-		error = vnode->stream.u.dev.device->Read(cookie->device_cookie, pos,
-			vecs[i].iov_base, &length);
-		if (error != B_OK)
-			break;
-
-		pos += length;
-		bytesTransferred += length;
-		remainingBytes -= length;
-
-		if (length < toRead)
-			break;
-	}
-
-	*_numBytes = bytesTransferred;
-
-	return bytesTransferred > 0 ? B_OK : error;
-}
-
-
-static status_t
-devfs_write_pages(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
-	off_t pos, const iovec* vecs, size_t count, size_t* _numBytes)
-{
-	struct devfs_vnode* vnode = (devfs_vnode*)_vnode->private_node;
-	struct devfs_cookie* cookie = (struct devfs_cookie*)_cookie;
-
-	//TRACE(("devfs_write_pages: vnode %p, vecs %p, count = %lu, pos = %lld, size = %lu\n", vnode, vecs, count, pos, *_numBytes));
-
-	if (!S_ISCHR(vnode->stream.type)
-		|| (!vnode->stream.u.dev.device->HasWrite()
-			&& !vnode->stream.u.dev.device->HasIO())
-		|| cookie == NULL)
-		return B_NOT_ALLOWED;
-
-	if (pos < 0)
-		return B_BAD_VALUE;
-
-	if (vnode->stream.u.dev.partition != NULL) {
-		if (pos >= vnode->stream.u.dev.partition->info.size)
-			return B_BAD_VALUE;
-
-		translate_partition_access(vnode->stream.u.dev.partition, pos,
-			*_numBytes);
-	}
-
-	if (vnode->stream.u.dev.device->HasIO()) {
-		// TODO: use io_requests for this!
-	}
-
-	// emulate write_pages() using write()
-
-	status_t error = B_OK;
-	size_t bytesTransferred = 0;
-
-	size_t remainingBytes = *_numBytes;
-	for (size_t i = 0; i < count && remainingBytes > 0; i++) {
-		size_t toWrite = min_c(vecs[i].iov_len, remainingBytes);
-		size_t length = toWrite;
-
-		error = vnode->stream.u.dev.device->Write(cookie->device_cookie, pos,
-			vecs[i].iov_base, &length);
-		if (error != B_OK)
-			break;
-
-		pos += length;
-		bytesTransferred += length;
-		remainingBytes -= length;
-
-		if (length < toWrite)
-			break;
-	}
-
-	*_numBytes = bytesTransferred;
-
-	return bytesTransferred > 0 ? B_OK : error;
-}
-
-
-static status_t
-devfs_io(fs_volume* volume, fs_vnode* _vnode, void* _cookie,
-	io_request* request)
+devfs_io(fs_volume* volume, fs_vnode* _vnode, void* _cookie, io_request* request)
 {
 	TRACE(("[%d] devfs_io(request: %p)\n", find_thread(NULL), request));
 
 	devfs_vnode* vnode = (devfs_vnode*)_vnode->private_node;
-	devfs_cookie* cookie = (devfs_cookie*)_cookie;
+	devfs_cookie* cookie = (struct devfs_cookie*)_cookie;
 
-	if (!S_ISCHR(vnode->stream.type) || cookie == NULL) {
+	if (!S_ISCHR(vnode->stream.type)) {
 		request->SetStatusAndNotify(B_NOT_ALLOWED);
 		return B_NOT_ALLOWED;
 	}
@@ -1808,6 +1700,86 @@ devfs_io(fs_volume* volume, fs_vnode* _vnode, void* _cookie,
 	}
 
 	return vnode->stream.u.dev.device->IO(cookie->device_cookie, request);
+}
+
+
+static status_t
+devfs_read_pages(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
+	off_t pos, const iovec* _vecs, size_t count, size_t* _numBytes)
+{
+	struct devfs_vnode* vnode = (devfs_vnode*)_vnode->private_node;
+
+	//TRACE(("devfs_read_pages: vnode %p, vecs %p, count = %lu, pos = %lld, size = %lu\n", vnode, vecs, count, pos, *_numBytes));
+
+	if (!S_ISCHR(vnode->stream.type))
+		return B_NOT_ALLOWED;
+	if (pos < 0)
+		return B_BAD_VALUE;
+	if (!vnode->stream.u.dev.device->HasIO())
+		return B_UNSUPPORTED;
+
+	BStackOrHeapArray<generic_io_vec, 8> vecs(count);
+	if (!vecs.IsValid())
+		return B_NO_MEMORY;
+
+	for (size_t i = 0; i < count; i++) {
+		vecs[i].base = (generic_addr_t)_vecs[i].iov_base;
+		vecs[i].length = _vecs[i].iov_len;
+	}
+
+	IORequest request;
+	status_t status = request.Init(pos, vecs, count, *_numBytes, false, 0);
+	if (status != B_OK)
+		return status;
+
+	status = devfs_io(_volume, _vnode, _cookie, &request);
+	if (status != B_OK)
+		return status;
+
+	status = request.Wait(0, 0);
+
+	*_numBytes = request.TransferredBytes();
+	return *_numBytes > 0 ? B_OK : status;
+}
+
+
+static status_t
+devfs_write_pages(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
+	off_t pos, const iovec* _vecs, size_t count, size_t* _numBytes)
+{
+	struct devfs_vnode* vnode = (devfs_vnode*)_vnode->private_node;
+
+	//TRACE(("devfs_write_pages: vnode %p, vecs %p, count = %lu, pos = %lld, size = %lu\n", vnode, vecs, count, pos, *_numBytes));
+
+	if (!S_ISCHR(vnode->stream.type))
+		return B_NOT_ALLOWED;
+	if (pos < 0)
+		return B_BAD_VALUE;
+	if (!vnode->stream.u.dev.device->HasIO())
+		return B_UNSUPPORTED;
+
+	BStackOrHeapArray<generic_io_vec, 8> vecs(count);
+	if (!vecs.IsValid())
+		return B_NO_MEMORY;
+
+	for (size_t i = 0; i < count; i++) {
+		vecs[i].base = (generic_addr_t)_vecs[i].iov_base;
+		vecs[i].length = _vecs[i].iov_len;
+	}
+
+	IORequest request;
+	status_t status = request.Init(pos, vecs, count, *_numBytes, true, 0);
+	if (status != B_OK)
+		return status;
+
+	status = devfs_io(_volume, _vnode, _cookie, &request);
+	if (status != B_OK)
+		return status;
+
+	status = request.Wait(0, 0);
+
+	*_numBytes = request.TransferredBytes();
+	return *_numBytes > 0 ? B_OK : status;
 }
 
 

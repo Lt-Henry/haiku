@@ -231,6 +231,16 @@ DownloadProgressView::Init(BMessage* archive)
 		fStatusBar = new BStatusBar("download progress", "Download");
 	fStatusBar->SetMaxValue(100);
 	fStatusBar->SetBarHeight(12);
+	fStatusBar->SetExplicitMinSize(BSize(0, B_SIZE_UNSET));
+
+	fFileNameView = new BStringView("download progress label", fStatusBar->Label());
+	fFileNameView->SetTruncation(B_TRUNCATE_END);
+	fFileNameView->SetExplicitMinSize(BSize(0, B_SIZE_UNSET));
+	fFileNameView->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, B_SIZE_UNSET));
+
+	fBarberPole = new BarberPole("barber pole");
+	fBarberPole->SetExplicitMinSize(BSize(0, fStatusBar->BarHeight()));
+	fBarberPole->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, fStatusBar->BarHeight()));
 
 	// fPath is only valid when constructed from archive (fDownload == NULL)
 	BEntry entry(fPath.Path());
@@ -275,9 +285,13 @@ DownloadProgressView::Init(BMessage* archive)
 	layout->AddView(fIconView);
 	BView* verticalGroup = BGroupLayoutBuilder(B_VERTICAL, 3)
 		.Add(fStatusBar)
+		.Add(fFileNameView)
+		.Add(fBarberPole)
 		.Add(fInfoView)
 		.TopView()
 	;
+	fFileNameView->Hide();
+	fBarberPole->Hide();
 	verticalGroup->SetViewColor(ViewColor());
 	layout->AddView(verticalGroup);
 
@@ -381,6 +395,7 @@ DownloadProgressView::MessageReceived(BMessage* message)
 			BEntry entry(fPath.Path());
 			fIconView->SetTo(entry);
 			fStatusBar->Reset(fPath.Leaf());
+			fFileNameView->SetText(fPath.Leaf());
 			_StartNodeMonitor(entry);
 
 			// Immediately switch to speed display whenever a new download
@@ -509,6 +524,7 @@ DownloadProgressView::MessageReceived(BMessage* message)
 					float value = fStatusBar->CurrentValue();
 					fStatusBar->Reset(name);
 					fStatusBar->SetTo(value);
+					fFileNameView->SetText(name);
 					Window()->PostMessage(SAVE_SETTINGS);
 					break;
 				}
@@ -538,32 +554,26 @@ DownloadProgressView::MessageReceived(BMessage* message)
 			break;
 		case OPEN_CONTAINING_FOLDER:
 			if (fPath.InitCheck() == B_OK) {
-				BEntry selected(fPath.Path());
-				if (!selected.Exists())
+				BEntry entry(fPath.Path());
+				if (!entry.Exists())
 					break;
 
-				BPath containingFolder;
-				if (fPath.GetParent(&containingFolder) != B_OK)
-					break;
-				entry_ref ref;
-				if (get_ref_for_path(containingFolder.Path(), &ref) != B_OK)
-					break;
+				node_ref node;
+				entry.GetNodeRef(&node);
+
+				BEntry parent;
+				entry.GetParent(&parent);
+				entry_ref parentRef;
+				parent.GetRef(&parentRef);
 
 				// Ask Tracker to open the containing folder and select the
 				// file inside it.
 				BMessenger trackerMessenger("application/x-vnd.Be-TRAK");
-
 				if (trackerMessenger.IsValid()) {
-					BMessage selectionCommand(B_REFS_RECEIVED);
-					selectionCommand.AddRef("refs", &ref);
-
-					node_ref selectedRef;
-					if (selected.GetNodeRef(&selectedRef) == B_OK) {
-						selectionCommand.AddData("nodeRefToSelect", B_RAW_TYPE,
-							(void*)&selectedRef, sizeof(node_ref));
-					}
-
-					trackerMessenger.SendMessage(&selectionCommand);
+					BMessage message(B_REFS_RECEIVED);
+					message.AddRef("refs", &parentRef);
+					message.AddData("nodeRefToSelect", B_RAW_TYPE, &node, sizeof(node_ref));
+					trackerMessenger.SendMessage(&message);
 				}
 			}
 			break;
@@ -625,7 +635,13 @@ void
 DownloadProgressView::DownloadFinished()
 {
 	fDownload = NULL;
-	if (fExpectedSize == -1) {
+	if (fExpectedSize <= 0) {
+		if (fStatusBar->IsHidden()) {
+			fStatusBar->Show();
+			fFileNameView->Hide();
+			fBarberPole->Hide();
+			fBarberPole->Stop();
+		}
 		fStatusBar->SetTo(100.0);
 		fExpectedSize = fCurrentSize;
 	}
@@ -637,7 +653,7 @@ DownloadProgressView::DownloadFinished()
 	fStatusBar->SetBarColor(ui_color(B_SUCCESS_COLOR));
 
 	BNotification success(B_INFORMATION_NOTIFICATION);
-	success.SetGroup(B_TRANSLATE("WebPositive"));
+	success.SetGroup(B_TRANSLATE_SYSTEM_NAME("WebPositive"));
 	success.SetTitle(B_TRANSLATE("Download finished"));
 	success.SetContent(fPath.Leaf());
 	BEntry entry(fPath.Path());
@@ -659,8 +675,17 @@ DownloadProgressView::CancelDownload()
 	if (fDownload) {
 		// Also cancel the download
 		fDownload->Cancel();
+
+		if (fStatusBar->IsHidden()) {
+			fStatusBar->Show();
+			fFileNameView->Hide();
+			fBarberPole->Hide();
+			fBarberPole->Stop();
+			fStatusBar->SetTo(100.0);
+		}
+
 		BNotification success(B_ERROR_NOTIFICATION);
-		success.SetGroup(B_TRANSLATE("WebPositive"));
+		success.SetGroup(B_TRANSLATE_SYSTEM_NAME("WebPositive"));
 		success.SetTitle(B_TRANSLATE("Download aborted"));
 		success.SetContent(fPath.Leaf());
 		// Don't make a click on the notification open the file: it is not
@@ -711,7 +736,21 @@ DownloadProgressView::_UpdateStatus(off_t currentSize, off_t expectedSize)
 	fCurrentSize = currentSize;
 	fExpectedSize = expectedSize;
 
-	fStatusBar->SetTo(100.0 * currentSize / expectedSize);
+
+	if (expectedSize > 0) {
+		if (fStatusBar->IsHidden()) {
+			fStatusBar->Show();
+			fFileNameView->Hide();
+			fBarberPole->Hide();
+			fBarberPole->Stop();
+		}
+		fStatusBar->SetTo(100.0 * currentSize / expectedSize);
+	} else if (!fStatusBar->IsHidden()) {
+		fStatusBar->Hide();
+		fFileNameView->Show();
+		fBarberPole->Show();
+		fBarberPole->Start();
+	}
 
 	bigtime_t currentTime = system_time();
 	if ((currentTime - fLastUpdateTime) > kMaxUpdateInterval) {
@@ -747,7 +786,7 @@ DownloadProgressView::_UpdateStatusText()
 {
 	fInfoView->SetText("");
 	BString buffer;
-	if (sShowSpeed && fBytesPerSecond != 0.0) {
+	if ((sShowSpeed && fBytesPerSecond != 0.0) || fExpectedSize <= 0) {
 		// Draw speed info
 		char sizeBuffer[128];
 		// Get strings for current and expected size and remove the unit
@@ -755,19 +794,27 @@ DownloadProgressView::_UpdateStatusText()
 		// size unit.
 		BString currentSize = string_for_size((double)fCurrentSize, sizeBuffer,
 			sizeof(sizeBuffer));
-		BString expectedSize = string_for_size((double)fExpectedSize, sizeBuffer,
-			sizeof(sizeBuffer));
-		int currentSizeUnitPos = currentSize.FindLast(' ');
-		int expectedSizeUnitPos = expectedSize.FindLast(' ');
-		if (currentSizeUnitPos >= 0 && expectedSizeUnitPos >= 0
-			&& strcmp(currentSize.String() + currentSizeUnitPos,
-				expectedSize.String() + expectedSizeUnitPos) == 0) {
-			currentSize.Truncate(currentSizeUnitPos);
+
+		if (fExpectedSize > 0) {
+			BString expectedSize
+				= string_for_size((double)fExpectedSize, sizeBuffer, sizeof(sizeBuffer));
+			int currentSizeUnitPos = currentSize.FindLast(' ');
+			int expectedSizeUnitPos = expectedSize.FindLast(' ');
+			if (currentSizeUnitPos >= 0 && expectedSizeUnitPos >= 0
+				&& strcmp(currentSize.String() + currentSizeUnitPos,
+					   expectedSize.String() + expectedSizeUnitPos)
+					== 0) {
+				currentSize.Truncate(currentSizeUnitPos);
+			}
+
+			buffer = B_TRANSLATE("(%currentSize% of %expectedSize%, %rate%/s)");
+			buffer.ReplaceFirst("%currentSize%", currentSize);
+			buffer.ReplaceFirst("%expectedSize%", expectedSize);
+		} else {
+			buffer = B_TRANSLATE("(%currentSize% received, %rate%/s)");
+			buffer.ReplaceFirst("%currentSize%", currentSize);
 		}
 
-		buffer = B_TRANSLATE("(%currentSize% of %expectedSize%, %rate%/s)");
-		buffer.ReplaceFirst("%currentSize%", currentSize);
-		buffer.ReplaceFirst("%expectedSize%", expectedSize);
 		buffer.ReplaceFirst("%rate%", string_for_size(fBytesPerSecond,
 				sizeBuffer, sizeof(sizeBuffer)));
 

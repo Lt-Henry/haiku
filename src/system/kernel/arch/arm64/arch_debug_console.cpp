@@ -8,6 +8,7 @@
 // #include <arch/arm/arch_uart_8250_omap.h>
 #include <arch/arm/arch_uart_pl011.h>
 #include <arch/arm64/arch_uart_linflex.h>
+#include <arch/arm64/arch_uart_samsung.h>
 #include <boot/kernel_args.h>
 #include <kernel.h>
 #include <vm/vm.h>
@@ -19,12 +20,6 @@ static DebugUART *sArchDebugUART = NULL;
 
 void
 arch_debug_remove_interrupt_handler(uint32 line)
-{
-}
-
-
-void
-arch_debug_install_interrupt_handlers(void)
 {
 }
 
@@ -113,6 +108,10 @@ arch_debug_console_init(kernel_args *args)
 	}*/ else if (strncmp(args->arch_args.uart.kind, UART_KIND_8250,
 		sizeof(args->arch_args.uart.kind)) == 0) {
 		sArchDebugUART = arch_get_uart_8250(args->arch_args.uart.regs.start,
+			args->arch_args.uart.clock);
+	} else if (strncmp(args->arch_args.uart.kind, UART_KIND_SAMSUNG,
+		sizeof(args->arch_args.uart.kind)) == 0) {
+		sArchDebugUART = arch_get_uart_samsung(args->arch_args.uart.regs.start,
 			args->arch_args.uart.clock);
 	}
 

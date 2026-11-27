@@ -12,6 +12,8 @@ rule BuildOpenFirmwareLoader {
 	switch $(TARGET_ARCH) {
 		case ppc :
 			BuildCoffLoader $(haikuLoader) : $(bootLoader) ;
+		case ppc64 :
+			BuildCoffLoader $(haikuLoader) : $(bootLoader) ;
 		case sparc :
 			BuildAoutLoader $(haikuLoader) : $(bootLoader) ;
 		case * :
@@ -49,6 +51,8 @@ rule BuildCoffLoader {
 	local bootLoader = $(2) ;
 	switch $(TARGET_ARCH) {
 		case ppc :
+			COFF_FORMAT on $(coffLoader) = xcoff-powermac ;
+		case ppc64 :
 			COFF_FORMAT on $(coffLoader) = xcoff-powermac ;
 		case * :
 			Exit "Currently unsupported coff arch:" $(TARGET_ARCH) ;
@@ -299,6 +303,8 @@ for platform in [ MultiBootSubDirSetup ] {
 									$(TARGET_KERNEL_ARCH_DIR) ] ;
 		}
 
+		SEARCH_SOURCE += [ FDirName $(SUBDIR) $(DOTDOT) libroot posix musl string ] ;
+		SEARCH_SOURCE += [ FDirName $(SUBDIR) $(DOTDOT) libroot posix string arch generic ] ;
 		SEARCH_SOURCE += [ FDirName $(SUBDIR) $(DOTDOT) libroot posix string ] ;
 		SEARCH_SOURCE += [ FDirName $(SUBDIR) $(DOTDOT) libroot posix stdlib ] ;
 		SEARCH_SOURCE += [ FDirName $(SUBDIR) $(DOTDOT) libroot posix locale ] ;
@@ -306,19 +312,22 @@ for platform in [ MultiBootSubDirSetup ] {
 
 		BootMergeObject boot_libroot_$(platform:G=).o :
 			abs.c
-			ctype_loc.cpp
+			ctype_loc_global.cpp
 			ctype_l.cpp
 			ctype.cpp
+			generic_memcpy.c
+			generic_memset.c
 			LocaleData.cpp
 			qsort.c
 			kernel_vsprintf.cpp
 			memchr.c
 			memcmp.c
 			memmove.c
+			stpcpy.c
 			strdup.cpp
 			strndup.cpp
-			strlen.cpp
-			strnlen.cpp
+			strlen.c
+			strnlen.c
 			strcmp.c
 			strcasecmp.c
 			strncmp.c
@@ -328,6 +337,7 @@ for platform in [ MultiBootSubDirSetup ] {
 			strlcat.c
 			strlcpy.c
 			strchr.c
+			strchrnul.c
 			strrchr.c
 			strtol.c
 			strtoul.c

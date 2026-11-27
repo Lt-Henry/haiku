@@ -76,13 +76,13 @@ using namespace BPrivate ;
 #include "FieldMsg.h"
 #include "FindWindow.h"
 #include "Header.h"
+#include "LabelWindow.h"
 #include "MailSupport.h"
 #include "MailWindow.h"
 #include "Messages.h"
 #include "Prefs.h"
 #include "QueryMenu.h"
 #include "Signature.h"
-#include "Status.h"
 #include "String.h"
 #include "Utilities.h"
 #include "Words.h"
@@ -413,6 +413,14 @@ TMailApp::MessageReceived(BMessage *msg)
 				be_app->PostMessage(B_QUIT_REQUESTED);
 			break;
 
+		case kMsgQuitAndKeepAllStatus:
+		{
+			for (int32 i = 0; i < fWindowList.CountItems(); i++) {
+				TMailWindow* window = (TMailWindow*)fWindowList.ItemAt(i);
+				window->PostMessage(new BMessage(kMsgCloseAndKeepAllStatus));
+			}
+			break;
+		}
 		case B_REFS_RECEIVED:
 			RefsReceived(msg);
 			break;
@@ -462,7 +470,7 @@ void
 TMailApp::ReadyToRun()
 {
 	// Create needed indices for META:group, META:email, MAIL:draft,
-	// INDEX_SIGNATURE, INDEX_STATUS on the boot volume
+	// INDEX_SIGNATURE on the boot volume
 
 	BVolume volume;
 	BVolumeRoster().GetBootVolume(&volume);
@@ -471,7 +479,6 @@ TMailApp::ReadyToRun()
 	fs_create_index(volume.Device(), "META:email", B_STRING_TYPE, 0);
 	fs_create_index(volume.Device(), "MAIL:draft", B_INT32_TYPE, 0);
 	fs_create_index(volume.Device(), INDEX_SIGNATURE, B_STRING_TYPE, 0);
-	fs_create_index(volume.Device(), INDEX_STATUS, B_STRING_TYPE, 0);
 	fs_create_index(volume.Device(), B_MAIL_ATTR_FLAGS, B_INT32_TYPE, 0);
 
 	// Start people queries

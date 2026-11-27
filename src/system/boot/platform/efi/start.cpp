@@ -30,6 +30,7 @@
 #include "dtb.h"
 #endif
 #include "efi_platform.h"
+#include "load_options.h"
 #include "mmu.h"
 #include "quirks.h"
 #include "serial.h"
@@ -197,8 +198,7 @@ platform_start_kernel(void)
 	// map in a kernel stack
 	void *stack_address = NULL;
 	if (platform_allocate_region(&stack_address,
-		KERNEL_STACK_SIZE + KERNEL_STACK_GUARD_PAGES * B_PAGE_SIZE, 0, false)
-		!= B_OK) {
+			KERNEL_STACK_SIZE + KERNEL_STACK_GUARD_PAGES * B_PAGE_SIZE, 0) != B_OK) {
 		panic("Unabled to allocate a stack");
 	}
 	gKernelArgs.cpu_kstack[0].start = fix_address((addr_t)stack_address);
@@ -246,7 +246,7 @@ efi_main(efi_handle image, efi_system_table *systemTable)
 	serial_init();
 	serial_enable();
 
-	sBootOptions = console_check_boot_keys();
+	sBootOptions = get_loader_boot_options() | console_check_boot_keys();
 
 	// disable apm in case we ever load a 32-bit kernel...
 	gKernelArgs.platform_args.apm.version = 0;

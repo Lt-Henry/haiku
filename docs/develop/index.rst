@@ -50,5 +50,7 @@ Table of contents
    /kernel/index
    /file_systems/index
    /drivers/index
+   /apps/devices/index
    /apps/haikudepot/server
+   /debugging/index
 

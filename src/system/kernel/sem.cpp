@@ -22,7 +22,7 @@
 #include <boot/kernel_args.h>
 #include <cpu.h>
 #include <debug.h>
-#include <int.h>
+#include <interrupts.h>
 #include <kernel.h>
 #include <ksignal.h>
 #include <kscheduler.h>
@@ -427,7 +427,7 @@ haiku_sem_init(kernel_args *args)
 	if (area < 0)
 		panic("unable to allocate semaphore table!\n");
 
-	memset(sSems, 0, sizeof(struct sem_entry) * sMaxSems);
+	memset((void*)sSems, 0, sizeof(struct sem_entry) * sMaxSems);
 	for (i = 0; i < sMaxSems; i++) {
 		sSems[i].id = -1;
 		free_sem_slot(i, i);
@@ -468,12 +468,9 @@ haiku_sem_init(kernel_args *args)
 sem_id
 create_sem_etc(int32 count, const char* name, team_id owner)
 {
-	struct sem_entry* sem = NULL;
-	sem_id id = B_NO_MORE_SEMS;
-	char* tempName;
-	size_t nameLength;
-
-	if (sSemsActive == false || sUsedSems == sMaxSems)
+	if (count < 0)
+		return B_BAD_VALUE;
+	if (!sSemsActive || sUsedSems == sMaxSems)
 		return B_NO_MORE_SEMS;
 
 	if (name == NULL)
@@ -486,9 +483,9 @@ create_sem_etc(int32 count, const char* name, team_id owner)
 	BReference<Team> teamReference(team, true);
 
 	// clone the name
-	nameLength = strlen(name) + 1;
+	size_t nameLength = strlen(name) + 1;
 	nameLength = min_c(nameLength, B_OS_NAME_LENGTH);
-	tempName = (char*)malloc(nameLength);
+	char* tempName = (char*)malloc(nameLength);
 	if (tempName == NULL)
 		return B_NO_MEMORY;
 
@@ -497,8 +494,9 @@ create_sem_etc(int32 count, const char* name, team_id owner)
 	InterruptsSpinLocker _(&sSemsSpinlock);
 
 	// get the first slot from the free list
-	sem = sFreeSemsHead;
-	if (sem) {
+	struct sem_entry* sem = sFreeSemsHead;
+	sem_id id = B_NO_MORE_SEMS;
+	if (sem != NULL) {
 		// remove it from the free list
 		sFreeSemsHead = sem->u.unused.next;
 		if (!sFreeSemsHead)
@@ -513,6 +511,12 @@ create_sem_etc(int32 count, const char* name, team_id owner)
 		sem->u.used.name = tempName;
 		sem->u.used.owner = team->id;
 		sem->u.used.select_infos = NULL;
+		sem->u.used.last_acquirer = 0;
+#if DEBUG_SEM_LAST_ACQUIRER
+		sem->u.used.last_acquire_count = 0;
+		sem->u.used.last_releaser = 0;
+		sem->u.used.last_release_count = 0;
+#endif
 		id = sem->id;
 
 		list_add_item(&team->sem_list, &sem->u.used.team_link);

@@ -41,6 +41,7 @@ class TabletDevice : public PointingDevice {
 									int32& eraser,
 									float& wheelX,
 									float& wheelY,
+									float& lastWheelY,
 									float& tiltX,
 									float& tiltY) const;
 
@@ -67,11 +68,12 @@ class TabletDevice : public PointingDevice {
 									const char** name) const;
 
 	enum {
-		DEVICE_UNKOWN,
+		DEVICE_UNKNOWN,
 		DEVICE_PENPARTNER,
 		DEVICE_GRAPHIRE,
 		DEVICE_INTUOS,
 		DEVICE_INTUOS3,
+		DEVICE_INTUOS4,
 		DEVICE_PL500,
 		DEVICE_VOLITO,
 		DEVICE_PENSTATION,

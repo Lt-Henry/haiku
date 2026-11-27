@@ -3,9 +3,9 @@
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
+
 #include "ServerSettings.h"
 
-#include <stdlib.h>
 #include <pthread.h>
 
 #include <Application.h>
@@ -23,7 +23,7 @@
 #define USERAGENT_FALLBACK_VERSION "0.0.0"
 
 
-BUrl ServerSettings::sBaseUrl = BUrl(BASEURL_DEFAULT);
+BUrl ServerSettings::sBaseUrl = BUrl(BASEURL_DEFAULT, true);
 BString ServerSettings::sUserAgent = BString();
 pthread_once_t ServerSettings::sUserAgentInitOnce = PTHREAD_ONCE_INIT;
 bool ServerSettings::sPreferCache = false;

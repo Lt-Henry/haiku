@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2013 Haiku Inc. All rights reserved.
+ * Copyright 2002-2026, Haiku Inc. All rights reserved.
  * Distributed under the terms of the MIT license.
  *
  * Authors:
@@ -11,6 +11,8 @@
 
 
 #include <DiskDeviceRoster.h>
+#include <FilePanel.h>
+#include <Notification.h>
 #include <PopUpMenu.h>
 #include <Window.h>
 
@@ -40,6 +42,7 @@ public:
 	virtual						~MainWindow();
 
 	// BWindow interface
+	virtual	thread_id			Run();
 	virtual	bool				QuitRequested();
 	virtual	void				MessageReceived(BMessage* message);
 
@@ -48,7 +51,17 @@ public:
 			status_t			RestoreSettings(BMessage* archive);
 			void				ApplyDefaultSettings();
 
+			status_t			RegisterFileDiskDevice(const char* fileName);
+			status_t			UnRegisterFileDiskDevice(const char* fileName);
+	static	int32				SaveDiskImage(void* data);
+	static	int32				WriteDiskImage(void* data);
+
 private:
+	static	void				_WriteDiskImage(BMessenger messenger,
+									BFile source, BFile target,
+									const char* targetpath,
+									BString title, BString status);
+
 			void				_ScanDrives();
 
 			void				_AdaptToSelectedPartition();
@@ -97,6 +110,7 @@ private:
 
 			BMenu*				fPartitionMenu;
 			BMenu*				fFormatMenu;
+			BMenu*				fDiskImageMenu;
 
 			BMenuBar* 			fMenuBar;
 
@@ -121,6 +135,17 @@ private:
 			BMenuItem*			fUnmountContextMenuItem;
 			BMenuItem*			fOpenDiskProbeContextMenuItem;
 			BPopUpMenu*			fContextMenu;
+
+			BMenuItem*			fRegisterMenuItem;
+			BMenuItem*			fUnRegisterMenuItem;
+			BMenuItem*			fSaveMenuItem;
+			BMenuItem*			fWriteMenuItem;
+
+			BFilePanel*			fRegisterFilePanel;
+			BFilePanel*			fWriteImageFilePanel;
+			BFilePanel*			fReadImageFilePanel;
+
+			BNotification*		fNotification;
 };
 
 

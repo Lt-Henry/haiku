@@ -1,5 +1,5 @@
 /*
- * Copyright 2006-2010, Haiku, Inc. All Rights Reserved.
+ * Copyright 2006-2026, Haiku, Inc. All Rights Reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -323,21 +323,13 @@ enum {
 	FLAG_RECOVERY				= 0x40,
 	FLAG_OPTION_SACK_PERMITTED	= 0x80,
 	FLAG_AUTO_RECEIVE_BUFFER_SIZE = 0x100,
+	FLAG_CAN_NOTIFY 			= 0x200,
+	FLAG_USER_CLOSED			= 0x400
 };
 
 
 static const int kTimestampFactor = 1000;
 	// conversion factor between usec system time and msec tcp time
-
-
-static inline bigtime_t
-absolute_timeout(bigtime_t timeout)
-{
-	if (timeout == 0 || timeout == B_INFINITE_TIMEOUT)
-		return timeout;
-
-	return timeout + system_time();
-}
 
 
 static inline status_t
@@ -450,7 +442,8 @@ TCPEndpoint::TCPEndpoint(net_socket* socket)
 	fRoundTripVariation(0),
 	fSendTime(0),
 	fRoundTripStartSequence(0),
-	fRetransmitTimeout(TCP_INITIAL_RTT),
+	fRetransmitTimeout(TCP_SYN_RETRANSMIT_TIMEOUT),
+	fRetransmitInitialCount(0),
 	fReceivedTimestamp(0),
 	fCongestionWindow(0),
 	fSlowStartThreshold(0),
@@ -491,13 +484,15 @@ TCPEndpoint::~TCPEndpoint()
 		put_endpoint_manager(fManager);
 	}
 
-	mutex_destroy(&fLock);
+	mutex_unlock(&fLock);
 
 	// we need to wait for all timers to return
 	gStackModule->wait_for_timer(&fRetransmitTimer);
 	gStackModule->wait_for_timer(&fPersistTimer);
 	gStackModule->wait_for_timer(&fDelayedAcknowledgeTimer);
 	gStackModule->wait_for_timer(&fTimeWaitTimer);
+
+	mutex_destroy(&fLock);
 
 	gDatalinkModule->put_route(Domain(), fRoute);
 }
@@ -563,7 +558,7 @@ TCPEndpoint::Close()
 	if ((socket->options & SO_LINGER) != 0) {
 		TRACE("Close(): Lingering for %i secs", socket->linger);
 
-		bigtime_t maximum = absolute_timeout(socket->linger * 1000000LL);
+		bigtime_t maximum = system_time() + (socket->linger * 1000000LL);
 
 		while (fSendQueue.Used() > 0) {
 			status = _WaitForCondition(fSendCondition, locker, maximum);
@@ -649,6 +644,7 @@ TCPEndpoint::Connect(const sockaddr* address)
 
 	TRACE("  Connect(): starting 3-way handshake...");
 
+	fFlags |= FLAG_CAN_NOTIFY;
 	fState = SYNCHRONIZE_SENT;
 	T(State(this));
 
@@ -666,6 +662,9 @@ TCPEndpoint::Connect(const sockaddr* address)
 		return B_OK;
 	}
 
+	fRetransmitInitialCount = 0;
+	gStackModule->set_timer(&fRetransmitTimer, fRetransmitTimeout);
+
 	// wait until 3-way handshake is complete (if needed)
 	bigtime_t timeout = min_c(socket->send.timeout, TCP_CONNECTION_TIMEOUT);
 	if (timeout == 0) {
@@ -674,8 +673,7 @@ TCPEndpoint::Connect(const sockaddr* address)
 		return EINPROGRESS;
 	}
 
-	bigtime_t absoluteTimeout = absolute_timeout(timeout);
-	gStackModule->store_syscall_restart_timeout(absoluteTimeout);
+	bigtime_t absoluteTimeout = gStackModule->set_syscall_restart_timeout(timeout);
 
 	status = _WaitForEstablished(locker, absoluteTimeout);
 	TRACE("  Connect(): Connection complete: %s (timeout was %" B_PRIdBIGTIME
@@ -693,11 +691,11 @@ TCPEndpoint::Accept(struct net_socket** _acceptedSocket)
 	T(APICall(this, "accept"));
 
 	status_t status;
-	bigtime_t timeout = absolute_timeout(socket->receive.timeout);
+	bigtime_t timeout;
 	if (gStackModule->is_restarted_syscall())
 		timeout = gStackModule->restore_syscall_restart_timeout();
 	else
-		gStackModule->store_syscall_restart_timeout(timeout);
+		timeout = gStackModule->set_syscall_restart_timeout(socket->receive.timeout);
 
 	do {
 		locker.Unlock();
@@ -779,6 +777,7 @@ TCPEndpoint::Listen(int count)
 
 	gSocketModule->set_max_backlog(socket, count);
 
+	fFlags |= FLAG_CAN_NOTIFY;
 	fState = LISTEN;
 	T(State(this));
 	return B_OK;
@@ -814,7 +813,7 @@ TCPEndpoint::SendData(net_buffer *buffer)
 
 	TRACE("SendData(buffer %p, size %" B_PRIu32 ", flags %#" B_PRIx32
 		") [total %" B_PRIuSIZE " bytes, has %" B_PRIuSIZE "]", buffer,
-		buffer->size, buffer->flags, fSendQueue.Size(), fSendQueue.Free());
+		buffer->size, buffer->msg_flags, fSendQueue.Size(), fSendQueue.Free());
 	T(APICall(this, "senddata"));
 
 	const uint32 flags = buffer->msg_flags;
@@ -832,11 +831,10 @@ TCPEndpoint::SendData(net_buffer *buffer)
 
 	bigtime_t timeout = 0;
 	if ((flags & MSG_DONTWAIT) == 0) {
-		timeout = absolute_timeout(socket->send.timeout);
 		if (gStackModule->is_restarted_syscall())
 			timeout = gStackModule->restore_syscall_restart_timeout();
 		else
-			gStackModule->store_syscall_restart_timeout(timeout);
+			timeout = gStackModule->set_syscall_restart_timeout(socket->send.timeout);
 	}
 
 	while (left > 0) {
@@ -904,13 +902,13 @@ TCPEndpoint::SendAvailable()
 {
 	MutexLocker locker(fLock);
 
-	ssize_t available;
+	ssize_t available = 0;
 
 	if (is_writable(fState))
 		available = fSendQueue.Free();
 	else if (is_establishing(fState))
 		available = 0;
-	else
+	else if ((fFlags & FLAG_CAN_NOTIFY) != 0)
 		available = EPIPE;
 
 	TRACE("SendAvailable(): %" B_PRIdSSIZE, available);
@@ -954,11 +952,10 @@ TCPEndpoint::ReadData(size_t numBytes, uint32 flags, net_buffer** _buffer)
 
 	bigtime_t timeout = 0;
 	if ((flags & MSG_DONTWAIT) == 0) {
-		timeout = absolute_timeout(socket->receive.timeout);
 		if (gStackModule->is_restarted_syscall())
 			timeout = gStackModule->restore_syscall_restart_timeout();
 		else
-			gStackModule->store_syscall_restart_timeout(timeout);
+			timeout = gStackModule->set_syscall_restart_timeout(socket->receive.timeout);
 	}
 
 	if (fState == SYNCHRONIZE_SENT || fState == SYNCHRONIZE_RECEIVED) {
@@ -1215,9 +1212,14 @@ TCPEndpoint::_Disconnect(bool closing)
 {
 	tcp_state previousState = fState;
 
-	if (fState == SYNCHRONIZE_RECEIVED || fState == ESTABLISHED)
+	if (fState == SYNCHRONIZE_RECEIVED || fState == ESTABLISHED) {
+		// We "should send a RST if there is any unread received data,
+		// or if any new data is received" (RFC 2525 § 2.17). This
+		// isn't a TCP state, so use a flag.
+		if (closing && fReceiveQueue.Available() > 0)
+			fFlags |= FLAG_USER_CLOSED;
 		fState = FINISH_SENT;
-	else if (fState == FINISH_RECEIVED)
+	} else if (fState == FINISH_RECEIVED)
 		fState = WAIT_FOR_FINISH_ACKNOWLEDGE;
 	else
 		return B_OK;
@@ -1230,6 +1232,9 @@ TCPEndpoint::_Disconnect(bool closing)
 		T(State(this));
 		return status;
 	}
+
+	if ((fFlags & FLAG_USER_CLOSED) != 0)
+		fState = CLOSED;
 
 	return B_OK;
 }
@@ -1295,10 +1300,8 @@ TCPEndpoint::_Close()
 void
 TCPEndpoint::_HandleReset(status_t error)
 {
-	socket->error = error;
 	_Close();
 
-	gSocketModule->notify(socket, B_SELECT_WRITE, error);
 	gSocketModule->notify(socket, B_SELECT_ERROR, error);
 }
 
@@ -1430,7 +1433,7 @@ TCPEndpoint::_AvailableData() const
 
 	ssize_t availableData = fReceiveQueue.Available();
 
-	if (availableData == 0 && !_ShouldReceive())
+	if (availableData == 0 && !_ShouldReceive() && (fFlags & FLAG_CAN_NOTIFY) != 0)
 		return ENOTCONN;
 	if (availableData == 0 && (fState == FINISH_RECEIVED || fState == WAIT_FOR_FINISH_ACKNOWLEDGE))
 		return ESHUTDOWN;
@@ -1550,6 +1553,8 @@ TCPEndpoint::_Spawn(TCPEndpoint* parent, tcp_segment_header& segment,
 	MutexLocker _(fLock);
 
 	TRACE("Spawn()");
+	// Reset local address, so we don't end up with an invalid address in case of failure
+	(*LocalAddress())->sa_len = 0;
 
 	// TODO: proper error handling!
 	if (ProtocolSocket::Open() != B_OK) {
@@ -1737,6 +1742,16 @@ TCPEndpoint::_Receive(tcp_segment_header& segment, net_buffer* buffer)
 		}
 
 		return DROP;
+	}
+
+	if (fState == FINISH_ACKNOWLEDGED
+		&& segment.AcknowledgeOnly()
+		&& (fReceiveMaxAdvertised - fReceiveNext).Number() == 0
+		&& segmentLength == 0
+		&& segment.acknowledge == fSendUnacknowledged) {
+		// reset the connection - received another ack packet
+		// while finish acknowledged and zero receive window
+		return DROP | RESET;
 	}
 
 	if ((segment.flags & TCP_FLAG_SYNCHRONIZE) != 0
@@ -1963,7 +1978,7 @@ TCPEndpoint::_Receive(tcp_segment_header& segment, net_buffer* buffer)
 
 	_UpdateTimestamps(segment, segmentLength);
 
-	TRACE("Receive() Action %" B_PRId32, action);
+	TRACE("Receive() Action 0x%" B_PRIx32, action);
 
 	return action;
 }
@@ -2015,6 +2030,13 @@ TCPEndpoint::SegmentReceived(tcp_segment_header& segment, net_buffer* buffer)
 	if (segmentAction & SEND_QUEUED)
 		_SendQueued();
 
+	// handle RESET action separately to use actual connection
+	// to generate the segment information
+	if ((segmentAction & RESET) != 0 && _SendReset(true) == B_OK) {
+		fState = CLOSED;
+		segmentAction &= ~RESET;
+	}
+
 	if ((fFlags & (FLAG_CLOSED | FLAG_DELETE_ON_CLOSE))
 			== (FLAG_CLOSED | FLAG_DELETE_ON_CLOSE)) {
 
@@ -2024,6 +2046,26 @@ TCPEndpoint::SegmentReceived(tcp_segment_header& segment, net_buffer* buffer)
 	}
 
 	return segmentAction;
+}
+
+
+status_t
+TCPEndpoint::ErrorReceived(net_error error, net_error_data* errorData,
+	net_buffer* data)
+{
+	MutexLocker locker(fLock);
+
+	if (error == B_NET_ERROR_MESSAGE_SIZE && errorData != NULL) {
+		uint32 newMaxSegmentSize = errorData->mtu - sizeof(tcp_header);
+		if (fSendMaxSegmentSize > newMaxSegmentSize) {
+			fSendMaxSegmentSize = newMaxSegmentSize;
+			gStackModule->set_timer(&fRetransmitTimer, 0);
+		}
+		gBufferModule->free(data);
+		return B_OK;
+	}
+
+	return B_ERROR;
 }
 
 
@@ -2261,6 +2303,29 @@ TCPEndpoint::_SendAcknowledge(bool force)
 }
 
 
+/*!	Sends a RST with segment information related to the connection. */
+status_t
+TCPEndpoint::_SendReset(bool force)
+{
+	if (fRoute == NULL || fState == LISTEN)
+		return B_ERROR;
+
+	tcp_segment_header segment = _PrepareSendSegment();
+
+	// Is there actually anything to do?
+	if (!force && (fState != FINISH_ACKNOWLEDGED || (fFlags & FLAG_CLOSED) == 0))
+		return B_OK;
+
+	segment.flags |= TCP_FLAG_RESET;
+
+	net_buffer* buffer = gBufferModule->create(256);
+	if (buffer == NULL)
+		return B_NO_MEMORY;
+
+	return _PrepareAndSend(segment, buffer, false);
+}
+
+
 /*!	Sends one or more TCP segments with the data waiting in the queue. */
 status_t
 TCPEndpoint::_SendQueued(bool force)
@@ -2293,12 +2358,15 @@ TCPEndpoint::_SendQueued(bool force)
 
 	if (consumedWindow > sendWindow) {
 		sendWindow = 0;
-		// TODO: enter persist state? try to get a window update.
 	} else
 		sendWindow -= consumedWindow;
 
 	uint32 length = min_c(fSendQueue.Available(fSendNext), sendWindow);
-	if (length == 0 && !state_needs_finish(fState)) {
+	if (!force && length == 0 && !state_needs_finish(fState)) {
+		// try to get a window update
+		if (sendWindow == 0 && !gStackModule->is_timer_active(&fPersistTimer))
+			_StartPersistTimer();
+
 		// Nothing to send.
 		return B_OK;
 	}
@@ -2318,7 +2386,7 @@ TCPEndpoint::_SendQueued(bool force)
 
 		if ((fSendNext + segmentLength) == fSendQueue.LastSequence() && !force) {
 			if (state_needs_finish(fState))
-				segment.flags |= TCP_FLAG_FINISH;
+				segment.flags |= (fFlags & FLAG_USER_CLOSED) != 0 ? TCP_FLAG_RESET : TCP_FLAG_FINISH;
 			if (length > 0)
 				segment.flags |= TCP_FLAG_PUSH;
 		}
@@ -2408,6 +2476,9 @@ TCPEndpoint::_PrepareSendPath(const sockaddr* peer)
 	fSendQueue.SetInitialSequence(fSendNext + 1);
 
 	fReceiveMaxSegmentSize = _MaxSegmentSize(peer);
+
+	int yes = 1;
+	next->module->setsockopt(next, IPPROTO_IP, IP_DONTFRAG, &yes, sizeof(yes));
 
 	// Compute the window shift we advertise to our peer - if it doesn't support
 	// this option, this will be reset to 0 (when its SYN is received)
@@ -2518,7 +2589,7 @@ TCPEndpoint::_Retransmit()
 {
 	TRACE("Retransmit()");
 
-	if (fState < ESTABLISHED) {
+	if (fState < ESTABLISHED && fRetransmitInitialCount < 4) {
 		fRetransmitTimeout = TCP_SYN_RETRANSMIT_TIMEOUT;
 		fCongestionWindow = fSendMaxSegmentSize;
 	} else {
@@ -2531,7 +2602,12 @@ TCPEndpoint::_Retransmit()
 	}
 
 	fSendNext = fSendUnacknowledged;
-	_SendQueued();
+	if (fState == SYNCHRONIZE_SENT) {
+		if (_SendAcknowledge() == B_OK)
+			fRetransmitInitialCount++;
+		gStackModule->set_timer(&fRetransmitTimer, fRetransmitTimeout);
+	} else
+		_SendQueued();
 
 	fRecover = fSendNext.Number() - 1;
 	if ((fFlags & FLAG_RECOVERY) != 0)

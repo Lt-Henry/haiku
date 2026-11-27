@@ -1,71 +1,66 @@
 /*
- * Copyright 2018-2024 Haiku, Inc. All rights reserved.
+ * Copyright 2018-2025 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
  *		B Krishnan Iyer, krishnaniyer97@gmail.com
+ *		Adrien Destugues, pulkomandy@pulkomandy.tk
  *		Ron Ben Aroya, sed4906birdie@gmail.com
  */
 #ifndef _SDHCI_H
 #define _SDHCI_H
 
 
+#include <condition_variable.h>
 #include <device_manager.h>
+
 #include <KernelExport.h>
 
-
-#define SDHCI_PCI_SLOT_INFO 							0x40
-#define SDHCI_PCI_SLOTS(x) 								((((x) >> 4) & 0x7) + 1)
-#define SDHCI_PCI_SLOT_INFO_FIRST_BASE_INDEX(x)			((x) & 0x7)
-
-// Ricoh specific PCI registers
-// Ricoh devices start in a vendor-specific mode but can be switched
-// to standard sdhci using these PCI registers
-#define SDHCI_PCI_RICOH_MODE_KEY						0xf9
-#define SDHCI_PCI_RICOH_MODE							0x150
-#define SDHCI_PCI_RICOH_MODE_SD20						0x10
-
-#define SDHCI_BUS_TYPE_NAME 							"bus/sdhci/v1"
+#include "mmc.h"
 
 
 class SdhciBus {
 	public:
-							SdhciBus(struct registers* registers, uint8_t irq, bool poll);
-							~SdhciBus();
+								SdhciBus(struct registers* registers, uint8_t irq, bool poll);
+								~SdhciBus();
 
-		void				EnableInterrupts(uint32_t mask);
-		void				DisableInterrupts();
-		status_t			ExecuteCommand(uint8_t command, uint32_t argument,
-								uint32_t* response);
-		int32				HandleInterrupt();
-		status_t			InitCheck();
-		void				Reset();
-		void				SetClock(int kilohertz);
-		status_t			DoIO(uint8_t command, IOOperation* operation,
-								bool offsetAsSectors);
-		void				SetScanSemaphore(sem_id sem);
-		void				SetBusWidth(int width);
-
-	private:
-		bool				PowerOn();
-		void				RecoverError();
-		static status_t			_WorkerThread(void*);
+			void				EnableInterrupts(uint32_t mask);
+			void				DisableInterrupts();
+			status_t			ExecuteCommand(uint8_t command, uint32_t argument,
+									uint32_t* response);
+			int32				HandleInterrupt();
+			status_t			InitCheck();
+			void				Reset();
+			void				SetClock(int kilohertz, bool allowAuto);
+			status_t			DoIO(uint8_t command, IOOperation* operation,
+									bool offsetAsSectors);
+			void				SetScanSemaphore(sem_id sem);
+			void				SetBusWidth(int width);
+			void				SetCardType(card_type type);
+			void				TerminateBus();
 
 	private:
-		struct registers*	fRegisters;
-		uint32_t			fCommandResult;
-		uint8_t				fIrq;
-		sem_id				fSemaphore;
-		sem_id				fScanSemaphore;
-		status_t			fStatus;
-		thread_id			fWorkerThread;
+			bool				PowerOn();
+			void				PowerOff();
+			void				RecoverError();
+	static	status_t			_WorkerThread(void*);
+
+	private:
+			struct registers*	fRegisters;
+			uint32				fCommandResult;
+			uint8				fIrq;
+			ConditionVariable	fInterruptNotifier;
+			sem_id				fScanSemaphore;
+			status_t			fStatus;
+			thread_id			fWorkerThread;
+			card_type			fCardType;
 };
 
 
 class SdhciDevice {
 	public:
-		device_node* fNode;
-		uint8_t fRicohOriginalMode;
+		device_node*	fNode;
+		uint8_t			fRicohOriginalMode;
 };
 
 class TransferMode {
@@ -196,6 +191,39 @@ class ClockControl
 } __attribute__((packed));
 
 
+class TimeoutControl {
+	public:
+		void SetDivider(uint32_t base_khz, uint32_t delay_ms) {
+			// We need a value i so that:
+			//
+			// base (Hz)        1
+			// --------- < -----------
+			//  2 ^ i       delay (s)
+			//
+			// This will divide the timeout clock to a period longer than the delay needed by the
+			// SD card. Dividing each side of the equation by 1000 allows to use our input units
+			// directly (kHz on one side and ms on the other), and be less worried about overflows.
+			// In the code the equation is rearranged to not have to deal with divisions and lose
+			// precision.
+			//
+			// The allowed range for i is 13 to 27, which is then converted to a value between 0
+			// and 14 to write into the register.
+			//
+			// If we can't reach a sufficiently large delay, the loop will default to the maximum
+			// allowed value of 2^27.
+			uint32_t i;
+			for (i = 13; i < 27; i++) {
+				if ((base_khz * delay_ms) <= (1u << i))
+					break;
+			}
+
+			fBits = i - 13;
+		}
+	private:
+		volatile  uint8_t fBits;
+} __attribute__((packed));
+
+
 class SoftwareReset {
 	public:
 		uint8_t Bits() { return fBits; }
@@ -209,9 +237,19 @@ class SoftwareReset {
 			return i < 10;
 		}
 
+		void ResetCommandAndDataLines() {
+			fBits |= 6;
+			while(fBits & 6);
+		}
+
 		void ResetCommandLine() {
 			fBits |= 2;
 			while(fBits & 2);
+		}
+
+		void ResetDataLine() {
+			fBits |= 4;
+			while(fBits & 4);
 		}
 
 	private:
@@ -222,29 +260,79 @@ class SoftwareReset {
 // #pragma mark Interrupt registers 
 #define SDHCI_INT_CMD_CMP			0x00000001	// command complete enable
 #define SDHCI_INT_TRANS_CMP			0x00000002	// transfer complete enable
-#define SDHCI_INT_BUF_READ_READY	0x00000020  // buffer read ready enable
-#define SDHCI_INT_CARD_INS 			0x00000040	// card insertion enable
-#define SDHCI_INT_CARD_REM 			0x00000080	// card removal enable
-#define SDHCI_INT_ERROR         	0x00008000	// error
-#define SDHCI_INT_TIMEOUT			0x00010000	// Timeout error
-#define SDHCI_INT_CRC				0x00020000	// CRC error
-#define SDHCI_INT_END_BIT			0x00040000	// end bit error
-#define SDHCI_INT_INDEX 			0x00080000	// index error
+#define SDHCI_INT_BLOCK_GAP			0x00000004
+#define SDHCI_INT_DMA				0x00000008
+#define SDHCI_INT_BUF_WRITE_READY	0x00000010
+#define SDHCI_INT_BUF_READ_READY	0x00000020	// buffer read ready enable
+#define SDHCI_INT_CARD_INS			0x00000040	// card insertion enable
+#define SDHCI_INT_CARD_REM			0x00000080	// card removal enable
+#define SDHCI_INT_CARD_STATUS		0x00000100
+#define SDHCI_INT_A					0x00000200
+#define SDHCI_INT_B					0x00000400
+#define SDHCI_INT_C					0x00000800
+#define SDHCI_INT_RETUNING			0x00001000
+#define SDHCI_INT_ERROR				0x00008000	// error
+#define SDHCI_INT_COMMAND_TIMEOUT	0x00010000	// Timeout error
+#define SDHCI_INT_COMMAND_CRC		0x00020000	// CRC error
+#define SDHCI_INT_COMMAND_END_BIT	0x00040000	// end bit error
+#define SDHCI_INT_COMMAND_INDEX 	0x00080000	// index error
+#define SDHCI_INT_DATA_TIMEOUT	 	0x00100000
+#define SDHCI_INT_DATA_CRC		 	0x00200000
+#define SDHCI_INT_DATA_END		 	0x00400000
 #define SDHCI_INT_BUS_POWER			0x00800000	// power fail
+#define SDHCI_INT_AUTO_CMD_ERROR	0x01000000
+#define SDHCI_INT_ADMA_ERROR		0x02000000
+#define SDHCI_INT_TUNING_ERROR		0x04000000
+#define SDHCI_INT_VENDOR_ERRORS		0xF0000000
 
-#define	 SDHCI_INT_CMD_ERROR_MASK	(SDHCI_INT_TIMEOUT | \
-		SDHCI_INT_CRC | SDHCI_INT_END_BIT | SDHCI_INT_INDEX)
+#define	 SDHCI_INT_CMD_ERROR_MASK	(SDHCI_INT_COMMAND_TIMEOUT \
+		| SDHCI_INT_COMMAND_CRC | SDHCI_INT_COMMAND_END_BIT | SDHCI_INT_COMMAND_INDEX)
 
-#define SDHCI_INT_CMD_MASK 	(SDHCI_INT_CMD_CMP | SDHCI_INT_CMD_ERROR_MASK)
+#define SDHCI_INT_CMD_MASK 			(SDHCI_INT_CMD_CMP | SDHCI_INT_CMD_ERROR_MASK)
+#define SDHCI_INT_TRANSFER_MASK 	(SDHCI_INT_TRANS_CMP | SDHCI_INT_DATA_TIMEOUT)
+
+#define SDHCI_INT_ERROR_MASK		(SDHCI_INT_VENDOR_ERRORS | SDHCI_INT_TUNING_ERROR \
+	| SDHCI_INT_ADMA_ERROR | SDHCI_INT_AUTO_CMD_ERROR | SDHCI_INT_BUS_POWER | SDHCI_INT_DATA_END \
+	| SDHCI_INT_DATA_CRC | SDHCI_INT_DATA_TIMEOUT | SDHCI_INT_CMD_ERROR_MASK)
+#define SDHCI_INT_NORMAL_MASK 		(SDHCI_INT_CMD_CMP | SDHCI_INT_TRANS_CMP \
+	| SDHCI_INT_BLOCK_GAP | SDHCI_INT_DMA | SDHCI_INT_BUF_WRITE_READY | SDHCI_INT_BUF_READ_READY \
+	| SDHCI_INT_CARD_INS | SDHCI_INT_CARD_REM | SDHCI_INT_CARD_STATUS | SDHCI_INT_A | SDHCI_INT_B \
+	| SDHCI_INT_C | SDHCI_INT_RETUNING)
+
 
 // #pragma mark -
 class Capabilities
 {
 	public:
-		uint64_t Bits() { return fBits; }
-
+		uint8_t ClockMultiplier() { return (fBits >> 48) & 0xFF; }
+		uint8_t RetuningModes() { return (fBits >> 46) & 3; }
+		bool UseTuningForSDR50() { return (fBits >> 45) & 1; }
+		uint8_t RetuningTimerCount() { return (fBits >> 40) & 7; }
+		bool TypeDSupport() { return (fBits >> 38) & 1; }
+		bool TypeCSupport() { return (fBits >> 37) & 1; }
+		bool TypeASupport() { return (fBits >> 36) & 1; }
+		bool DDR50Support() { return (fBits >> 34) & 1; }
+		bool SDR104Support() { return (fBits >> 33) & 1; }
+		bool SDR50Support() { return (fBits >> 32) & 1; }
+		uint8_t SlotType() { return (fBits >> 30) & 3; }
+		bool AsynchronousInterrupts() { return (fBits >> 29) & 1; }
+		bool SystemBus64Bits() { return (fBits >> 28) & 1; }
 		uint8_t SupportedVoltages() { return (fBits >> 24) & 7; }
+		bool SuspendResume() { return (fBits >> 23) & 1; }
+		bool SimpleDMA() { return (fBits >> 22) & 1; }
+		bool HighSpeed() { return (fBits >> 21) & 1; }
+		bool AdvancedDMA() { return (fBits >> 19) & 1; }
+		bool Embedded8Bit() { return (fBits >> 18) & 1; }
+		uint8_t MaxBlockLength() { return (fBits >> 16) & 3; }
 		uint8_t BaseClockFrequency() { return (fBits >> 8) & 0xFF; }
+		uint32_t TimeoutClockFrequency()
+		{
+			bool megahertz = (fBits >> 7) & 1;
+			uint32_t frequency = (fBits >> 0) & 0x1F;
+			if (megahertz)
+				frequency *= 1000;
+			return frequency;
+		}
 
 		static const uint8_t k3v3 = 1;
 		static const uint8_t k3v0 = 2;
@@ -273,6 +361,10 @@ class HostControl {
 		{
 			value = (value & ~kDataTransferWidthMask) | width;
 		}
+
+		// TODO add other bits for LED control, etc.
+
+		uint8 Bits() { return value; }
 
 		static const uint8_t kDmaMask = 3 << 3;
 		static const uint8_t kSdma = 0 << 3;
@@ -338,7 +430,7 @@ struct registers {
 	volatile uint8_t	block_gap_control;
 	volatile uint8_t	wakeup_control;
 	ClockControl		clock_control;
-	volatile uint8_t	timeout_control;
+	TimeoutControl		timeout_control;
 	SoftwareReset		software_reset;
 
 	// Interrupt control
@@ -441,6 +533,8 @@ status_t do_io(void* controller, uint8_t command,
 	IOOperation* operation, bool offsetAsSectors);
 void set_scan_semaphore(void* controller, sem_id sem);
 void set_bus_width(void* controller, int width);
+void set_card_type(void* controller, card_type type);
+void terminate_bus(void* controller);
 
 extern mmc_bus_interface gSDHCIACPIDeviceModule;
 extern mmc_bus_interface gSDHCIPCIDeviceModule;

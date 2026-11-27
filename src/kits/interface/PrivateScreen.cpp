@@ -377,6 +377,7 @@ BPrivateScreen::ReadBitmap(BBitmap* bitmap, bool drawCursor, BRect* bounds)
 
 	BPrivate::AppServerLink link;
 	link.StartMessage(AS_READ_BITMAP);
+	link.Attach<int32>(ID());
 	link.Attach<int32>(bitmap->_ServerToken());
 	link.Attach<bool>(drawCursor);
 	link.Attach<BRect>(rect);
@@ -692,28 +693,6 @@ BPrivateScreen::SetBrightness(float brightness)
 }
 
 
-void *
-BPrivateScreen::BaseAddress()
-{
-	frame_buffer_config config;
-	if (_GetFrameBufferConfig(config) != B_OK)
-		return NULL;
-
-	return config.frame_buffer;
-}
-
-
-uint32
-BPrivateScreen::BytesPerRow()
-{
-	frame_buffer_config config;
-	if (_GetFrameBufferConfig(config) != B_OK)
-		return 0;
-
-	return config.bytes_per_row;
-}
-
-
 // #pragma mark - private methods
 
 
@@ -749,23 +728,6 @@ BPrivateScreen::_RetraceSemaphore()
 	}
 
 	return id;
-}
-
-
-status_t
-BPrivateScreen::_GetFrameBufferConfig(frame_buffer_config& config)
-{
-	BPrivate::AppServerLink link;
-	link.StartMessage(AS_GET_FRAME_BUFFER_CONFIG);
-	link.Attach<int32>(ID());
-
-	status_t status = B_ERROR;
-	if (link.FlushWithReply(status) == B_OK && status == B_OK) {
-		link.Read<frame_buffer_config>(&config);
-		return B_OK;
-	}
-
-	return status;
 }
 
 

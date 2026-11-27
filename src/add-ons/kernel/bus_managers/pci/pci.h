@@ -15,20 +15,38 @@
 
 
 #define TRACE_PCI
-#ifndef TRACE_PCI
-#	define TRACE(x)
-#else
+#ifdef TRACE_PCI
 #	define TRACE(x) dprintf x
+#else
+#	define TRACE(x)
 #endif
 
 struct PCIDev;
+
+
+class PCIResourceWindow {
+public:
+	status_t		AllocateResource(uint64 size, uint64 alignment, pci_resource_range& out, uint8 flags);
+	void			FreeResource(pci_resource_range resource);
+	status_t		ReserveResource(uint64 start, uint64 size, pci_resource_range& out);
+
+private:
+	void			_MergeResourcesAt(int lower, int upper);
+
+	Vector<pci_resource_range> fResources;
+};
+
 
 struct PCIBus {
 	PCIDev *			parent;
 	PCIDev *			child;
 	uint8				domain;
 	uint8				bus;
+
+	PCIResourceWindow	io_window;
+	PCIResourceWindow	memory_window;
 };
+
 
 struct PCIDev {
 	PCIDev *			next;
@@ -43,6 +61,8 @@ struct PCIDev {
 	msi_info			msi;
 	msix_info			msix;
 	ht_mapping_info		ht_mapping;
+
+	pci_resource_range	bar[6];
 };
 
 
@@ -164,12 +184,21 @@ private:
 			PCIBus *		_CreateBus(PCIDev *parent, uint8 domain,
 								uint8 bus);
 
+			status_t		_ReadConfig(domain_data *domain, uint8 bus, uint8 device,
+								uint8 function, uint16 offset, uint8 size,
+								uint32 *value);
+			status_t		_WriteConfig(domain_data *domain, uint8 bus, uint8 device,
+								uint8 function, uint16 offset, uint8 size,
+								uint32 value);
+
 			status_t		_GetNthInfo(PCIBus *bus, long *currentIndex,
 								long wantIndex, pci_info *outInfo);
 			void			_ReadBasicInfo(PCIDev *dev);
 			void			_ReadHeaderInfo(PCIDev *dev);
 
 			void			_ConfigureBridges(PCIBus *bus);
+			void			_ReserveBARs(PCIBus *bus);
+			void			_AssignBARs(PCIBus *bus);
 			void			_RefreshDeviceInfo(PCIBus *bus);
 
 			uint64			_BarSize(uint64 bits);
@@ -190,7 +219,7 @@ private:
 			status_t		_CreateVirtualBus(uint8 domain, uint8 bus,
 								uint8 *virtualBus);
 
-			int				_NumFunctions(uint8 domain, uint8 bus,
+			int				_NumFunctions(domain_data *domain, uint8 bus,
 								uint8 device);
 			PCIDev *		_FindDevice(PCIBus *current, uint8 domain,
 								uint8 bus, uint8 device, uint8 function);
@@ -216,6 +245,7 @@ private:
 };
 
 extern PCI *gPCI;
+
 
 
 extern "C" {

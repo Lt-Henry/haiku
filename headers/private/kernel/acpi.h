@@ -1,4 +1,5 @@
 /*
+ * Copyright 2026, Haiku, Inc. All rights reserved.
  * Copyright 2008, Dustin Howett, dustin.howett@gmail.com. All rights reserved.
  * Copyright 2007, Michael Lotz, mmlr@mlotz.ch. All rights reserved.
  * Distributed under the terms of the MIT License.
@@ -12,6 +13,8 @@
 #define ACPI_MADT_SIGNATURE		"APIC"
 #define ACPI_MCFG_SIGNATURE		"MCFG"
 #define ACPI_SPCR_SIGNATURE		"SPCR"
+#define ACPI_DBG2_SIGNATURE		"DBG2"
+#define ACPI_FADT_SIGNATURE		"FACP"
 
 #define ACPI_LOCAL_APIC_ENABLED	0x01
 
@@ -65,7 +68,7 @@ enum {
 	ACPI_MADT_IO_SAPIC = 6,
 	ACPI_MADT_LOCAL_SAPIC = 7,
 	ACPI_MADT_PLATFORM_INTERRUPT_SOURCE = 8,
-	ACPI_MADT_PROCESSOR_LOCAL_X2_APIC_NMI = 9,
+	ACPI_MADT_PROCESSOR_LOCAL_X2_APIC = 9,
 	ACPI_MADT_LOCAL_X2_APIC_NMI = 0xA,
 	ACPI_MADT_GIC_INTERFACE = 0xB,
 	ACPI_MADT_GIC_DISTRIBUTOR = 0xC,
@@ -241,6 +244,14 @@ typedef struct acpi_gic_distributor {
 	uint8 reserved[3];
 } _PACKED acpi_gic_distributor;
 
+typedef struct acpi_gic_redistributor {
+	uint8 type;
+	uint8 length;
+	uint16 reserved1;
+	uint64 discovery_range_base_address;
+	uint32 discovery_range_length;
+} _PACKED acpi_gic_redistributor;
+
 typedef struct acpi_gas {
 	uint8 address_space_id;
 	uint8 bit_width;
@@ -248,6 +259,63 @@ typedef struct acpi_gas {
 	uint8 access_size;
 	uint64 address;
 } _PACKED acpi_gas;
+
+// ARM Architecture Boot Flags, see ACPI Spec 6.6 section 5.2.9.4.
+// https://uefi.org/specs/ACPI/6.6/05_ACPI_Software_Programming_Model.html#arm-architecture-boot-flags
+typedef struct acpi_fadt_arm_boot_arch {
+    uint16 psci_compliant : 1;
+    uint16 psci_use_hvc : 1;
+    uint16 reserved : 14;
+} _PACKED acpi_fadt_arm_boot_arch;
+
+// Fixed ACPI Description Table, see ACPI Spec 6.6 section 5.2.9.
+// https://uefi.org/specs/ACPI/6.6/05_ACPI_Software_Programming_Model.html#fixed-acpi-description-table-fadt
+// Optional fields after fadt_minor_version omitted.
+typedef struct acpi_fadt {
+	acpi_descriptor_header header;
+	uint32 firmware_ctrl;
+	uint32 dsdt;
+	uint8 reserved1;
+	uint8 preferred_pm_profile;
+	uint16 sci_int;
+	uint32 smi_cmd;
+	uint8 acpi_enable;
+	uint8 acpi_disable;
+	uint8 s4bios_req;
+	uint8 pstate_cnt;
+	uint32 pm1a_evt_blk;
+	uint32 pm1b_evt_blk;
+	uint32 pm1a_cnt_blk;
+	uint32 pm1b_cnt_blk;
+	uint32 pm2_cnt_blk;
+	uint32 pm_tmr_blk;
+	uint32 gpe0_blk;
+	uint32 gpe1_blk;
+	uint8 pm1_evt_len;
+	uint8 pm1_cnt_len;
+	uint8 pm2_cnt_len;
+	uint8 pm_tmr_len;
+	uint8 gpe0_blk_len;
+	uint8 gpe1_blk_len;
+	uint8 gpe1_base;
+	uint8 cst_cnt;
+	uint16 p_lvl2_lat;
+	uint16 p_lvl3_lat;
+	uint16 flush_size;
+	uint16 flush_stride;
+	uint8 duty_offset;
+	uint8 duty_width;
+	uint8 day_alrm;
+	uint8 mon_alrm;
+	uint8 century;
+	uint16 iapc_boot_arch;
+	uint8 reserved2;
+	uint32 flags;
+	acpi_gas reset_reg;
+	uint8 reset_value;
+	acpi_fadt_arm_boot_arch arm_boot_arch;
+	uint8 fadt_minor_version;
+} _PACKED acpi_fadt;
 
 typedef struct acpi_mcfg
 {
@@ -264,6 +332,8 @@ typedef struct acpi_mcfg_allocation
 	uint32 reserved;
 } _PACKED acpi_mcfg_allocation;
 
+// SPCR table specified by Microsoft at
+// https://learn.microsoft.com/en-us/windows-hardware/drivers/bringup/serial-port-console-redirection-table
 typedef struct acpi_spcr {
 	acpi_descriptor_header header;
 	uint32 interface_type;
@@ -290,6 +360,38 @@ typedef struct acpi_spcr {
 enum {
 	ACPI_SPCR_INTERFACE_TYPE_16550 = 0,
 	ACPI_SPCR_INTERFACE_TYPE_PL011 = 3,
+};
+
+// DBG2 table specified by Microsoft at
+// https://learn.microsoft.com/en-us/windows-hardware/drivers/bringup/acpi-debug-port-table
+typedef struct acpi_dbg2 {
+	acpi_descriptor_header header;
+	uint32 offset_dbg_device_info;
+	uint32 number_dbg_device_info;
+} _PACKED acpi_dbg2;
+
+typedef struct acpi_dbg2_device_info {
+	uint8 revision;
+	uint16 length;
+	uint8 num_addresses;
+	uint16 namespace_str_length;
+	uint16 namespace_str_offset;
+	uint16 oem_data_length;
+	uint16 oem_data_offset;
+	uint16 port_type;
+	uint16 port_subtype;
+	uint16 reserved;
+	uint16 base_addr_offset;
+	uint16 addr_size_offset;
+} _PACKED acpi_dbg2_device_info;
+
+enum {
+	ACPI_DBG2_PORT_TYPE_SERIAL = 0x8000,
+};
+
+enum {
+	ACPI_DBG2_PORT_SUBTYPE_16550 = 0,
+	ACPI_DBG2_PORT_SUBTYPE_PL011 = 3,
 };
 
 

@@ -11,7 +11,7 @@
 #include <DirectMessageTarget.h>
 #include <TokenSpace.h>
 
-#include <Autolock.h>
+#include <PthreadMutexLocker.h>
 
 
 namespace BPrivate {
@@ -20,36 +20,54 @@ BTokenSpace gDefaultTokens;
 	// the default token space - all handlers will go into that one
 
 
+static int32
+get_next_token(int32 token)
+{
+	if (token == INT32_MAX)
+		return 1;
+	else
+		return token + 1;
+}
+
+
 BTokenSpace::BTokenSpace()
 	:
-	BLocker("token space"),
-	fTokenCount(1)
+	fNextToken(1)
 {
+	fLock = (pthread_mutex_t)PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
 }
 
 
 BTokenSpace::~BTokenSpace()
 {
+	pthread_mutex_destroy(&fLock);
 }
 
 
 int32
 BTokenSpace::NewToken(int16 type, void* object)
 {
-	BAutolock locker(this);
+	PthreadMutexLocker locker(&fLock);
 
 	token_info tokenInfo = { type, object, NULL };
-	int32 token = fTokenCount;
+
+	int32 wraparoundToken = fNextToken;
 
 	try {
-		fTokenMap[token] = tokenInfo;
+		for (;;) {
+			int32 token = fNextToken;
+			bool done = fTokenMap.insert(std::make_pair(token, tokenInfo)).second;
+			fNextToken = get_next_token(token);
+
+			if (done)
+				return token;
+
+			if (fNextToken == wraparoundToken)
+				return -1;
+		}
 	} catch (std::bad_alloc& exception) {
 		return -1;
 	}
-
-	fTokenCount++;
-
-	return token;
 }
 
 
@@ -62,7 +80,7 @@ BTokenSpace::NewToken(int16 type, void* object)
 bool
 BTokenSpace::SetToken(int32 token, int16 type, void* object)
 {
-	BAutolock locker(this);
+	PthreadMutexLocker locker(&fLock);
 
 	token_info tokenInfo = { type, object, NULL };
 
@@ -73,8 +91,8 @@ BTokenSpace::SetToken(int32 token, int16 type, void* object)
 	}
 
 	// this makes sure SetToken() plays more or less nice with NewToken()
-	if (token >= fTokenCount)
-		fTokenCount = token + 1;
+	if (token >= fNextToken)
+		fNextToken = get_next_token(token);
 
 	return true;
 }
@@ -83,7 +101,7 @@ BTokenSpace::SetToken(int32 token, int16 type, void* object)
 bool
 BTokenSpace::RemoveToken(int32 token)
 {
-	BAutolock locker(this);
+	PthreadMutexLocker locker(&fLock);
 
 	TokenMap::iterator iterator = fTokenMap.find(token);
 	if (iterator == fTokenMap.end())
@@ -100,7 +118,7 @@ BTokenSpace::RemoveToken(int32 token)
 bool
 BTokenSpace::CheckToken(int32 token, int16 type) const
 {
-	BAutolock locker(const_cast<BTokenSpace&>(*this));
+	PthreadMutexLocker locker(&fLock);
 
 	TokenMap::const_iterator iterator = fTokenMap.find(token);
 	if (iterator != fTokenMap.end() && iterator->second.type == type)
@@ -116,7 +134,7 @@ BTokenSpace::GetToken(int32 token, int16 type, void** _object) const
 	if (token < 1)
 		return B_ENTRY_NOT_FOUND;
 
-	BAutolock locker(const_cast<BTokenSpace&>(*this));
+	PthreadMutexLocker locker(&fLock);
 
 	TokenMap::const_iterator iterator = fTokenMap.find(token);
 	if (iterator == fTokenMap.end() || iterator->second.type != type)
@@ -133,7 +151,7 @@ BTokenSpace::SetHandlerTarget(int32 token, BDirectMessageTarget* target)
 	if (token < 1)
 		return B_ENTRY_NOT_FOUND;
 
-	BAutolock locker(const_cast<BTokenSpace&>(*this));
+	PthreadMutexLocker locker(&fLock);
 
 	TokenMap::iterator iterator = fTokenMap.find(token);
 	if (iterator == fTokenMap.end() || iterator->second.type != B_HANDLER_TOKEN)
@@ -156,7 +174,7 @@ BTokenSpace::AcquireHandlerTarget(int32 token, BDirectMessageTarget** _target)
 	if (token < 1)
 		return B_ENTRY_NOT_FOUND;
 
-	BAutolock locker(const_cast<BTokenSpace&>(*this));
+	PthreadMutexLocker locker(&fLock);
 
 	TokenMap::const_iterator iterator = fTokenMap.find(token);
 	if (iterator == fTokenMap.end() || iterator->second.type != B_HANDLER_TOKEN)
@@ -167,14 +185,6 @@ BTokenSpace::AcquireHandlerTarget(int32 token, BDirectMessageTarget** _target)
 
 	*_target = iterator->second.target;
 	return B_OK;
-}
-
-
-void
-BTokenSpace::InitAfterFork()
-{
-	// We need to reinitialize the locker to get a new semaphore
-	new (this) BTokenSpace();
 }
 
 

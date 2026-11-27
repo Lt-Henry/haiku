@@ -20,27 +20,6 @@ static const size_t kMinObjectAlignment = 8;
 void		request_memory_manager_maintenance();
 
 void*		block_alloc_early(size_t size);
-void		block_allocator_init_boot();
-void		block_allocator_init_rest();
-
-
-template<typename Type>
-static inline Type*
-_pop(Type*& head)
-{
-	Type* oldHead = head;
-	head = head->next;
-	return oldHead;
-}
-
-
-template<typename Type>
-static inline void
-_push(Type*& head, Type* object)
-{
-	object->next = head;
-	head = object;
-}
 
 
 static inline void*

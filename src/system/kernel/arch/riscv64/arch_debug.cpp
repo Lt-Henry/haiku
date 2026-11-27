@@ -749,24 +749,6 @@ dump_iframes(int argc, char** argv)
 }
 
 
-static bool
-is_calling(Thread* thread, addr_t pc, const char* pattern, addr_t start,
-	addr_t end)
-{
-	if (pattern == NULL)
-		return pc >= start && pc < end;
-
-	if (!IS_KERNEL_ADDRESS(pc))
-		return false;
-
-	const char* symbol;
-	if (lookup_symbol(thread, pc, NULL, &symbol, NULL, NULL) != B_OK)
-		return false;
-
-	return strstr(symbol, pattern);
-}
-
-
 static int
 cmd_in_context(int argc, char** argv)
 {
@@ -867,8 +849,7 @@ arch_debug_stack_trace(void)
 
 
 bool
-arch_debug_contains_call(Thread* thread, const char* symbol, addr_t start,
-	addr_t end)
+arch_debug_walk_stack(Thread* thread, bool (*callback)(void*, addr_t), void* context)
 {
 	DebuggedThreadSetter threadSetter(thread);
 
@@ -898,19 +879,18 @@ arch_debug_contains_call(Thread* thread, const char* symbol, addr_t start,
 		if (is_iframe(thread, fp)) {
 			iframe* frame = (iframe*)fp;
 
-			if (is_calling(thread, frame->epc, symbol, start, end))
+			if (callback(context, frame->epc))
 				return true;
 
  			fp = frame->fp;
 		} else {
 			addr_t pc, nextFp;
 
-			if (get_next_frame_no_debugger(fp, &nextFp, &pc, true,
-					thread) != B_OK
+			if (get_next_frame_debugger(fp, &nextFp, &pc) != B_OK
 				|| pc == 0 || fp == 0)
 				break;
 
-			if (is_calling(thread, pc, symbol, start, end))
+			if (callback(context, pc))
 				return true;
 
 			fp = nextFp;
@@ -936,7 +916,7 @@ arch_debug_contains_call(Thread* thread, const char* symbol, addr_t start,
 	\return The number of return addresses written to the given array.
 */
 int32
-arch_debug_get_stack_trace(addr_t* returnAddresses, int32 maxCount,
+arch_get_stack_trace(addr_t* returnAddresses, int32 maxCount,
 	int32 skipIframes, int32 skipFrames, uint32 flags)
 {
 	// Keep skipping normal stack frames until we've skipped the iframes we're
@@ -1136,11 +1116,16 @@ arch_debug_gdb_get_registers(char* buffer, size_t bufferSize)
 }
 
 
+void
+arch_debug_snooze(bigtime_t duration)
+{
+	spin(duration);
+}
+
+
 status_t
 arch_debug_init(kernel_args* args)
 {
-	// at this stage, the debugger command system is alive
-
 	add_debugger_command("where", &stack_trace, "Same as \"sc\"");
 	add_debugger_command("bt", &stack_trace, "Same as \"sc\" (as in gdb)");
 	add_debugger_command("sc", &stack_trace,

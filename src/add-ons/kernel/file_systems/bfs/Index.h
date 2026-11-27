@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2012, Axel Dörfler, axeld@pinc-software.de.
+ * Copyright 2001-2025, Axel Dörfler, axeld@pinc-software.de.
  * This file may be used under the terms of the MIT License.
  */
 #ifndef INDEX_H
@@ -32,7 +32,8 @@ public:
 			status_t		Update(Transaction& transaction, const char* name,
 								int32 type, const uint8* oldKey,
 								uint16 oldLength, const uint8* newKey,
-								uint16 newLength, Inode* inode);
+								uint16 newLength, Inode* inode,
+								bool updateLiveQueries = true);
 
 			status_t		InsertName(Transaction& transaction,
 								const char* name, Inode* inode);
@@ -40,7 +41,7 @@ public:
 								const char* name, Inode* inode);
 			status_t		UpdateName(Transaction& transaction,
 								const char* oldName, const char* newName,
-								Inode* inode);
+								Inode* inode, bool updateLiveQueries = true);
 
 			status_t		InsertSize(Transaction& transaction, Inode* inode);
 			status_t		RemoveSize(Transaction& transaction, Inode* inode);
@@ -52,6 +53,9 @@ public:
 								Inode* inode);
 			status_t		UpdateLastModified(Transaction& transaction,
 								Inode* inode, bigtime_t modified = -1);
+
+			status_t		UpdateNodeID(Transaction& transaction, const uint8* key, uint16 length,
+								off_t oldInodeID, off_t newInodeID);
 
 private:
 							Index(const Index& other);

@@ -13,7 +13,7 @@
 #include <debug.h>
 #include <kscheduler.h>
 #include <ksignal.h>
-#include <int.h>
+#include <interrupts.h>
 #include <listeners.h>
 #include <scheduling_analysis.h>
 #include <thread.h>
@@ -147,6 +147,8 @@ ConditionVariableEntry::_RemoveFromVariable()
 		// we do that, we may validly use our cached pointer to the variable.
 		if (try_acquire_spinlock(&variable->fLock))
 			break;
+
+		cpu_pause();
 	}
 
 	// We now hold the variable's lock. Remove ourselves.
@@ -223,8 +225,6 @@ ConditionVariableEntry::Wait(const void* object, uint32 flags,
 // #pragma mark - ConditionVariable
 
 
-/*!	Initialization method for anonymous (unpublished) condition variables.
-*/
 void
 ConditionVariable::Init(const void* object, const char* objectType)
 {
@@ -427,10 +427,9 @@ ConditionVariable::_NotifyLocked(bool all, status_t result)
 				thread_unblock_locked(thread, result);
 
 			notified++;
+			if (!all)
+				break;
 		}
-
-		if (!all)
-			break;
 	}
 
 	return notified;

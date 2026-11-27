@@ -21,6 +21,19 @@
 using namespace RPC;
 
 
+Request::Request()
+{
+	mutex_init(&fEventLock, "nfs4 Request");
+}
+
+
+Request::~Request()
+{
+	mutex_lock(&fEventLock);
+	mutex_destroy(&fEventLock);
+}
+
+
 RequestManager::RequestManager()
 	:
 	fQueueHead(NULL),
@@ -200,10 +213,13 @@ Server::WakeCall(Request* request)
 	if (req == NULL)
 		return B_OK;
 
-	request->fError = B_FILE_ERROR;
+	request->fError = B_IO_ERROR;
 	*request->fReply = NULL;
 	request->fDone = true;
+	mutex_lock(&request->fEventLock);
+		// don't let the sending thread free request->fEvent until NotifyAll returns
 	request->fEvent.NotifyAll();
+	mutex_unlock(&request->fEventLock);
 
 	return B_OK;
 }
@@ -294,7 +310,10 @@ Server::_Listener()
 		if (req != NULL) {
 			*req->fReply = reply;
 			req->fDone = true;
+			mutex_lock(&req->fEventLock);
+				// don't let the sending thread free req->fEvent until NotifyAll returns
 			req->fEvent.NotifyAll();
+			mutex_unlock(&req->fEventLock);
 		} else
 			delete reply;
 	}

@@ -148,7 +148,7 @@ struct net_stack_module_info {
 	void		(*uninit_fifo)(net_fifo* fifo);
 	status_t	(*fifo_enqueue_buffer)(net_fifo* fifo, net_buffer* buffer);
 	ssize_t		(*fifo_dequeue_buffer)(net_fifo* fifo, uint32 flags,
-					bigtime_t timeout, net_buffer** _buffer);
+					bigtime_t absoluteTimeout, net_buffer** _buffer);
 	status_t	(*clear_fifo)(net_fifo* fifo);
 	status_t	(*fifo_socket_enqueue_buffer)(net_fifo* fifo,
 					net_socket* socket, uint8 event, net_buffer* buffer);
@@ -165,7 +165,7 @@ struct net_stack_module_info {
 	// syscall restart
 	bool		(*is_syscall)(void);
 	bool		(*is_restarted_syscall)(void);
-	void		(*store_syscall_restart_timeout)(bigtime_t timeout);
+	bigtime_t	(*set_syscall_restart_timeout)(bigtime_t relativeTimeout);
 	bigtime_t	(*restore_syscall_restart_timeout)(void);
 
 	// ancillary data
@@ -175,6 +175,7 @@ struct net_stack_module_info {
 	status_t	(*add_ancillary_data)(ancillary_data_container* container,
 					const ancillary_data_header* header, const void* data,
 					void (*destructor)(const ancillary_data_header*, void*),
+					void (*clone)(const ancillary_data_header*, void*),
 					void** _allocatedData);
 	status_t	(*remove_ancillary_data)(ancillary_data_container* container,
 					void* data, bool destroy);
@@ -182,6 +183,8 @@ struct net_stack_module_info {
 					ancillary_data_container* to);
 	void*		(*next_ancillary_data)(const ancillary_data_container* container,
 					void* previousData, ancillary_data_header* _header);
+	status_t	(*clone_ancillary_data)(const ancillary_data_container* from,
+					ancillary_data_container* to);
 };
 
 

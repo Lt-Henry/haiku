@@ -100,10 +100,13 @@ MediaWindow::SmartNode::SetTo(const dormant_node_info* info)
 
 	status_t status = B_OK;
 	media_node_id node_id;
-	if (roster->GetInstancesFor(info->addon, info->flavor_id, &node_id) == B_OK)
+	int32 instanceCount = 1;
+	if (roster->GetInstancesFor(info->addon, info->flavor_id, &node_id, &instanceCount) == B_OK
+		&& instanceCount > 0) {
 		status = roster->GetNodeFor(node_id, fNode);
-	else
+	} else {
 		status = roster->InstantiateDormantNode(*info, fNode, B_FLAVOR_IS_GLOBAL);
+	}
 
 	if (status != B_OK) {
 		fprintf(stderr, "SmartNode::SetTo error with node %" B_PRId32
@@ -308,9 +311,10 @@ bool
 MediaWindow::QuitRequested()
 {
 	if (fRestartThread > 0) {
-		BString text(B_TRANSLATE("Quitting Media now will stop the "
+		BString text(B_TRANSLATE("Quitting %prefname% now will stop the "
 			"restarting of the media services. Flaky or unavailable media "
 			"functionality is the likely result."));
+		text.ReplaceFirst("%prefname%", B_TRANSLATE_SYSTEM_NAME("Media"));
 
 		fRestartAlert = new BAlert(B_TRANSLATE("Warning!"), text,
 			B_TRANSLATE("Quit anyway"), NULL, NULL,
@@ -726,8 +730,6 @@ MediaWindow::_MakeEmptyParamView()
 	fContentLayout->AddView(stringView);
 	fContentLayout->SetVisibleItem(fContentLayout->CountItems() - 1);
 
-	rgb_color panel = stringView->LowColor();
-	stringView->SetHighColor(tint_color(panel,
-		B_DISABLED_LABEL_TINT));
+	stringView->SetHighUIColor(B_PANEL_TEXT_COLOR);
 }
 

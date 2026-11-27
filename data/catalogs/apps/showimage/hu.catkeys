@@ -1,7 +1,6 @@
-1	hungarian	x-vnd.Haiku-ShowImage	2453396430
+1	hungarian	x-vnd.Haiku-ShowImage	549474543
 ShowImage	System name		Képmegjelenítő
 Page setup…	Menus		Oldalbeállítás…
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		A '%s' nevű dokumentum %d. oldala megváltozott. Bezárja a dokumentumot?
 Previous file	Menus		Előző fájl
 View	Menus		Nézet
 Leave full screen	Menus		Kilépés a teljes képernyős módból
@@ -13,6 +12,7 @@ Height: 	PrintOptionsWindow		Magasság:
 Next file	Menus		Következő fájl
 Slide show	Menus		Bemutató
 Original size	Menus		Eredeti méret
+The document '%filename%' has been changed. Do you want to close the document?	ClosePrompt		%filename% megváltozott. Bezárod a dokumentumot?
 Width:	PrintOptionsWindow		Szélesség:
 Resize to (in 1/72 inches):	PrintOptionsWindow		Átméretezés (1/72 colban):
 Zoom factor in %:	PrintOptionsWindow		Nagyítás mértéke százalékban:
@@ -26,8 +26,8 @@ Zoom in	Menus		Nagyítás
 Last page	Menus		Utolsó oldal
 Cancel	ClosePrompt		Mégse
 Attributes	Menus		Jellemzők
+Show boundaries marks	Menus		Határjelzések
 High-quality zooming	Menus		Magas minőségű nagyítás
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		A '%s' nevű dokumentum megváltozott. Biztosan be szeretnéd zárni?
 Close	Menus		Bezárás
 Selection mode	Menus		Kijelölés mód
 Reset rating	Menus		Értékelés visszaállítása
@@ -46,14 +46,13 @@ Stretch to window	Menus		Nyújtás az ablakhoz
 Job setup	PrintOptionsWindow		Feladatbeállítás
 Clear selection	Menus		Kijelölés törlése
 Rotate clockwise	Menus		Forgatás az óramutató irányába
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		Nem sikerült betölteni a képet! Vagy a fájl, vagy annak egy értelmezője nincs meg.
 Open with…	Menus		Megnyitás ezzel…
 Rotate counterclockwise	Menus		Óramutató járásával ellentétes irányú forgatás
+The document '%filename%' (page %number%) has been changed. Do you want to close the document?	ClosePrompt		%filename% (%number%. oldal) megváltozott. Bezárod a dokumentumot?
 Previous page	Menus		Előző oldal
 Fit to window	Menus		Illesztés az ablakhoz
 Go to page	Menus		Oldalra ugrás
 Browse	Menus		Tallózás
-Progress monitor	ProgressWindow		Folyamatjelző
 Edit	Menus		Szerkesztés
 Move to Trash	Menus		Szemetesbe
 Use as background…	Menus		Beállítás háttérnek…

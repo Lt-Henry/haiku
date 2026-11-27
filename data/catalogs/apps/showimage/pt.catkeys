@@ -1,7 +1,5 @@
-1	portuguese	x-vnd.Haiku-ShowImage	575555985
-ShowImage	System name		ShowImage
+1	portuguese	x-vnd.Haiku-ShowImage	621535342
 Page setup…	Menus		Configuração de página…
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		O documento '%s' (página %d) foi modificado. Você deseja fechar o documento?
 Previous file	Menus		Ficheiro anterior
 View	Menus		Ver
 Leave full screen	Menus		Sair do ecrã completo
@@ -26,7 +24,6 @@ Zoom in	Menus		Aumentar zoom
 Last page	Menus		Última página
 Cancel	ClosePrompt		Cancelar
 High-quality zooming	Menus		Zoom de alta qualidade
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		O documento '%s' foi modificado. Você deseja fechar o documento?
 Close	Menus		Fechar
 Selection mode	Menus		Modo de seleção
 DPI:	PrintOptionsWindow		DPI:
@@ -43,13 +40,11 @@ Stretch to window	Menus		Esticar à medida da janela
 Job setup	PrintOptionsWindow		Configurar trabalho de impressão
 Clear selection	Menus		Limpar seleção
 Rotate clockwise	Menus		Rodar para a direita
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		Não foi possível abrir a imagem! Ou não existe o ficheiro, ou um tradutor de imagens para esse formato.
 Rotate counterclockwise	Menus		Rodar para a esquerda
 Previous page	Menus		Página anterior
 Fit to window	Menus		Ajustar à janela
 Go to page	Menus		Ir para a página
 Browse	Menus		Navegar
-Progress monitor	ProgressWindow		Monitor de progresso
 Edit	Menus		Editar
 Move to Trash	Menus		Mover para o Lixo
 Use as background…	Menus		Usar como papel de parede…

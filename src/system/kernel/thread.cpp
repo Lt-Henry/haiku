@@ -32,7 +32,8 @@
 #include <boot/kernel_args.h>
 #include <condition_variable.h>
 #include <cpu.h>
-#include <int.h>
+#include <elf.h>
+#include <interrupts.h>
 #include <kimage.h>
 #include <kscheduler.h>
 #include <ksignal.h>
@@ -46,6 +47,7 @@
 #include <tls.h>
 #include <user_runtime.h>
 #include <user_thread.h>
+#include <user_mutex.h>
 #include <vfs.h>
 #include <vm/vm.h>
 #include <vm/VMAddressSpace.h>
@@ -264,7 +266,6 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
 	flags(0),
 	serial_number(-1),
 	hash_next(NULL),
-	team_next(NULL),
 	priority(-1),
 	io_priority(-1),
 	cpu(cpu),
@@ -282,6 +283,7 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
 	user_thread(NULL),
 	fault_handler(0),
 	page_faults_allowed(1),
+	page_fault_waits_allowed(1),
 	team(NULL),
 	select_infos(NULL),
 	kernel_stack_area(-1),
@@ -316,8 +318,6 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
 		strcpy(this->name, "unnamed thread");
 
 	exit.status = 0;
-
-	list_init(&exit.waiters);
 
 	exit.sem = -1;
 	msg.write_sem = -1;
@@ -538,6 +538,8 @@ Thread::ResetSignalsOnExec()
 status_t
 Thread::AddUserTimer(UserTimer* timer)
 {
+	ASSERT_LOCKED_MUTEX(&fLock);
+
 	// If the timer is user-defined, check timer limit and increment
 	// user-defined count.
 	if (timer->ID() < 0 && !team->CheckAddUserDefinedTimer())
@@ -559,6 +561,8 @@ Thread::AddUserTimer(UserTimer* timer)
 void
 Thread::RemoveUserTimer(UserTimer* timer)
 {
+	ASSERT_LOCKED_MUTEX(&fLock);
+
 	fUserTimers.RemoveTimer(timer);
 
 	if (timer->ID() >= USER_TIMER_FIRST_USER_DEFINED_ID)
@@ -708,8 +712,7 @@ ThreadCreationAttributes::InitFromUserAttributes(
 static void
 insert_thread_into_team(Team *team, Thread *thread)
 {
-	thread->team_next = team->thread_list;
-	team->thread_list = thread;
+	team->thread_list.Add(thread, false);
 	team->num_threads++;
 
 	if (team->num_threads == 1) {
@@ -727,20 +730,8 @@ insert_thread_into_team(Team *team, Thread *thread)
 static void
 remove_thread_from_team(Team *team, Thread *thread)
 {
-	Thread *temp, *last = NULL;
-
-	for (temp = team->thread_list; temp != NULL; temp = temp->team_next) {
-		if (temp == thread) {
-			if (last == NULL)
-				team->thread_list = temp->team_next;
-			else
-				last->team_next = temp->team_next;
-
-			team->num_threads--;
-			break;
-		}
-		last = temp;
-	}
+	team->thread_list.Remove(thread);
+	team->num_threads--;
 }
 
 
@@ -1099,6 +1090,13 @@ thread_create_thread(const ThreadCreationAttributes& attributes, bool kernel)
 
 	bool debugNewThread = false;
 	if (!kernel) {
+		// ensure there's a user_mutex_context, if this isn't the main thread
+		if (team->main_thread != NULL && team->user_mutex_context == NULL) {
+			status_t status = allocate_team_user_mutex_context(team);
+			if (status != B_OK)
+				return status;
+		}
+
 		// allocate the user_thread structure, if not already allocated
 		if (thread->user_thread == NULL) {
 			thread->user_thread = team_allocate_user_thread(team);
@@ -1442,11 +1440,13 @@ common_getrlimit(int resource, struct rlimit * rlp)
 			return B_OK;
 
 		case RLIMIT_CORE:
+			// Core files are controlled by debug_server, not applications.
 			rlp->rlim_cur = 0;
 			rlp->rlim_max = 0;
 			return B_OK;
 
 		case RLIMIT_DATA:
+		case RLIMIT_FSIZE:
 			rlp->rlim_cur = RLIM_INFINITY;
 			rlp->rlim_max = RLIM_INFINITY;
 			return B_OK;
@@ -1473,16 +1473,13 @@ common_getrlimit(int resource, struct rlimit * rlp)
 static status_t
 common_setrlimit(int resource, const struct rlimit * rlp)
 {
-	if (!rlp)
+	if (rlp == NULL)
 		return B_BAD_ADDRESS;
 
-	switch (resource) {
-		case RLIMIT_CORE:
-			// We don't support core file, so allow settings to 0/0 only.
-			if (rlp->rlim_cur != 0 || rlp->rlim_max != 0)
-				return EINVAL;
-			return B_OK;
+	if (rlp->rlim_cur > rlp->rlim_max)
+		return EINVAL;
 
+	switch (resource) {
 		case RLIMIT_NOFILE:
 		case RLIMIT_NOVMON:
 			return vfs_setrlimit(resource, rlp);
@@ -1866,15 +1863,13 @@ _dump_thread_info(Thread *thread, bool shortInfo)
 
 	// print the long info
 
-	struct thread_death_entry *death = NULL;
-
 	kprintf("THREAD: %p\n", thread);
 	kprintf("id:                 %" B_PRId32 " (%#" B_PRIx32 ")\n", thread->id,
 		thread->id);
 	kprintf("serial_number:      %" B_PRId64 "\n", thread->serial_number);
 	kprintf("name:               \"%s\"\n", thread->name);
 	kprintf("hash_next:          %p\nteam_next:          %p\n",
-		thread->hash_next, thread->team_next);
+		thread->hash_next, thread->team_link.next);
 	kprintf("priority:           %" B_PRId32 " (I/O: %" B_PRId32 ")\n",
 		thread->priority, thread->io_priority);
 	kprintf("state:              %s\n", state_to_text(thread, thread->state));
@@ -1884,6 +1879,7 @@ _dump_thread_info(Thread *thread, bool shortInfo)
 	else
 		kprintf("\n");
 	kprintf("cpumask:            %#" B_PRIx32 "\n", thread->cpumask.Bits(0));
+	kprintf("pinned_to_cpu:      %#" B_PRIx32 "\n", thread->pinned_to_cpu);
 	kprintf("sig_pending:        %#" B_PRIx64 " (blocked: %#" B_PRIx64
 		", before sigsuspend(): %#" B_PRIx64 ")\n",
 		(int64)thread->ThreadPendingSignals(),
@@ -1950,8 +1946,8 @@ _dump_thread_info(Thread *thread, bool shortInfo)
 	kprintf("  exit.status:      %#" B_PRIx32 " (%s)\n", thread->exit.status,
 		strerror(thread->exit.status));
 	kprintf("  exit.waiters:\n");
-	while ((death = (struct thread_death_entry*)list_get_next_item(
-			&thread->exit.waiters, death)) != NULL) {
+	for (thread_death_entry* death = thread->exit.waiters.First(); death != NULL;
+			death = thread->exit.waiters.GetNext(death)) {
 		kprintf("\t%p (thread %" B_PRId32 ")\n", death, death->thread);
 	}
 
@@ -2018,14 +2014,46 @@ dump_thread_info(int argc, char **argv)
 }
 
 
+struct CallingMatchArgs {
+	Thread* thread;
+	const char* pattern;
+	addr_t start, end;
+	bool case_insensitive, images;
+};
+
+
+static bool
+calling_match(void* _args, addr_t ip)
+{
+	CallingMatchArgs* args = (CallingMatchArgs*)_args;
+
+	if (args->pattern == NULL)
+		return ip >= args->start && ip < args->end;
+
+	if (!IS_KERNEL_ADDRESS(ip))
+		return false;
+
+	const char* image;
+	const char* symbol;
+	if (elf_debug_lookup_symbol_address(ip,
+			NULL, &symbol, &image, NULL) != B_OK)
+		return false;
+
+	const char* search = symbol;
+	if (args->images)
+		search = image;
+
+	if (args->case_insensitive)
+		return strcasestr(search, args->pattern) != NULL;
+	return strstr(search, args->pattern) != NULL;
+}
+
+
 static int
 dump_thread_list(int argc, char **argv)
 {
 	bool realTimeOnly = false;
-	bool calling = false;
-	const char *callSymbol = NULL;
-	addr_t callStart = 0;
-	addr_t callEnd = 0;
+	CallingMatchArgs* calling = NULL;
 	int32 requiredState = 0;
 	team_id team = -1;
 	sem_id sem = -1;
@@ -2045,16 +2073,39 @@ dump_thread_list(int argc, char **argv)
 				kprintf("ignoring invalid semaphore argument.\n");
 		}
 	} else if (!strcmp(argv[0], "calling")) {
-		if (argc < 2) {
-			kprintf("Need to give a symbol name or start and end arguments.\n");
-			return 0;
-		} else if (argc == 3) {
-			callStart = parse_expression(argv[1]);
-			callEnd = parse_expression(argv[2]);
-		} else
-			callSymbol = argv[1];
+		argv++;
+		argc--;
+		if (argc == 0) {
+			kprintf("calling: Not enough arguments.\n");
+			return -1;
+		}
 
-		calling = true;
+		calling = (CallingMatchArgs*)alloca(sizeof(CallingMatchArgs));
+		memset(calling, 0, sizeof(CallingMatchArgs));
+
+		while (argv[0][0] == '-') {
+			if (strcmp(argv[0], "-i") == 0)
+				calling->case_insensitive = true;
+			else if (strcmp(argv[0], "-m") == 0)
+				calling->images = true;
+			else {
+				kprintf("calling: unknown argument %s\n", argv[0]);
+				return -1;
+			}
+			argv++;
+			argc--;
+		}
+
+		if (argc != 1 && argc != 2) {
+			kprintf("calling: Need to give a symbol name or start and end arguments.\n");
+			return -1;
+		}
+
+		if (argc == 2) {
+			calling->start = parse_expression(argv[0]);
+			calling->end = parse_expression(argv[1]);
+		} else
+			calling->pattern = argv[0];
 	} else if (argc > 1) {
 		team = strtoul(argv[1], NULL, 0);
 		if (team == 0)
@@ -2067,8 +2118,7 @@ dump_thread_list(int argc, char **argv)
 			Thread* thread = it.Next();) {
 		// filter out threads not matching the search criteria
 		if ((requiredState && thread->state != requiredState)
-			|| (calling && !arch_debug_contains_call(thread, callSymbol,
-					callStart, callEnd))
+			|| (calling != NULL && !arch_debug_walk_stack(thread, calling_match, calling))
 			|| (sem > 0 && get_thread_wait_sem(thread) != sem)
 			|| (team > 0 && thread->team->id != team)
 			|| (realTimeOnly && thread->priority < B_REAL_TIME_DISPLAY_PRIORITY))
@@ -2286,13 +2336,17 @@ thread_exit(void)
 		} else {
 			// The thread is not the main thread. We store a thread death entry
 			// for it, unless someone is already waiting for it.
-			if (threadDeathEntry != NULL
-				&& list_is_empty(&thread->exit.waiters)) {
-				threadDeathEntry->thread = thread->id;
-				threadDeathEntry->status = thread->exit.status;
+			if (threadDeathEntry != NULL) {
+				if (thread->exit.waiters.IsEmpty()) {
+					threadDeathEntry->thread = thread->id;
+					threadDeathEntry->status = thread->exit.status;
 
-				// add entry to dead thread list
-				list_add_item(&team->dead_threads, threadDeathEntry);
+					// add entry to dead thread list
+					team->dead_threads.Add(threadDeathEntry);
+				} else {
+					deferred_free(threadDeathEntry);
+					threadDeathEntry = NULL;
+				}
 			}
 
 			threadCreationLocker.Unlock();
@@ -2385,9 +2439,8 @@ thread_exit(void)
 		thread->exit.sem = -1;
 
 		// fill all death entries
-		thread_death_entry* entry = NULL;
-		while ((entry = (thread_death_entry*)list_get_next_item(
-				&thread->exit.waiters, entry)) != NULL) {
+		for (thread_death_entry* entry = thread->exit.waiters.First(); entry != NULL;
+				entry = thread->exit.waiters.GetNext(entry)) {
 			entry->status = thread->exit.status;
 		}
 
@@ -2625,7 +2678,7 @@ wait_for_thread_etc(thread_id id, uint32 flags, bigtime_t timeout,
 		// remember the semaphore we have to wait on and place our death entry
 		exitSem = thread->exit.sem;
 		if (exitSem >= 0)
-			list_add_link_to_head(&thread->exit.waiters, &death);
+			thread->exit.waiters.Add(&death, false);
 
 		thread->UnlockAndReleaseReference();
 
@@ -2649,10 +2702,10 @@ wait_for_thread_etc(thread_id id, uint32 flags, bigtime_t timeout,
 		} else {
 			// check the thread death entries of the team (non-main threads)
 			thread_death_entry* threadDeathEntry = NULL;
-			while ((threadDeathEntry = (thread_death_entry*)list_get_next_item(
-					&team->dead_threads, threadDeathEntry)) != NULL) {
+			for (threadDeathEntry = team->dead_threads.First(); threadDeathEntry != NULL;
+					threadDeathEntry = team->dead_threads.GetNext(threadDeathEntry)) {
 				if (threadDeathEntry->thread == id) {
-					list_remove_item(&team->dead_threads, threadDeathEntry);
+					team->dead_threads.Remove(threadDeathEntry);
 					death.status = threadDeathEntry->status;
 					free(threadDeathEntry);
 					break;
@@ -2688,7 +2741,7 @@ wait_for_thread_etc(thread_id id, uint32 flags, bigtime_t timeout,
 		// remove our death entry now.
 		thread = Thread::GetAndLock(id);
 		if (thread != NULL) {
-			list_remove_link(&death.link);
+			thread->exit.waiters.Remove(&death);
 			thread->UnlockAndReleaseReference();
 		} else {
 			// The thread is already gone, so we need to wait uninterruptibly
@@ -2841,13 +2894,12 @@ thread_init(kernel_args *args)
 
 	// create an idle thread for each cpu
 	for (uint32 i = 0; i < args->num_cpus; i++) {
-		Thread *thread;
 		area_info info;
 		char name[64];
 
 		sprintf(name, "idle thread %" B_PRIu32, i + 1);
-		thread = new(&sIdleThreads[i]) Thread(name,
-			i == 0 ? team_get_kernel_team_id() : -1, &gCPU[i]);
+		Thread *thread = &sIdleThreads[i];
+		new(&sIdleThreads[i]) Thread(name, thread->id, &gCPU[i]);
 		if (thread == NULL || thread->Init(true) != B_OK) {
 			panic("error creating idle thread struct\n");
 			return B_NO_MEMORY;
@@ -2884,7 +2936,7 @@ thread_init(kernel_args *args)
 	new(&sUndertakerEntries) DoublyLinkedList<UndertakerEntry>();
 	sUndertakerCondition.Init(&sUndertakerEntries, "undertaker entries");
 
-	thread_id undertakerThread = spawn_kernel_thread(&undertaker, "undertaker",
+	thread_id undertakerThread = spawn_kernel_thread(&undertaker, "thread undertaker",
 		B_DISPLAY_PRIORITY, NULL);
 	if (undertakerThread < 0)
 		panic("Failed to create undertaker thread!");
@@ -2925,7 +2977,9 @@ thread_init(kernel_args *args)
 		"  <name>     - The thread's name.\n", 0);
 	add_debugger_command_etc("calling", &dump_thread_list,
 		"Show all threads that have a specific address in their call chain",
-		"{ <symbol-pattern> | <start> <end> }\n", 0);
+		" { [ -i ] [ -m ] <symbol-pattern> | <start> <end> }\n"
+		"  -i         - Case-insensitive search.\n"
+		"  -m         - Search image names instead of symbol names.\n", 0);
 	add_debugger_command_etc("unreal", &make_thread_unreal,
 		"Set realtime priority threads to normal priority",
 		"[ <id> ]\n"
@@ -2967,6 +3021,7 @@ thread_preboot_init_percpu(struct kernel_args *args, int32 cpuNum)
 	// so that get_current_cpu and friends will work, which is crucial for
 	// a lot of low level routines
 	sIdleThreads[cpuNum].cpu = &gCPU[cpuNum];
+	sIdleThreads[cpuNum].id = (cpuNum == 0) ? B_SYSTEM_TEAM : -1;
 	arch_thread_set_current_thread(&sIdleThreads[cpuNum]);
 	return B_OK;
 }
@@ -3126,6 +3181,8 @@ user_unblock_thread(thread_id threadID, status_t status)
 
 	if (thread->user_thread == NULL)
 		return B_NOT_ALLOWED;
+	if (status > 0)
+		return B_BAD_VALUE;
 
 	InterruptsSpinLocker locker(thread->scheduler_lock);
 
@@ -3144,7 +3201,7 @@ user_unblock_thread(thread_id threadID, status_t status)
 		// case that this thread is actually blocked on something else.
 		if (thread->wait.status > 0
 				&& thread->wait.type == THREAD_BLOCK_TYPE_USER) {
-			thread_unblock_locked(thread, status);
+			thread_unblock_locked(thread, B_OK);
 		}
 	}
 	return B_OK;
@@ -3332,19 +3389,33 @@ _get_next_thread_info(team_id teamID, int32 *_cookie, thread_info *info,
 	Thread* thread = NULL;
 
 	if (lastID == 0) {
-		// We start with the main thread
+		// We start with the main thread.
 		thread = team->main_thread;
 	} else {
-		// Find the one thread with an ID greater than ours (as long as the IDs
-		// don't wrap they are always sorted from highest to lowest).
-		// TODO: That is broken not only when the IDs wrap, but also for the
-		// kernel team, to which threads are added when they are dying.
-		for (Thread* next = team->thread_list; next != NULL;
-				next = next->team_next) {
-			if (next->id <= lastID)
+		// Find the previous thread after the one with the last ID.
+		bool found = false;
+		for (Thread* previous = team->thread_list.Last(); previous != NULL;
+				previous = team->thread_list.GetPrevious(previous)) {
+			if (previous->id == lastID) {
+				found = true;
+				thread = team->thread_list.GetPrevious(previous);
 				break;
+			}
+		}
 
-			thread = next;
+		if (!found) {
+			// Fall back to finding the thread with the next greatest ID (as long
+			// as IDs don't wrap, they are always sorted from highest to lowest).
+			// This won't work properly if IDs wrap, or for the kernel team (to
+			// which threads are added when they are dying), but this is only a
+			// fallback for when the previous thread wasn't found, anyway.
+			for (Thread* next = team->thread_list.First(); next != NULL;
+					next = team->thread_list.GetNext(next)) {
+				if (next->id <= lastID)
+					break;
+
+				thread = next;
+			}
 		}
 	}
 
@@ -3899,21 +3970,15 @@ _user_block_thread(uint32 flags, bigtime_t timeout)
 	threadLocker.Lock();
 
 	// Interruptions or timeouts can race with other threads unblocking us.
-	// Favor a wake-up by another thread, i.e. if someone changed the wait
-	// status, use that.
-	status_t oldStatus;
-	if (user_memcpy(&oldStatus, &thread->user_thread->wait_status,
-		sizeof(oldStatus)) < B_OK) {
+	// Favor an actual wake-up, if one happened.
+	if (user_memcpy(&waitStatus, &thread->user_thread->wait_status,
+			sizeof(waitStatus)) != B_OK) {
 		return B_BAD_ADDRESS;
 	}
-	if (oldStatus > 0) {
-		if (user_memcpy(&thread->user_thread->wait_status, &status,
-				sizeof(status)) < B_OK) {
-			return B_BAD_ADDRESS;
-		}
-	} else {
-		status = oldStatus;
-	}
+	if (waitStatus <= 0)
+		status = waitStatus;
+	else
+		ASSERT(status != B_OK);
 
 	threadLocker.Unlock();
 
@@ -4013,28 +4078,43 @@ _user_get_cpu()
 
 
 status_t
-_user_get_thread_affinity(thread_id id, void* userMask, size_t size)
+_user_get_thread_affinity(thread_id id, void* userMask, size_t userMaskSize)
 {
-	if (userMask == NULL || id < B_OK)
+	const size_t maskSize = sizeof(CPUSet);
+	if (userMask == NULL || id < 0 || userMaskSize < maskSize)
 		return B_BAD_VALUE;
-
 	if (!IS_USER_ADDRESS(userMask))
 		return B_BAD_ADDRESS;
 
 	CPUSet mask;
 
-	if (id == 0)
-		id = thread_get_current_thread_id();
-	// get the thread
-	Thread* thread = Thread::GetAndLock(id);
-	if (thread == NULL)
-		return B_BAD_THREAD_ID;
-	BReference<Thread> threadReference(thread, true);
-	ThreadLocker threadLocker(thread, true);
-	memcpy(&mask, &thread->cpumask, sizeof(mask));
+	{
+		if (id == 0)
+			id = thread_get_current_thread_id();
+		Thread* thread = Thread::Get(id);
+		if (thread == NULL)
+			return B_BAD_THREAD_ID;
+		BReference<Thread> threadReference(thread, true);
 
-	if (user_memcpy(userMask, &mask, min_c(sizeof(mask), size)) < B_OK)
+		if (thread->team == team_get_kernel_team())
+			return B_NOT_ALLOWED;
+		if (thread->team != thread_get_current_thread()->team && geteuid() != 0)
+			return B_NOT_ALLOWED;
+
+		InterruptsSpinLocker schedulerLocker(thread->scheduler_lock);
+		mask = thread->cpumask;
+	}
+
+	if (mask.IsEmpty())
+		mask.SetAll();
+	mask = mask.And(gCPUEnabled);
+
+	if (user_memcpy(userMask, &mask, maskSize) < B_OK)
 		return B_BAD_ADDRESS;
+	if (userMaskSize > maskSize) {
+		if (user_memset((uint8*)userMask + maskSize, 0, userMaskSize - maskSize) != B_OK)
+			return B_BAD_ADDRESS;
+	}
 
 	return B_OK;
 }
@@ -4044,35 +4124,34 @@ _user_set_thread_affinity(thread_id id, const void* userMask, size_t size)
 {
 	if (userMask == NULL || id < B_OK || size < sizeof(CPUSet))
 		return B_BAD_VALUE;
-
 	if (!IS_USER_ADDRESS(userMask))
 		return B_BAD_ADDRESS;
 
 	CPUSet mask;
-	if (user_memcpy(&mask, userMask, min_c(sizeof(CPUSet), size)) < B_OK)
+	if (user_memcpy(&mask, userMask, sizeof(CPUSet)) < B_OK)
 		return B_BAD_ADDRESS;
 
-	CPUSet cpus;
-	cpus.SetAll();
-	for (int i = 0; i < smp_get_num_cpus(); i++)
-		cpus.ClearBit(i);
-	if (mask.Matches(cpus))
+	CPUSet andEnabled = mask.And(gCPUEnabled);
+	if (andEnabled.IsEmpty())
 		return B_BAD_VALUE;
+
+	// if setting to all enabled CPUs, just use no mask instead
+	if (andEnabled == gCPUEnabled)
+		mask.ClearAll();
 
 	if (id == 0)
 		id = thread_get_current_thread_id();
 
-	// get the thread
-	Thread* thread = Thread::GetAndLock(id);
+	Thread* thread = Thread::Get(id);
 	if (thread == NULL)
 		return B_BAD_THREAD_ID;
 	BReference<Thread> threadReference(thread, true);
-	ThreadLocker threadLocker(thread, true);
-	memcpy(&thread->cpumask, &mask, sizeof(mask));
 
-	// check if running on masked cpu
-	if (!thread->cpumask.GetBit(thread->cpu->cpu_num))
-		thread_yield();
+	if (thread->team == team_get_kernel_team())
+		return B_NOT_ALLOWED;
+	if (thread->team != thread_get_current_thread()->team && geteuid() != 0)
+		return B_NOT_ALLOWED;
 
+	scheduler_set_thread_affinity(thread, mask);
 	return B_OK;
 }

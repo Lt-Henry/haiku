@@ -95,6 +95,13 @@ ReadOnlyTint(rgb_color base)
 }
 
 
+float
+ReadOnlyTint(color_which base)
+{
+	return ReadOnlyTint(ui_color(base));
+}
+
+
 rgb_color
 InvertColor(rgb_color color)
 {
@@ -103,16 +110,16 @@ InvertColor(rgb_color color)
 
 
 rgb_color
-InvertedBackColor(rgb_color background)
+InvertColorSmart(rgb_color color)
 {
-	rgb_color inverted = InvertColor(background);
+	rgb_color inverted = InvertColor(color);
 
 	// The colors are different enough, we can use inverted
-	if (rgb_color::Contrast(background, inverted) > 127)
+	if (rgb_color::Contrast(color, inverted) > 127)
 		return inverted;
 
 	// use black or white
-	return background.IsLight() ? kBlack : kWhite;
+	return color.IsLight() ? kBlack : kWhite;
 }
 
 
@@ -648,7 +655,7 @@ DraggableIcon::MouseDown(BPoint point)
 	dragBitmap->Lock();
 	BView* view = new BView(dragBitmap->Bounds(), "", B_FOLLOW_NONE, 0);
 	dragBitmap->AddChild(view);
-	view->SetOrigin(0, 0);
+	view->SetOrigin(B_ORIGIN);
 	BRect clipRect(view->Bounds());
 	BRegion newClip;
 	newClip.Set(clipRect);
@@ -658,8 +665,7 @@ DraggableIcon::MouseDown(BPoint point)
 	view->SetHighColor(0, 0, 0, 0);
 	view->FillRect(view->Bounds());
 	view->SetDrawingMode(B_OP_ALPHA);
-	view->SetHighColor(0, 0, 0, 128);
-		// set the level of transparency by value
+	view->SetHighColor(0, 0, 0, 128); // 50% opaque
 	view->SetBlendingMode(B_CONSTANT_ALPHA, B_ALPHA_COMPOSITE);
 	view->DrawBitmap(fBitmap);
 	view->Sync();

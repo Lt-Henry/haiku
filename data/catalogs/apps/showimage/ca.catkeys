@@ -1,7 +1,6 @@
-1	catalan; valencian	x-vnd.Haiku-ShowImage	2453396430
+1	catalan; valencian	x-vnd.Haiku-ShowImage	549474543
 ShowImage	System name		Mostra la imatge
 Page setup…	Menus		Configuració de la pàgina...
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		El document %s (pàgina %d) ha canviat. Voleu tancar-lo?
 Previous file	Menus		Fitxer anterior
 View	Menus		Visualització
 Leave full screen	Menus		Surt de la pantalla completa
@@ -13,6 +12,7 @@ Height: 	PrintOptionsWindow		Alçada:
 Next file	Menus		Fitxer següent
 Slide show	Menus		Presentació
 Original size	Menus		Mida original
+The document '%filename%' has been changed. Do you want to close the document?	ClosePrompt		El document %filename% s'ha modificat. Voleu tancar el document?
 Width:	PrintOptionsWindow		Amplada:
 Resize to (in 1/72 inches):	PrintOptionsWindow		Canvia'n la mida a (en 1/72 polzades):
 Zoom factor in %:	PrintOptionsWindow		Factor d'ampliació en %:
@@ -26,8 +26,8 @@ Zoom in	Menus		Amplia
 Last page	Menus		Darrera pàgina
 Cancel	ClosePrompt		Cancel·la
 Attributes	Menus		Atributs
+Show boundaries marks	Menus		Mostra les marques dels límits
 High-quality zooming	Menus		Ampliació d'alta qualitat
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		El document %s ha canviat. Voleu tancar-lo?
 Close	Menus		Tanca
 Selection mode	Menus		Mode de selecció
 Reset rating	Menus		Restableix la puntuació
@@ -46,14 +46,13 @@ Stretch to window	Menus		Amplia a la finestra
 Job setup	PrintOptionsWindow		Configuració de la tasca
 Clear selection	Menus		Neteja la selecció
 Rotate clockwise	Menus		Gira en el sentit del rellotge
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		No s'ha pogut carregar la imatge. El fitxer o el traductor d’imatges no existeix.
 Open with…	Menus		Obre amb...
 Rotate counterclockwise	Menus		Gira en sentit antihorari
+The document '%filename%' (page %number%) has been changed. Do you want to close the document?	ClosePrompt		El document %filename% (pàgina %number%) s'ha modificat. Voleu tancar el document?
 Previous page	Menus		Pàgina anterior
 Fit to window	Menus		Ajusta a la finestra
 Go to page	Menus		Ves a la pàgina
 Browse	Menus		Navega
-Progress monitor	ProgressWindow		Monitor del progrés
 Edit	Menus		Edita
 Move to Trash	Menus		Mou a la paperera
 Use as background…	Menus		Usa com a fons...

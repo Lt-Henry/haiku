@@ -316,7 +316,7 @@ private:
 			BPoint				AlertPosition(const BRect& frame);
 	virtual BMessage*			ConvertToMessage(void* raw, int32 code);
 
-			void				_AddShortcut(uint32 key, uint32 modifiers,
+			void				_AddShortcut(uint32* _key, uint32* _modifiers,
 									BMenuItem* item);
 			BHandler*			_DetermineTarget(BMessage* message,
 									BHandler* target);
@@ -381,7 +381,9 @@ private:
 			uint32				_unused1;
 			BMenuBar*			fKeyMenuBar;
 			BButton*			fDefaultButton;
-			BList				fShortcuts;
+			void*				fShortcuts;
+			void*				_unused2;
+			int32				_unused3[5];
 			int32				fTopViewToken;
 			bool				fUpdateRequested;
 			bool				fOffscreen;

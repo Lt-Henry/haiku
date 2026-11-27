@@ -16,7 +16,6 @@
 class BBitmap;
 class BBitmapBuffer;
 class CardWindow;
-class UpdateQueue;
 
 
 class ViewHWInterface : public HWInterface {
@@ -31,8 +30,6 @@ public:
 	virtual	void				GetMode(display_mode* mode);
 
 	virtual status_t			GetDeviceInfo(accelerant_device_info* info);
-	virtual status_t			GetFrameBufferConfig(
-									frame_buffer_config& config);
 
 	virtual status_t			GetModeList(display_mode** _modeList,
 									uint32* _count);

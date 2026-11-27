@@ -218,7 +218,7 @@ MainApp::ArgvReceived(int32 argc, char** argv)
 	getcwd(cwd, sizeof(cwd));
 
 	for (int i = 1; i < argc; i++) {
-		BUrl url(argv[i]);
+		BUrl url(argv[i], true);
 		if (url.IsValid()) {
 			BMessage archivedUrl;
 			url.Archive(&archivedUrl);
@@ -419,8 +419,9 @@ MainApp::_ShowFilePanel(BFilePanel* panel, uint32 command,
 		if (message->FindString("title", &panelTitle) != B_OK)
 			panelTitle = defaultTitle;
 		{
-			BString finalPanelTitle = "MediaPlayer: ";
-			finalPanelTitle << panelTitle;
+			BString finalPanelTitle(B_TRANSLATE("%appname%: %title%"));
+			finalPanelTitle.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("MediaPlayer"));
+			finalPanelTitle.ReplaceFirst("%title%", panelTitle);
 			BAutolock lock(panel->Window());
 			panel->Window()->SetTitle(finalPanelTitle.String());
 		}

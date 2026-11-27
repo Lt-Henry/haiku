@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2023, Haiku, Inc. All rights reserved.
+ * Copyright 2001-2025, Haiku, Inc. All rights reserved.
  * Copyright 2003-2004 Kian Duffy, myob@users.sourceforge.net
  * Parts Copyright 1998-1999 Kazuho Okui and Takashi Murai.
  * All rights reserved. Distributed under the terms of the MIT license.
@@ -18,15 +18,12 @@
 
 #include "TermView.h"
 
-#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <termios.h>
 
 #include <algorithm>
 #include <new>
-#include <vector>
-
 #include <Alert.h>
 #include <Application.h>
 #include <Beep.h>
@@ -87,7 +84,11 @@ static property_info sPropList[] = {
 	{B_GET_PROPERTY, 0},
 	{B_DIRECT_SPECIFIER, 0},
 	"get tty name."},
-	{ 0  }
+	{ "command",
+	{B_EXECUTE_PROPERTY, 0},
+	{B_DIRECT_SPECIFIER, 0},
+	"execute command"},
+	{ 0  },
 };
 
 
@@ -170,12 +171,7 @@ TermView::TermView(BRect frame, const ShellParameters& shellParameters,
 	fRows(ROWS_DEFAULT),
 	fEncoding(M_UTF8),
 	fActive(false),
-	fScrBufSize(historySize),
-	fReportX10MouseEvent(false),
-	fReportNormalMouseEvent(false),
-	fReportButtonMouseEvent(false),
-	fReportAnyMouseEvent(false),
-	fEnableExtendedMouseCoordinates(false)
+	fScrBufSize(historySize)
 {
 	status_t status = _InitObject(shellParameters);
 	if (status != B_OK)
@@ -194,12 +190,7 @@ TermView::TermView(int rows, int columns,
 	fRows(rows),
 	fEncoding(M_UTF8),
 	fActive(false),
-	fScrBufSize(historySize),
-	fReportX10MouseEvent(false),
-	fReportNormalMouseEvent(false),
-	fReportButtonMouseEvent(false),
-	fReportAnyMouseEvent(false),
-	fEnableExtendedMouseCoordinates(false)
+	fScrBufSize(historySize)
 {
 	status_t status = _InitObject(shellParameters);
 	if (status != B_OK)
@@ -228,12 +219,7 @@ TermView::TermView(BMessage* archive)
 	fRows(ROWS_DEFAULT),
 	fEncoding(M_UTF8),
 	fActive(false),
-	fScrBufSize(1000),
-	fReportX10MouseEvent(false),
-	fReportNormalMouseEvent(false),
-	fReportButtonMouseEvent(false),
-	fReportAnyMouseEvent(false),
-	fEnableExtendedMouseCoordinates(false)
+	fScrBufSize(1000)
 {
 	BRect frame = Bounds();
 
@@ -245,13 +231,8 @@ TermView::TermView(BMessage* archive)
 		fRows = ROWS_DEFAULT;
 
 	int32 argc = 0;
-	if (archive->HasInt32("argc"))
-		archive->FindInt32("argc", &argc);
-
-	const char **argv = new const char*[argc];
-	for (int32 i = 0; i < argc; i++) {
-		archive->FindString("argv", i, (const char**)&argv[i]);
-	}
+	const char** argv = NULL;
+	_GetArgumentsFromMessage(archive, argv, argc);
 
 	// TODO: Retrieve colors, history size, etc. from archive
 	status_t status = _InitObject(ShellParameters(argc, argv));
@@ -286,15 +267,12 @@ TermView::_InitObject(const ShellParameters& shellParameters)
 	fFontWidth = 0;
 	fFontHeight = 0;
 	fFontAscent = 0;
-	fEmulateBold = false;
-	fAllowBold = true;
+	fBoldStyle = BOLD_USE_FONT;
+	fBrightenAnsi = true;
 	fFrameResized = false;
 	fResizeViewDisableCount = 0;
 	fLastActivityTime = 0;
 	fCursorState = 0;
-	fCursorStyle = BLOCK_CURSOR;
-	fCursorBlinking = true;
-	fCursorHidden = false;
 	fCursor = TermPos(0, 0);
 	fTextBuffer = NULL;
 	fVisibleTextBuffer = NULL;
@@ -305,6 +283,8 @@ TermView::_InitObject(const ShellParameters& shellParameters)
 	fTextBackColor = kWhiteColor;
 	fSelectForeColor = kWhiteColor;
 	fSelectBackColor = kBlackColor;
+	fCursorForeColor = fTextBackColor;
+	fCursorBackColor = fTextForeColor;
 	fScrollOffset = 0;
 	fLastSyncTime = 0;
 	fScrolledSinceLastSync = 0;
@@ -316,14 +296,6 @@ TermView::_InitObject(const ShellParameters& shellParameters)
 	fKeymap = NULL;
 	fKeymapChars = NULL;
 	fUseOptionAsMetaKey = false;
-	fInterpretMetaKey = true;
-	fMetaKeySendsEscape = true;
-	fUseBracketedPaste = false;
-	fReportX10MouseEvent = false;
-	fReportNormalMouseEvent = false;
-	fReportButtonMouseEvent = false;
-	fReportAnyMouseEvent = false;
-	fEnableExtendedMouseCoordinates = false;
 	fMouseClipboard = be_clipboard;
 	fDefaultState = new(std::nothrow) DefaultState(this);
 	fSelectState = new(std::nothrow) SelectState(this);
@@ -338,6 +310,10 @@ TermView::_InitObject(const ShellParameters& shellParameters)
 	fVisibleTextBuffer = new(std::nothrow) BasicTerminalBuffer;
 	if (fVisibleTextBuffer == NULL)
 		return B_NO_MEMORY;
+
+	bool alternateScroll = PrefHandler::Default()->getBool(PREF_ALTERNATE_SCROLL);
+	if (alternateScroll)
+		fTextBuffer->SetMode(MODE_ALTERNATE_SCROLL);
 
 	// TODO: Make the special word chars user-settable!
 	fCharClassifier = new(std::nothrow) DefaultCharClassifier(
@@ -364,12 +340,7 @@ TermView::_InitObject(const ShellParameters& shellParameters)
 	ShellParameters modifiedShellParameters(shellParameters);
 	modifiedShellParameters.SetEncoding(fEncoding);
 
-	error = fShell->Open(fRows, fColumns, modifiedShellParameters);
-
-	if (error < B_OK)
-		return error;
-
-	error = _AttachShell(fShell);
+	error = _AttachShell(fShell, modifiedShellParameters);
 	if (error < B_OK)
 		return error;
 
@@ -486,7 +457,7 @@ TermView::BackgroundColor()
 }
 
 
-inline int32
+int32
 TermView::_LineAt(float y) const
 {
 	int32 location = int32(y + fScrollOffset);
@@ -842,16 +813,19 @@ TermView::SetTermFont(const BFont *font)
 	fFontAscent = font_ascent;
 	fFontHeight = font_ascent + font_descent + font_leading + 1;
 
-	fCursorStyle = PrefHandler::Default() == NULL ? BLOCK_CURSOR
+	int cursorStyle = PrefHandler::Default() == NULL ? BLOCK_CURSOR
 		: PrefHandler::Default()->getCursor(PREF_CURSOR_STYLE);
+	fTextBuffer->SetCursorStyle(cursorStyle);
 	bool blinking = PrefHandler::Default()->getBool(PREF_BLINK_CURSOR);
 	SwitchCursorBlinking(blinking);
 
-	fEmulateBold = PrefHandler::Default() == NULL ? false
-		: PrefHandler::Default()->getBool(PREF_EMULATE_BOLD);
+	fBrightenAnsi = PrefHandler::Default() == NULL
+		? false
+		: PrefHandler::Default()->getBool(PREF_BRIGHTEN_ANSI);
 
-	fAllowBold = PrefHandler::Default() == NULL ? false
-		: PrefHandler::Default()->getBool(PREF_ALLOW_BOLD);
+	fBoldStyle = PrefHandler::Default() == NULL
+		? false
+		: PrefHandler::Default()->getBoldStyle(PREF_BOLD_STYLE);
 
 	_ScrollTo(0, false);
 	if (fScrollBar != NULL)
@@ -869,9 +843,9 @@ TermView::SetScrollBar(BScrollBar *scrollBar)
 
 
 void
-TermView::SwitchCursorBlinking(bool blinkingOn)
+TermView::SwitchCursorBlinking()
 {
-	fCursorBlinking = blinkingOn;
+	bool blinkingOn = fTextBuffer->IsMode(MODE_CURSOR_BLINKING);
 	if (blinkingOn) {
 		if (fCursorBlinkRunner == NULL) {
 			BMessage blinkMessage(kBlinkCursor);
@@ -881,10 +855,22 @@ TermView::SwitchCursorBlinking(bool blinkingOn)
 	} else {
 		// make sure the cursor becomes visible
 		fCursorState = 0;
-		_InvalidateTextRect(fCursor.x, fCursor.y, fCursor.x, fCursor.y);
 		delete fCursorBlinkRunner;
 		fCursorBlinkRunner = NULL;
 	}
+	_InvalidateTextRect(fCursor.x, fCursor.y, fCursor.x, fCursor.y);
+}
+
+
+void
+TermView::SwitchCursorBlinking(bool blinkingOn)
+{
+	if (blinkingOn) {
+		fTextBuffer->SetMode(MODE_CURSOR_BLINKING);
+	} else {
+		fTextBuffer->ResetMode(MODE_CURSOR_BLINKING);
+	}
+	SwitchCursorBlinking();
 }
 
 
@@ -923,18 +909,42 @@ TermView::Paste(BClipboard *clipboard)
 		ssize_t numBytes;
 		if (clipMsg->FindData("text/plain", B_MIME_TYPE,
 				(const void**)&text, &numBytes) == B_OK ) {
-			if (fUseBracketedPaste)
+			bool useBracketedPaste = fTextBuffer->IsMode(MODE_BRACKETED_PASTE);
+			if (useBracketedPaste)
 				fShell->Write(BEGIN_BRACKETED_PASTE_CODE, strlen(BEGIN_BRACKETED_PASTE_CODE));
 
 			_WritePTY(text, numBytes);
 
-			if (fUseBracketedPaste)
+			if (useBracketedPaste)
 				fShell->Write(END_BRACKETED_PASTE_CODE, strlen(END_BRACKETED_PASTE_CODE));
 		}
 
 		clipboard->Unlock();
 
 		_ScrollTo(0, true);
+	}
+}
+
+
+void
+TermView::SyncClipboard()
+{
+	if (be_clipboard != fMouseClipboard && be_clipboard->Lock()) {
+		if (fMouseClipboard->Lock()) {
+			BMessage* clipMsgA = be_clipboard->Data();
+			const char* text;
+			ssize_t numBytes;
+			if (clipMsgA->FindData("text/plain", B_MIME_TYPE,
+					(const void**)&text, &numBytes) == B_OK ) {
+				fMouseClipboard->Clear();
+				BMessage* clipMsgB = fMouseClipboard->Data();
+				clipMsgB->AddData("text/plain", B_MIME_TYPE,
+					text, numBytes);
+				fMouseClipboard->Commit();
+			}
+			fMouseClipboard->Unlock();
+		}
+		be_clipboard->Unlock();
 	}
 }
 
@@ -991,11 +1001,29 @@ TermView::_InvalidateTextRange(TermPos start, TermPos end)
 }
 
 
+void
+TermView::_GetArgumentsFromMessage(const BMessage* message, const char**& argv, int32& argc)
+{
+	type_code type;
+	if (message->GetInfo("argv", &type, &argc) == B_OK) {
+		argv = new const char*[argc + 1];
+		int32 i = 0;
+		while (message->FindString("argv", i, &argv[i]) == B_OK)
+			i++;
+		argv[i] = NULL;
+	}
+}
+
+
 status_t
-TermView::_AttachShell(Shell *shell)
+TermView::_AttachShell(Shell *shell, const ShellParameters& shellParameters)
 {
 	if (shell == NULL)
 		return B_BAD_VALUE;
+
+	status_t status = shell->Open(fRows, fColumns, shellParameters);
+	if (status != B_OK)
+		return status;
 
 	fShell = shell;
 
@@ -1043,8 +1071,7 @@ TermView::_DrawLinePart(float x1, float y1, Attributes attr,
 	if (highlight != NULL)
 		attr.state = highlight->Highlighter()->AdjustTextAttributes(attr.state);
 
-	inView->SetFont(attr.IsBold() && !fEmulateBold && fAllowBold
-		? &fBoldFont : &fHalfFont);
+	inView->SetFont(attr.IsBold() && fBoldStyle == BOLD_USE_FONT ? &fBoldFont : &fHalfFont);
 
 	// Set pen point
 	float x2 = x1 + fFontWidth * width;
@@ -1053,10 +1080,11 @@ TermView::_DrawLinePart(float x1, float y1, Attributes attr,
 	rgb_color rgb_fore = fTextForeColor;
 	rgb_color rgb_back = fTextBackColor;
 	rgb_color rgb_under = fTextForeColor;
+	rgb_color rgb_over = fTextForeColor;
 
 	// color attribute
 	if (attr.IsForeSet())
-		rgb_fore = attr.ForegroundColor(fTextBuffer->Palette());
+		rgb_fore = attr.ForegroundColor(fTextBuffer->Palette(), fBrightenAnsi);
 	if (attr.IsBackSet())
 		rgb_back = attr.BackgroundColor(fTextBuffer->Palette());
 	if (attr.IsUnderSet())
@@ -1070,8 +1098,8 @@ TermView::_DrawLinePart(float x1, float y1, Attributes attr,
 		rgb_fore = highlight->Highlighter()->ForegroundColor();
 		rgb_back = highlight->Highlighter()->BackgroundColor();
 	} else {
-		// Reverse attribute(If selected area, don't reverse color).
-		if (attr.IsInverse()) {
+		// Reverse attribute, either because the cell is inverted or the screen is.
+		if (attr.IsInverse() != fTextBuffer->IsScreenReverseVideoMode()) {
 			rgb_color rgb_tmp = rgb_fore;
 			rgb_fore = rgb_back;
 			rgb_back = rgb_tmp;
@@ -1082,6 +1110,9 @@ TermView::_DrawLinePart(float x1, float y1, Attributes attr,
 	inView->SetHighColor(rgb_back);
 	inView->FillRect(BRect(x1, y1, x2 - 1, y2 - 1));
 	inView->SetLowColor(rgb_back);
+
+	if (attr.IsHidden())
+		return;
 
 	// underline attribute
 	if (attr.IsUnder()) {
@@ -1133,30 +1164,27 @@ TermView::_DrawLinePart(float x1, float y1, Attributes attr,
 		}
 	}
 
+	// overline attribute
+	if (attr.IsOver()) {
+		inView->SetHighColor(rgb_over);
+		inView->MovePenTo(x1, y1);
+		inView->StrokeLine(BPoint(x1 , y1), BPoint(x2 , y1));
+	}
 
 	inView->SetHighColor(rgb_fore);
 
 	// Draw character.
 	if (attr.IsBold()) {
-		if (fEmulateBold) {
+		if (fBoldStyle == BOLD_SIMULATED) {
 			inView->MovePenTo(x1 - 1, y1 + fFontAscent - 1);
 			inView->DrawString((char *)buf);
 			inView->SetDrawingMode(B_OP_BLEND);
-		} else {
-			rgb_color bright = rgb_fore;
-
-			bright.red = saturated_add<uint8>(bright.red, 64);
-			bright.green = saturated_add<uint8>(bright.green, 64);
-			bright.blue = saturated_add<uint8>(bright.blue, 64);
-
-			inView->SetHighColor(bright);
 		}
 	}
 
 	inView->MovePenTo(x1, y1 + fFontAscent);
 	inView->DrawString((char *)buf);
 	inView->SetDrawingMode(B_OP_COPY);
-
 }
 
 
@@ -1174,9 +1202,10 @@ TermView::_DrawCursor()
 	Attributes attr;
 
 	bool cursorVisible = _IsCursorVisible();
+	int32 cursorStyle = fTextBuffer->CursorStyle();
 
 	if (cursorVisible) {
-		switch (fCursorStyle) {
+		switch (cursorStyle) {
 			case UNDERLINE_CURSOR:
 				rect.top = rect.bottom - 2;
 				break;
@@ -1192,7 +1221,7 @@ TermView::_DrawCursor()
 	Highlight* highlight = _CheckHighlightRegion(TermPos(fCursor.x, fCursor.y));
 	if (fVisibleTextBuffer->GetChar(fCursor.y - firstVisible, fCursor.x,
 			character, attr) == A_CHAR
-			&& (fCursorStyle == BLOCK_CURSOR || !cursorVisible)) {
+			&& (fTextBuffer->CursorStyle() == BLOCK_CURSOR || !cursorVisible)) {
 
 		int32 width = attr.IsWidth() ? FULL_WIDTH : HALF_WIDTH;
 		char buffer[5];
@@ -1210,12 +1239,7 @@ TermView::_DrawCursor()
 		else {
 			uint32 count = 0;
 			rgb_color rgb_back = fTextBackColor;
-			if (fTextBuffer->IsAlternateScreenActive())
-				// alternate screen uses cell attributes beyond the line ends
-				fTextBuffer->GetCellAttributes(
-						fCursor.y, fCursor.x, attr, count);
-			else
-				fVisibleTextBuffer->GetLineColor(fCursor.y - firstVisible, attr);
+			fTextBuffer->GetCellAttributes(fCursor.y, fCursor.x, attr, count);
 
 			if (attr.IsBackSet())
 				rgb_back = attr.BackgroundColor(fTextBuffer->Palette());
@@ -1223,10 +1247,13 @@ TermView::_DrawCursor()
 			SetHighColor(rgb_back);
 		}
 
-		if (attr.IsWidth() && fCursorStyle != IBEAM_CURSOR)
+		if (attr.IsWidth() && cursorStyle != IBEAM_CURSOR)
 			rect.right += fFontWidth;
-
-		FillRect(rect);
+		if (Window()->IsActive() && IsFocus()) {
+			FillRect(rect);
+		} else {
+			StrokeRect(rect);
+		}
 	}
 }
 
@@ -1234,7 +1261,7 @@ TermView::_DrawCursor()
 bool
 TermView::_IsCursorVisible() const
 {
-	return !fCursorHidden && fCursorState < kCursorVisibleIntervals;
+	return !fTextBuffer->IsMode(MODE_CURSOR_HIDDEN) && fCursorState < kCursorVisibleIntervals;
 }
 
 
@@ -1376,7 +1403,7 @@ TermView::Draw(BRect updateRect)
 		if (clearLeft <= updateRect.right) {
 			BRect rect(clearLeft, updateRect.top, updateRect.right,
 				updateRect.bottom);
-			SetHighColor(fTextBackColor);
+			SetHighColor(fTextBuffer->IsScreenReverseVideoMode() ? fTextForeColor : fTextBackColor);
 			FillRect(rect);
 		}
 	}
@@ -1387,7 +1414,7 @@ TermView::Draw(BRect updateRect)
 		if (clearTop <= updateRect.bottom) {
 			BRect rect(updateRect.left, clearTop, updateRect.right,
 				updateRect.bottom);
-			SetHighColor(fTextBackColor);
+			SetHighColor(fTextBuffer->IsScreenReverseVideoMode() ? fTextForeColor : fTextBackColor);
 			FillRect(rect);
 		}
 	}
@@ -1428,20 +1455,18 @@ TermView::Draw(BRect updateRect)
 
 					rgb_color rgb_back = highlight != NULL
 						? highlight->Highlighter()->BackgroundColor()
-						: fTextBackColor;
+						: fTextBuffer->IsScreenReverseVideoMode() ? fTextForeColor
+																  : fTextBackColor;
 
-					if (fTextBuffer->IsAlternateScreenActive()) {
-						// alternate screen uses cell attributes
-						// beyond the line ends
-						uint32 count = 0;
-						fTextBuffer->GetCellAttributes(j, i, attr, count);
-						rect.right = rect.left + fFontWidth * count - 1;
-						nextColumn = i + count;
-					} else
-						fVisibleTextBuffer->GetLineColor(j - firstVisible, attr);
+					uint32 nextCount = 0;
+					fTextBuffer->GetCellAttributes(j, i, attr, nextCount);
+					rect.right = rect.left + fFontWidth * nextCount - 1;
+					nextColumn = i + nextCount;
 
 					if (attr.IsBackSet())
-						rgb_back = attr.BackgroundColor(fTextBuffer->Palette());
+						rgb_back = fTextBuffer->IsScreenReverseVideoMode()
+							? attr.BackgroundColor(fTextBuffer->Palette())
+							: attr.ForegroundColor(fTextBuffer->Palette());
 
 					SetHighColor(rgb_back);
 					rgb_back = HighColor();
@@ -1589,7 +1614,7 @@ TermView::FrameResized(float width, float height)
 	}
 
 	BString text;
-	text << columns << " x " << rows;
+	text.SetToFormat("%" B_PRId32 " × %" B_PRId32, columns, rows);
 	fResizeView->SetText(text.String());
 	fResizeView->GetPreferredSize(&width, &height);
 	fResizeView->ResizeTo(width * 1.5, height * 1.5);
@@ -1682,23 +1707,7 @@ TermView::MessageReceived(BMessage *message)
 			// This message originates from the system clipboard. Overwrite
 			// the contents of the mouse clipboard with the ones from the
 			// system clipboard, in case it contains text data.
-			if (be_clipboard->Lock()) {
-				if (fMouseClipboard->Lock()) {
-					BMessage* clipMsgA = be_clipboard->Data();
-					const char* text;
-					ssize_t numBytes;
-					if (clipMsgA->FindData("text/plain", B_MIME_TYPE,
-							(const void**)&text, &numBytes) == B_OK ) {
-						fMouseClipboard->Clear();
-						BMessage* clipMsgB = fMouseClipboard->Data();
-						clipMsgB->AddData("text/plain", B_MIME_TYPE,
-							text, numBytes);
-						fMouseClipboard->Commit();
-					}
-					fMouseClipboard->Unlock();
-				}
-				be_clipboard->Unlock();
-			}
+			SyncClipboard();
 			break;
 
 		case B_SELECT_ALL:
@@ -1741,6 +1750,37 @@ TermView::MessageReceived(BMessage *message)
 					BView::MessageReceived(message);
 			} else
 				BView::MessageReceived(message);
+			break;
+		}
+
+		case B_EXECUTE_PROPERTY:
+		{
+			int32 i;
+			BMessage specifier;
+			if (message->GetCurrentSpecifier(&i, &specifier) == B_OK
+				&& strcmp("command",
+					specifier.FindString("property", i)) == 0) {
+
+				Shell* shell = _DetachShell();
+				shell->Close();
+
+				int32 argc = 0;
+				const char** argv = NULL;
+				_GetArgumentsFromMessage(message, argv, argc);
+
+				if (message->GetBool("clear", false))
+					Clear();
+
+				ShellParameters shellParameters(argc, argv);
+				shellParameters.SetEncoding(fEncoding);
+				_AttachShell(shell, shellParameters);
+
+				delete[] argv;
+
+				message->SendReply(B_REPLY);
+			} else {
+				BView::MessageReceived(message);
+			}
 			break;
 		}
 
@@ -1790,17 +1830,18 @@ TermView::MessageReceived(BMessage *message)
 
 		case B_MOUSE_WHEEL_CHANGED:
 		{
-			// overridden to allow scrolling emulation in alternative screen
-			// mode
 			BAutolock locker(fTextBuffer);
+			bool alternateScroll = fTextBuffer->IsMode(MODE_ALTERNATE_SCROLL);
 			float deltaY = 0;
-			if (fTextBuffer->IsAlternateScreenActive()
-				&& message->FindFloat("be:wheel_delta_y", &deltaY) == B_OK
-				&& deltaY != 0) {
+			bool alternateScreenActive = fTextBuffer->IsAlternateScreenActive();
+			bool mouseOff = fTextBuffer->IsMouseMode(MOUSE_MODE_OFF);
+			locker.Unlock();
+
+			if (alternateScroll && alternateScreenActive
+				&& message->FindFloat("be:wheel_delta_y", &deltaY) == B_OK && deltaY != 0) {
 				// We are in alternative screen mode and have a vertical delta
 				// we can work with -- emulate scrolling via terminal escape
 				// sequences.
-				locker.Unlock();
 
 				// scroll pagewise, if one of Option, Command, or Control is
 				// pressed
@@ -1825,9 +1866,20 @@ TermView::MessageReceived(BMessage *message)
 					toWrite << stepString;
 
 				_WritePTY(toWrite.String(), toWrite.Length());
+			} else if (!alternateScroll && !mouseOff
+				&& message->FindFloat("be:wheel_delta_y", &deltaY) == B_OK && deltaY != 0) {
+				// The application has requested mouse events, encode wheel up/down and pass along.
+				BPoint where;
+				uint32 buttons;
+				GetMouse(&where, &buttons, false);
+				_UpdateModifiers();
+				TermPos clickPos = _ConvertToTerminal(where);
+				_SendMouseEvent(buttons, modifiers(), clickPos.x, clickPos.y, false, false,
+					deltaY > 0 ? MOUSE_WHEEL_DOWN : MOUSE_WHEEL_UP);
+				fMouseButtons = buttons;
+				fLastClickPoint = where;
 			} else {
 				// let the BView's implementation handle the standard scrolling
-				locker.Unlock();
 				BView::MessageReceived(message);
 			}
 
@@ -1919,62 +1971,7 @@ TermView::MessageReceived(BMessage *message)
 		}
 		case MSG_SET_CURSOR_STYLE:
 		{
-			int32 style = BLOCK_CURSOR;
-			if (message->FindInt32("style", &style) == B_OK)
-				fCursorStyle = style;
-
-			bool blinking = fCursorBlinking;
-			if (message->FindBool("blinking", &blinking) == B_OK)
-				SwitchCursorBlinking(blinking);
-
-			bool hidden = fCursorHidden;
-			if (message->FindBool("hidden", &hidden) == B_OK)
-				fCursorHidden = hidden;
-			break;
-		}
-		case MSG_ENABLE_META_KEY:
-		{
-			bool enable;
-			if (message->FindBool("enableInterpretMetaKey", &enable) == B_OK)
-				fInterpretMetaKey = enable;
-
-			if (message->FindBool("enableMetaKeySendsEscape", &enable) == B_OK)
-				fMetaKeySendsEscape = enable;
-			break;
-		}
-		case MSG_ENABLE_BRACKETED_PASTE:
-		{
-			bool enable;
-			if (message->FindBool("enableBracketedPaste", &enable) == B_OK)
-				fUseBracketedPaste = enable;
-			break;
-		}
-		case MSG_REPORT_MOUSE_EVENT:
-		{
-			bool value;
-			if (message->FindBool("reportX10MouseEvent", &value) == B_OK)
-				fReportX10MouseEvent = value;
-
-			// setting one of the three disables the other two
-			if (message->FindBool("reportNormalMouseEvent", &value) == B_OK) {
-				fReportNormalMouseEvent = value;
-				fReportButtonMouseEvent = false;
-				fReportAnyMouseEvent = false;
-			}
-			if (message->FindBool("reportButtonMouseEvent", &value) == B_OK) {
-				fReportButtonMouseEvent = value;
-				fReportNormalMouseEvent = false;
-				fReportAnyMouseEvent = false;
-			}
-			if (message->FindBool("reportAnyMouseEvent", &value) == B_OK) {
-				fReportAnyMouseEvent = value;
-				fReportNormalMouseEvent = false;
-				fReportButtonMouseEvent = false;
-			}
-
-			if (message->FindBool(
-				"enableExtendedMouseCoordinates", &value) == B_OK)
-				fEnableExtendedMouseCoordinates = value;
+			SwitchCursorBlinking();
 			break;
 		}
 		case MSG_REMOVE_RESIZE_VIEW_IF_NEEDED:
@@ -2521,57 +2518,90 @@ TermView::_MouseDistanceSinceLastClick(BPoint where)
 
 
 void
-TermView::_SendMouseEvent(int32 buttons, int32 mode, int32 x, int32 y,
-	bool motion, bool upEvent)
+TermView::_SendMouseEvent(int32 buttons, int32 modifiers, int32 x, int32 y, bool motion,
+	bool upEvent, int wheelButtons)
 {
-	if (!fEnableExtendedMouseCoordinates) {
-		char xtermButtons;
-		if (buttons == B_PRIMARY_MOUSE_BUTTON)
-			xtermButtons = 32 + 0;
-		else if (buttons == B_SECONDARY_MOUSE_BUTTON)
-			xtermButtons = 32 + 1;
-		else if (buttons == B_TERTIARY_MOUSE_BUTTON)
-			xtermButtons = 32 + 2;
-		else
-			xtermButtons = 32 + 3;
+	// Filter events based on active mode.
+	if (fTextBuffer->IsMouseMode(MOUSE_MODE_OFF))
+		return;
 
-		// dragging motion
-		if (buttons != 0 && motion && fReportButtonMouseEvent)
-			xtermButtons += 32;
+	if (fTextBuffer->IsMouseMode(MOUSE_MODE_X10) && (upEvent || motion))
+		return;
 
-		char xtermX = x + 1 + 32;
-		char xtermY = y + 1 + 32;
+	if (fTextBuffer->IsMouseMode(MOUSE_MODE_NORMAL) && motion)
+		return;
 
-		char destBuffer[6];
-		destBuffer[0] = '\033';
-		destBuffer[1] = '[';
-		destBuffer[2] = 'M';
-		destBuffer[3] = xtermButtons;
-		destBuffer[4] = xtermX;
-		destBuffer[5] = xtermY;
-		fShell->Write(destBuffer, 6);
-	} else {
-		char xtermButtons;
-		if ((buttons & B_PRIMARY_MOUSE_BUTTON)
-			!= (motion ? 0 : (fMouseButtons & B_PRIMARY_MOUSE_BUTTON))) {
-			xtermButtons = 0;
-		} else if ((buttons & B_SECONDARY_MOUSE_BUTTON)
-			!= (motion ? 0 : (fMouseButtons & B_SECONDARY_MOUSE_BUTTON))) {
-			xtermButtons = 2;
-		} else if ((buttons & B_TERTIARY_MOUSE_BUTTON)
-			!= (motion ? 0 : (fMouseButtons & B_TERTIARY_MOUSE_BUTTON))) {
-			xtermButtons = 1;
-		} else
-			xtermButtons = 3;
-
-		// nur button events requested
-		if (buttons == 0 && motion && fReportButtonMouseEvent)
+	if (fTextBuffer->IsMouseProtocol(MOUSE_PROTOCOL_X10) && fEncoding == M_UTF8) {
+		// Coordinates outside (160,94) (1-based) in X10 encoding result in byte pairs that can be
+		// decoded as a single UTF8 character, which could corrupt the stream. Do not send data
+		// outside that range.
+		if (x >= 160 || y >= 94)
 			return;
+	}
 
-		// dragging motion
-		if (buttons != 0 && motion && fReportButtonMouseEvent)
-			xtermButtons += 32;
+	if (fTextBuffer->IsMouseProtocol(MOUSE_PROTOCOL_UTF8)) {
+		// XTerm UTF8 encoding is limited to 2015.  Do not send data outside that range.
+		if (x > 2015 || y > 2015)
+			return;
+	}
 
+	// Terminal buttons follow X10 convention: button 1 is left (primary), button 2 is middle
+	// (paste), and button 3 is right (popup). To match the API meaning here we must map button 2
+	// to TERTIARY and button 3 to SECONDARY.
+	bool button1 = (buttons & B_PRIMARY_MOUSE_BUTTON) != 0;
+	bool button2 = (buttons & B_TERTIARY_MOUSE_BUTTON) != 0;
+	bool button3 = (buttons & B_SECONDARY_MOUSE_BUTTON) != 0;
+	bool oldButton1 = (fMouseButtons & B_PRIMARY_MOUSE_BUTTON) != 0;
+	bool oldButton2 = (fMouseButtons & B_TERTIARY_MOUSE_BUTTON) != 0;
+	bool oldButton3 = (fMouseButtons & B_SECONDARY_MOUSE_BUTTON) != 0;
+	int shiftModifier = (modifiers & B_SHIFT_KEY) != 0 ? 4 : 0;
+	int metaModifier = (modifiers & B_OPTION_KEY) != 0 ? 8 : 0;
+	int ctrlModifier = (modifiers & B_CONTROL_KEY) != 0 ? 16 : 0;
+
+	if (fTextBuffer->IsMouseMode(MOUSE_MODE_BUTTON_EVENT) && motion
+		&& !(button1 || button2 || button3)) {
+		return;
+	}
+
+	// The event will be sent, now encode it.
+	int xtermButtons;
+
+	if (fTextBuffer->IsMouseProtocol(MOUSE_PROTOCOL_SGR) && upEvent) {
+		// SGR encoding identifies the specific button that was released. This requires checking
+		// against the previous button state, which is in fMouseButtons.
+		if (oldButton1 && !button1) {
+			xtermButtons = 0;
+		} else if (oldButton2 && !button2) {
+			xtermButtons = 1;
+		} else if (oldButton3 && !button3) {
+			xtermButtons = 2;
+		} else {
+			// Unknown button state, bail out. This should not happen: upEvent should only be true
+			// when one of the specifically these three (1, 2, 3) previously-down buttons was
+			// released.
+			return;
+		}
+	} else {
+		if (button1 && (!oldButton1 || motion))
+			xtermButtons = 0;
+		else if (button2 && (!oldButton2 || motion))
+			xtermButtons = 1;
+		else if (button3 && (!oldButton3 || motion))
+			xtermButtons = 2;
+		else if ((wheelButtons & MOUSE_WHEEL_UP) != 0)
+			xtermButtons = 64;
+		else if ((wheelButtons & MOUSE_WHEEL_DOWN) != 0)
+			xtermButtons = 65;
+		else
+			xtermButtons = 3;
+	}
+
+	if (motion)
+		xtermButtons += 32;
+
+	xtermButtons |= shiftModifier | metaModifier | ctrlModifier;
+
+	if (fTextBuffer->IsMouseProtocol(MOUSE_PROTOCOL_SGR)) {
 		int16 xtermX = x + 1;
 		int16 xtermY = y + 1;
 
@@ -2579,6 +2609,37 @@ TermView::_SendMouseEvent(int32 buttons, int32 mode, int32 x, int32 y,
 		int size = snprintf(destBuffer, sizeof(destBuffer), "\033[<%u;%u;%u%c",
 			xtermButtons, xtermX, xtermY, upEvent ? 'm' : 'M');
 		fShell->Write(destBuffer, size);
+		return;
+	}
+
+	// X10 and UTF8 encoding
+	uint8 xtermX = x + 1 + 32;
+	uint8 xtermY = y + 1 + 32;
+
+	char destBuffer[6];
+	destBuffer[0] = '\033';
+	destBuffer[1] = '[';
+	destBuffer[2] = 'M';
+	destBuffer[3] = (uint8)(xtermButtons + 32);
+	destBuffer[4] = xtermX;
+	destBuffer[5] = xtermY;
+
+	if (fTextBuffer->IsMouseProtocol(MOUSE_PROTOCOL_X10)) {
+		fShell->Write(destBuffer, 6);
+	} else if (fTextBuffer->IsMouseProtocol(MOUSE_PROTOCOL_UTF8)) {
+		char utf8Buffer[2];
+		for (int i = 0; i < 6; i++) {
+			uint8 ch = (uint8)destBuffer[i];
+			int n = 1;
+			if (ch <= 0x7F) {
+				utf8Buffer[0] = (char)ch;
+			} else {
+				utf8Buffer[0] = (uint8)(0xC0 | ((ch >> 6) & 0x1F));
+				utf8Buffer[1] = (uint8)(0x80 | (ch & 0x3F));
+				n = 2;
+			}
+			fShell->Write(utf8Buffer, n);
+		}
 	}
 }
 

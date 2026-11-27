@@ -7,27 +7,13 @@
  * Distributed under the terms of the NewOS License.
  */
 
-
-#include <debug.h>
-
-#if KDEBUG
-#define KDEBUG_STATIC static
-static status_t _mutex_lock(struct mutex* lock, void* locker);
-static void _mutex_unlock(struct mutex* lock);
-#else
-#define KDEBUG_STATIC
-#define mutex_lock		mutex_lock_inline
-#define mutex_unlock	mutex_unlock_inline
-#define mutex_trylock	mutex_trylock_inline
-#define mutex_lock_with_timeout	mutex_lock_with_timeout_inline
-#endif
-
 #include <lock.h>
 
 #include <stdlib.h>
 #include <string.h>
 
-#include <int.h>
+#include <debug.h>
+#include <interrupts.h>
 #include <kernel.h>
 #include <listeners.h>
 #include <scheduling_analysis.h>
@@ -49,6 +35,17 @@ struct rw_lock_waiter {
 };
 
 #define MUTEX_FLAG_RELEASED		0x2
+
+
+#if KDEBUG
+#define KDEBUG_STATIC static
+#define RECURSIVE_LOCK_HOLDER(recursiveLock)	((recursiveLock)->lock.holder)
+static status_t _mutex_lock(struct mutex* lock, void* locker);
+static void _mutex_unlock(struct mutex* lock);
+#else
+#define KDEBUG_STATIC
+#define RECURSIVE_LOCK_HOLDER(recursiveLock)	((recursiveLock)->holder)
+#endif
 
 
 int32
@@ -256,6 +253,20 @@ recursive_lock_switch_from_read_lock(rw_lock* from, recursive_lock* to)
 }
 
 
+void
+recursive_lock_transfer_lock(recursive_lock* lock, thread_id thread)
+{
+	if (lock->recursion != 1)
+		panic("invalid recursion level for lock transfer!");
+
+#if !KDEBUG
+	lock->holder = thread;
+#endif
+
+	mutex_transfer_lock(&lock->lock, thread);
+}
+
+
 static int
 dump_recursive_lock_info(int argc, char** argv)
 {
@@ -320,6 +331,7 @@ rw_lock_wait(rw_lock* lock, bool writer, InterruptsSpinLocker& locker)
 	status_t result = thread_block();
 
 	locker.Lock();
+	ASSERT(result != B_OK || waiter.thread == NULL);
 	return result;
 }
 
@@ -347,8 +359,8 @@ rw_lock_unblock(rw_lock* lock)
 
 		// unblock thread
 		thread_unblock(waiter->thread, B_OK);
-
 		waiter->thread = NULL;
+
 		return RW_LOCK_WRITER_COUNT_BASE;
 	}
 
@@ -364,7 +376,6 @@ rw_lock_unblock(rw_lock* lock)
 
 		// unblock thread
 		thread_unblock(waiter->thread, B_OK);
-
 		waiter->thread = NULL;
 	} while ((waiter = lock->waiters) != NULL && !waiter->writer);
 
@@ -452,7 +463,7 @@ rw_lock_destroy(rw_lock* lock)
 #if KDEBUG_RW_LOCK_DEBUG
 
 bool
-_rw_lock_is_read_locked(rw_lock* lock)
+_rw_lock_is_read_locked(const rw_lock* lock)
 {
 	if (lock->holder == thread_get_current_thread_id())
 		return true;
@@ -828,6 +839,22 @@ dump_rw_lock_info(int argc, char** argv)
 	kprintf("  owner count:     %#" B_PRIx32 "\n", lock->owner_count);
 	kprintf("  flags:           %#" B_PRIx32 "\n", lock->flags);
 
+#if KDEBUG_RW_LOCK_DEBUG
+	kprintf("  reader threads:");
+	if (lock->active_readers > 0) {
+		ThreadListIterator iterator;
+		while (Thread* thread = iterator.Next()) {
+			for (size_t i = 0; i < B_COUNT_OF(Thread::held_read_locks); i++) {
+				if (thread->held_read_locks[i] == lock) {
+					kprintf(" %" B_PRId32, thread->id);
+					break;
+				}
+			}
+		}
+	}
+	kprintf("\n");
+#endif
+
 	kprintf("  waiting threads:");
 	rw_lock_waiter* waiter = lock->waiters;
 	while (waiter != NULL) {
@@ -878,9 +905,12 @@ mutex_destroy(mutex* lock)
 	InterruptsSpinLocker locker(lock->lock);
 
 #if KDEBUG
-	if (lock->holder != -1 && thread_get_current_thread_id() != lock->holder) {
+	// Never-used statically initialized mutexes will have holder set to 0, because
+	// MUTEX_INITIALIZER needs to be the same for both KDEBUG and non-KDEBUG kernels.
+	if (lock->holder != 0 && lock->holder != -1
+			&& thread_get_current_thread_id() != lock->holder) {
 		panic("mutex_destroy(): the lock (%p) is held by %" B_PRId32 ", not "
-			"by the caller", lock, lock->holder);
+			"by the caller @! bt %" B_PRId32, lock, lock->holder, lock->holder);
 		if (_mutex_lock(lock, &locker) != B_OK)
 			return;
 		locker.Lock();
@@ -900,7 +930,7 @@ mutex_destroy(mutex* lock)
 	lock->name = NULL;
 	lock->flags = 0;
 #if KDEBUG
-	lock->holder = 0;
+	lock->holder = INT16_MIN;
 #else
 	lock->count = INT16_MIN;
 #endif
@@ -962,6 +992,7 @@ mutex_switch_from_read_lock(rw_lock* from, mutex* to)
 			"for locks %p, %p", from, to);
 	}
 #endif
+	ASSERT(from->holder != thread_get_current_thread_id());
 
 	InterruptsSpinLocker locker(to->lock);
 
@@ -994,13 +1025,13 @@ _mutex_lock(mutex* lock, void* _locker)
 	// Might have been released after we decremented the count, but before
 	// we acquired the spinlock.
 #if KDEBUG
-	if (lock->holder < 0) {
+	if (lock->holder == 0 || lock->holder == -1) {
 		lock->holder = thread_get_current_thread_id();
 		return B_OK;
 	} else if (lock->holder == thread_get_current_thread_id()) {
 		panic("_mutex_lock(): double lock of %p by thread %" B_PRId32, lock,
 			lock->holder);
-	} else if (lock->holder == 0) {
+	} else if (lock->holder < -1) {
 		panic("_mutex_lock(): using uninitialized lock %p", lock);
 	}
 #else

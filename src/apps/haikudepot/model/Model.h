@@ -1,21 +1,24 @@
 /*
  * Copyright 2013-2014, Stephan Aßmus <superstippi@gmx.de>.
- * Copyright 2016-2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2016-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 #ifndef MODEL_H
 #define MODEL_H
 
+
 #include <vector>
+#include <map>
 
 #include <Locker.h>
 
-#include "AbstractProcess.h"
 #include "DepotInfo.h"
-#include "LanguageRepository.h"
-#include "PackageFilterModel.h"
-#include "PackageIconTarRepository.h"
+#include "Language.h"
+#include "PackageFilter.h"
+#include "PackageFilterSpecification.h"
+#include "PackageIconDefaultRepository.h"
 #include "PackageInfo.h"
+#include "PackageInfoListener.h"
 #include "PackageScreenshotRepository.h"
 #include "RatingStability.h"
 #include "ScreenshotCoordinate.h"
@@ -37,9 +40,14 @@ class ModelListener : public BReferenceable {
 public:
 	virtual						~ModelListener();
 
+	virtual	void				SelectedPackageChanged() = 0;
 	virtual	void				AuthorizationChanged() = 0;
-	virtual void				CategoryListChanged() = 0;
-	virtual void				ScreenshotCached(const ScreenshotCoordinate& coordinate) = 0;
+	virtual	void				CategoryListChanged() = 0;
+	virtual	void				ScreenshotCached(const ScreenshotCoordinate& coordinate) = 0;
+	virtual	void				IconsChanged() = 0;
+	virtual	void				PackageFilterChanged() = 0;
+	virtual	void				PackageListViewModeChanged() = 0;
+	virtual void				CanNicknamePasswordAuthenticateChanged() = 0;
 };
 
 
@@ -54,82 +62,120 @@ public:
 };
 
 
+/*!	This class conveys summary information about all the packages that are
+	stored in the model.
+*/
+
+class PackagesSummary {
+public:
+								PackagesSummary();
+								PackagesSummary(
+									bool anyProminentPackages,
+									bool anyNativeDesktop,
+									bool anyDesktop);
+	virtual						~PackagesSummary();
+
+			PackagesSummary&	operator=(const PackagesSummary& other);
+
+			bool				HasAnyProminentPackages() const;
+			bool				HasAnyNativeDesktop() const;
+			bool				HasAnyDesktop() const;
+
+private:
+			bool				fAnyProminentPackages;
+			bool				fAnyNativeDesktop;
+			bool				fAnyDesktop;
+
+};
+
+
 class Model : public PackageScreenshotRepositoryListener {
 public:
 								Model();
 	virtual						~Model();
 
-			PackageFilterModel*	PackageFilter();
-			PackageIconRepository&
-								GetPackageIconRepository();
-			status_t			InitPackageIconRepository();
+			void				Clear();
+
+			PackageInfoRef		SelectedPackage() const;
+			void				SetSelectedPackage(const PackageInfoRef& package);
+			void				ClearSelectedPackage();
+
+			void				AddListener(const ModelListenerRef& listener);
+			void				AddPackageListener(const PackageInfoListenerRef& packageListener);
+
 			PackageScreenshotRepository*
 								GetPackageScreenshotRepository();
 
-			BLocker*			Lock()
-									{ return &fLock; }
+			void				SetFilterSpecification(const PackageFilterSpecificationRef& value);
+	const 	PackageFilterSpecificationRef
+								FilterSpecification() const;
+			PackageFilterRef	Filter() const;
 
-			void				AddListener(const ModelListenerRef& listener);
+			PackageIconRepositoryRef
+								IconRepository();
+			void				SetIconRepository(PackageIconRepositoryRef value);
 
-			LanguageRef			PreferredLanguage() const;
-			void				SetPreferredLanguage(LanguageRef value);
-			LanguageRepository*	Languages();
+			const std::vector<PackageInfoRef>
+								Packages() const;
+			const std::vector<PackageInfoRef>
+								FilteredPackages() const;
+			void				AddPackage(const PackageInfoRef& package);
+			void				AddPackageWithChange(const PackageInfoRef& package,
+									uint32 changeMask);
+			void				AddPackages(const std::vector<PackageInfoRef>& packages);
+			void				AddPackagesWithChange(const std::vector<PackageInfoRef>& packages,
+									uint32 changesMask);
+			const PackageInfoRef
+								PackageForName(const BString& name) const;
+			bool				HasPackage(const BString& packageName) const;
+	const	PackagesSummary		GeneratePackagesSummary() const;
 
-			PackageInfoRef		PackageForName(const BString& name);
+	const	LanguageRef			PreferredLanguage() const;
+			void				SetPreferredLanguage(const LanguageRef& value);
+	const	std::vector<LanguageRef>
+								Languages() const;
+			void				SetLanguagesAndPreferred(const std::vector<LanguageRef>& value,
+									const LanguageRef& preferred);
 
-			void				MergeOrAddDepot(const DepotInfoRef& depot);
-			bool				HasDepot(const BString& name) const;
-			int32				CountDepots() const;
-			DepotInfoRef		DepotAtIndex(int32 index) const;
-			const DepotInfoRef	DepotForName(const BString& name) const;
-			bool				HasAnyProminentPackages();
+			void				SetDepots(const DepotInfoRef& depot);
+			void				SetDepots(const std::vector<DepotInfoRef>& depots);
+	const	std::vector<DepotInfoRef>
+								Depots() const;
+	const DepotInfoRef			DepotForName(const BString& name) const;
+	const DepotInfoRef			DepotForIdentifier(const BString& identifier) const;
 
-			void				Clear();
+	const	std::vector<CategoryRef>
+								Categories() const;
+			void				SetCategories(const std::vector<CategoryRef> value);
+			bool				HasCategories();
 
-			int32				CountCategories() const;
-			CategoryRef			CategoryByCode(BString& code) const;
-			CategoryRef			CategoryAtIndex(int32 index) const;
-			void				AddCategories(
-									std::vector<CategoryRef>& values);
-
-			int32				CountRatingStabilities() const;
-			RatingStabilityRef	RatingStabilityByCode(BString& code) const;
-			RatingStabilityRef	RatingStabilityAtIndex(int32 index) const;
-			void				AddRatingStabilities(
-									std::vector<RatingStabilityRef>& values);
-
-			void				SetStateForPackagesByName(
-									BStringList& packageNames,
-									PackageState state);
-
+	const	std::vector<RatingStabilityRef>
+								RatingStabilities() const;
+			void				SetRatingStabilities(const std::vector<RatingStabilityRef> value);
 
 			void				SetPackageListViewMode(
 									package_list_view_mode mode);
 			package_list_view_mode
-								PackageListViewMode() const
-									{ return fPackageListViewMode; }
+								PackageListViewMode() const;
 
 			void				SetCanShareAnonymousUsageData(bool value);
-			bool				CanShareAnonymousUsageData() const
-									{ return fCanShareAnonymousUsageData; }
+			bool				CanShareAnonymousUsageData() const;
 
-			bool				CanPopulatePackage(
-									const PackageInfoRef& package);
+			void				SetCanNicknamePasswordAuthenticate(bool value);
+			bool				CanNicknamePasswordAuthenticate();
 
-			void				SetNickname(BString nickname);
-			const BString&		Nickname();
-			void				SetCredentials(const BString& nickname,
-									const BString& passwordClear,
-									bool storePassword);
+			bool				CanPopulatePackage(const PackageInfoRef& package);
 
-			WebAppInterface*    GetWebAppInterface()
-									{ return &fWebAppInterface; }
+			void				SetCredentials(const UserCredentials& credentials);
+	const	BString&			Nickname();
+			WebAppInterfaceRef	WebApp();
 
 			// PackageScreenshotRepositoryListener
     virtual	void				ScreenshotCached(const ScreenshotCoordinate& coord);
 
+
 private:
-			void				_AddCategory(const CategoryRef& category);
+			uint32				_ChangeDiff(const PackageInfoRef& package);
 
 			void				_AddRatingStability(
 									const RatingStabilityRef& value);
@@ -138,41 +184,60 @@ private:
 									const BMessage &responsePayload,
 									const char *sourceDescription) const;
 
+			void				_NotifySelectedPackageChanged();
+			void				_NotifyPackageFilterChanged();
+			void				_NotifyIconsChanged();
 			void				_NotifyAuthorizationChanged();
 			void				_NotifyCategoryListChanged();
+			void				_NotifyPackageChange(const PackageChangeEvent& event);
+			void				_NotifyPackageChanges(const PackageChangeEvents& events);
+			void				_NotifyPackageListViewModeChanged();
+			void				_NotifyCanNicknamePasswordAuthenticateChanged();
+
 
 private:
-			BLocker				fLock;
+	mutable	BLocker				fLock;
+
+			BString				fSelectedPackageName;
 
 			LanguageRef			fPreferredLanguage;
 
-			std::vector<DepotInfoRef>
+			std::map<BString, DepotInfoRef>
 								fDepots;
+			std::map<BString, PackageInfoRef>
+								fPackages;
+
 			std::vector<CategoryRef>
 								fCategories;
 			std::vector<RatingStabilityRef>
 								fRatingStabilities;
-
-			BStringList			fPopulatedPackageNames;
 
 			package_list_view_mode
 								fPackageListViewMode;
 
 			bool				fCanShareAnonymousUsageData;
 
-			WebAppInterface		fWebAppInterface;
+			bool				fCanNicknamePasswordAuthenticate;
 
-			PackageFilterModel*	fPackageFilterModel;
+			WebAppInterfaceRef	fWebApp;
 
-			LanguageRepository*	fLanguageRepository;
-			PackageIconTarRepository
-								fPackageIconRepository;
+			PackageFilterSpecificationRef
+								fFilterSpecification;
+			PackageFilterRef	fFilter;
+
+			std::vector<LanguageRef>
+								fLanguages;
+			PackageIconRepositoryRef
+								fIconRepository;
 			PackageScreenshotRepository*
 								fPackageScreenshotRepository;
 
 			std::vector<ModelListenerRef>
 								fListeners;
+
+			std::vector<PackageInfoListenerRef>
+								fPackageListeners;
 };
 
 
-#endif // PACKAGE_INFO_H
+#endif // MODEL_H

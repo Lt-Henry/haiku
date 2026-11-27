@@ -27,12 +27,11 @@ public:
 									bool isSystemMixer);
 	virtual						~AudioMixer();
 
-			void				DisableNodeStop();
+			void				SetAutoStop(bool autoStop);
 
 	// AudioMixer support
 			void				ApplySettings();
 
-			void				PublishEventLatencyChange();
 			void				UpdateParameterWeb();
 
 			void				HandleInputBuffer(BBuffer* buffer,
@@ -126,14 +125,21 @@ protected:
 									bigtime_t lateness,
 									bool realTimeEvent = false);
 
+protected:
+			void				PublishTimeSourceChange(BTimeSource* newTimeSource);
+			void				PublishEventLatencyChange();
+
 private:
+			void				_AutoStart();
+			void				_AutoStop();
+
 			BMediaAddOn*		fAddOn;
 			MixerCore*			fCore;
 			BParameterWeb*		fWeb;
 			BBufferGroup*		fBufferGroup;
 			bigtime_t			fDownstreamLatency;
 			bigtime_t			fInternalLatency;
-			bool				fDisableStop;
+			bool				fAutoStop;
 			media_format		fDefaultFormat;
 			bigtime_t			fLastLateNotification;
 			bigtime_t			fLastLateness;

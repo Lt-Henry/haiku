@@ -630,6 +630,8 @@ extern int nvme_admin_set_feature(struct nvme_ctrlr *ctrlr,
 				  bool save,
 				  enum nvme_feat feature,
 				  uint32_t cdw11, uint32_t cdw12,
+				  uint32_t cdw13, uint32_t cdw14, uint32_t cdw15,
+				  void *buf, uint32_t len,
 				  uint32_t *attributes);
 
 extern int nvme_admin_format_nvm(struct nvme_ctrlr *ctrlr,

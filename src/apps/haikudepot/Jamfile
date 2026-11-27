@@ -3,60 +3,26 @@ SubDir HAIKU_TOP src apps haikudepot ;
 # disable -Werror for this directory only
 SubDirC++Flags -Wno-error ;
 
-include [ FDirName $(SUBDIR) build jam HdsSchemaGenRules ] ;
+include [ FDirName $(SUBDIR) build jam JsonSchemaGenRules ] ;
 
-UsePrivateHeaders interface kernel net netservices package shared storage ;
+UsePrivateHeaders interface net netservices package shared storage ;
 UsePrivateHeaders support locale ;
 
 HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY = $(TARGET_COMMON_DEBUG_LOCATE_TARGET) ;
 
-# During the build process, some sources are generated into directories.  These
-# are the directories.
+# Directories where generated sources will be written.
 
-local dumpExportRepositoryBulkListerTargetDirectory =
-	[ FDirName $(HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY)
-		dumpexportrepositorybulklistener ] ;
-local dumpExportPkgBulkListenerTargetDirectory =
-	[ FDirName $(HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY)
-		dumpexportpkgbulklistener ] ;
-local dumpExportReferenceListenerTargetDirectory =
-	[ FDirName $(HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY)
-		dumpexportreferencelistener ] ;
-
-local dumpExportPkgModelTargetDirectory =
-	[ FDirName $(HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY)
-		dumpexportpkgmodel ] ;
-local dumpExportRepositoryModelTargetDirectory =
-	[ FDirName $(HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY)
-		dumpexportrepositorymodel ] ;
-local dumpExportReferenceModelTargetDirectory =
-	[ FDirName $(HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY)
-		dumpexportreferencemodel ] ;
-
-# During the build process, some sources are generated into a directory.  In
-# order to maintain a timestamp on that generation process, a dummy file is
-# used to signify the target of the generation.  The leafname of this dummy file
-# is defined here.
-
-local dummyFile = "dummy.dat" ;
-
-local dumpExportRepositoryBulkListerTargetFile =
-	[ FDirName $(dumpExportRepositoryBulkListerTargetDirectory) $(dummyFile) ] ;
-local dumpExportPkgBulkListenerTargetFile =
-	[ FDirName $(dumpExportPkgBulkListenerTargetDirectory) $(dummyFile) ] ;
-local dumpExportReferenceListenerTargetFile =
-	[ FDirName $(dumpExportReferenceListenerTargetDirectory) $(dummyFile) ] ;
-
-local dumpExportPkgModelTargetFile =
-	[ FDirName $(dumpExportPkgModelTargetDirectory) $(dummyFile) ] ;
-local dumpExportRepositoryModelTargetFile =
-	[ FDirName $(dumpExportRepositoryModelTargetDirectory) $(dummyFile) ] ;
-local dumpExportReferenceModelTargetFile =
-	[ FDirName $(dumpExportReferenceModelTargetDirectory) $(dummyFile) ] ;
+local genServerRepositoryGenDirectory =
+	[ FDirName $(HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY) dumpexportrepository ] ;
+local genServerPkgGenDirectory =
+	[ FDirName $(HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY) dumpexportpkg ] ;
+local genServerReferenceGenDirectory =
+	[ FDirName $(HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY) dumpexportreference ] ;
 
 # source directories
 local sourceDirs =
 	edits_generic
+	icon
 	model
 	packagemanagement
 	packagemodel
@@ -76,13 +42,9 @@ for sourceDir in $(sourceDirs) {
 
 SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src servers package ] ;
 
-SEARCH_SOURCE += $(dumpExportRepositoryBulkListerTargetDirectory) ;
-SEARCH_SOURCE += $(dumpExportPkgBulkListenerTargetDirectory) ;
-SEARCH_SOURCE += $(dumpExportReferenceListenerTargetDirectory) ;
-
-SEARCH_SOURCE += $(dumpExportPkgModelTargetDirectory) ;
-SEARCH_SOURCE += $(dumpExportRepositoryModelTargetDirectory) ;
-SEARCH_SOURCE += $(dumpExportReferenceModelTargetDirectory) ;
+SEARCH_SOURCE += $(genServerRepositoryGenDirectory) ;
+SEARCH_SOURCE += $(genServerPkgGenDirectory) ;
+SEARCH_SOURCE += $(genServerReferenceGenDirectory) ;
 
 local textDocumentSources =
 	# edits_generic
@@ -124,21 +86,20 @@ local applicationSources =
 	FeaturedPackagesView.cpp
 	FilterView.cpp
 	GeneralContentScrollView.cpp
-	IconTarPtr.cpp
+	HaikuDepotConstants.cpp
+	IdentityAndAccessUtils.cpp
 	IncrementViewCounterProcess.cpp
 	JobStateListener.cpp
 	JwtTokenHelper.cpp
-	LanguageRepository.cpp
 	LinkView.cpp
 	LinkedBitmapView.cpp
 	Logger.cpp
 	main.cpp
 	MainWindow.cpp
 	MarkupTextView.cpp
-	MessagePackageListener.cpp
 	Model.cpp
+	NotAvailableView.cpp
 	PackageContentsView.cpp
-	PackageIconTarRepository.cpp
 	PackageInfoListener.cpp
 	PackageInfoView.cpp
 	PackageListView.cpp
@@ -154,6 +115,7 @@ local applicationSources =
 	ScrollableGroupView.cpp
 	SettingsWindow.cpp
 	SharedIcons.cpp
+	SimpleAlert.cpp
 	ShuttingDownWindow.cpp
 	ToLatestUserUsageConditionsWindow.cpp
 	UserCredentials.cpp
@@ -164,6 +126,11 @@ local applicationSources =
 	ValidationFailure.cpp
 	ValidationUtils.cpp
 	WorkStatusView.cpp
+
+	# icon
+	IconTarPtr.cpp
+	PackageIconDefaultRepository.cpp
+	PackageIconTarRepository.cpp
 
 	# packagemanagement
 	AbstractPackageProcess.cpp
@@ -180,17 +147,17 @@ local applicationSources =
 	PackageClassificationInfo.cpp
 	PackageCoreInfo.cpp
 	PackageFilter.cpp
-	PackageFilterModel.cpp
+	PackageFilterSpecification.cpp
 	PackageInfo.cpp
 	PackageLocalInfo.cpp
 	PackageLocalizedText.cpp
 	PackagePublisherInfo.cpp
 	PackageScreenshotInfo.cpp
+	PackageUserRatingInfo.cpp
 	PackageVersion.cpp
 	ScreenshotInfo.cpp
 	UserInfo.cpp
 	UserRating.cpp
-	UserRatingInfo.cpp
 	UserRatingSummary.cpp
 
 	# network + server / local processes
@@ -207,11 +174,12 @@ local applicationSources =
 	ProcessCoordinator.cpp
 	ProcessCoordinatorFactory.cpp
 	ServerHelper.cpp
+	ServerIconExportUpdateProcess.cpp
 	ServerSettings.cpp
 	ServerPkgDataUpdateProcess.cpp
 	ServerReferenceDataUpdateProcess.cpp
 	ServerRepositoryDataUpdateProcess.cpp
-	ServerIconExportUpdateProcess.cpp
+	ServerRuntimeInformationVerifierProcess.cpp
 	StandardMetaDataJsonEventListener.cpp
 	StandardMetaData.cpp
 	ThreadedProcessNode.cpp
@@ -231,56 +199,28 @@ local applicationSources =
 	PackageUtils.cpp
 	StorageUtils.cpp
 	StringUtils.cpp
-	LoggingUrlProtocolListener.cpp
 
 	# package_daemon
 	ProblemWindow.cpp
 	ResultWindow.cpp
 ;
 
-local generatedPkgModelSourceFiles =
-	DumpExportPkg.cpp
-	DumpExportPkgCategory.cpp
-	DumpExportPkgScreenshot.cpp
-	DumpExportPkgVersion.cpp
-;
+# Generated source files
 
-local generatedRepositoryModelSourceFiles =
-	DumpExportRepository.cpp
-	DumpExportRepositorySource.cpp
-	DumpExportRepositorySourceMirror.cpp
-;
-
-local generatedReferenceModelSourceFiles =
-	DumpExportReference.cpp
-	DumpExportReferenceNaturalLanguage.cpp
-	DumpExportReferencePkgCategory.cpp
-	DumpExportReferenceUserRatingStability.cpp
-	DumpExportReferenceCountry.cpp
-;
-
-local generatedPkgParserSourceFiles =
-	DumpExportPkgJsonListener.cpp
-;
-
-local generatedRepositoryParserSourceFiles =
-	DumpExportRepositoryJsonListener.cpp
-;
-
-local generatedReferenceParserSourceFiles =
-	DumpExportReferenceJsonListener.cpp
-;
+local genServerRepositoryGenFiles =
+	DumpExportRepositoryModel.cpp DumpExportRepositoryJsonListener.cpp ;
+local genServerPkgGenFiles =
+	DumpExportPkgModel.cpp DumpExportPkgJsonListener.cpp ;
+local genServerReferenceGenFiles =
+	DumpExportReferenceModel.cpp DumpExportReferenceJsonListener.cpp ;
 
 Application HaikuDepot
 	:
 	$(applicationSources)
 	$(textDocumentSources)
-	$(generatedPkgModelSourceFiles)
-	$(generatedRepositoryModelSourceFiles)
-	$(generatedReferenceModelSourceFiles)
-	$(generatedPkgParserSourceFiles)
-	$(generatedRepositoryParserSourceFiles)
-	$(generatedReferenceParserSourceFiles)
+	$(genServerPkgGenFiles)
+	$(genServerRepositoryGenFiles)
+	$(genServerReferenceGenFiles)
 	:
 	be package bnetapi translation libnetservices.a libcolumnlistview.a shared
 	[ TargetLibstdc++ ] [ TargetLibsupc++ ] localestub
@@ -294,83 +234,28 @@ DoCatalogs HaikuDepot :
 	$(applicationSources)
 ;
 
-# The following use of rules configures the generation of .cpp and .h files from
-# JSON schemas that are defined in the HaikuDepotServer system.  See the
-# included Jam rules and actions for the definitions.
+# Configuration of the code generation of schemas. The `sourcesDependentOnGen` is excessive in that
+# it makes all of the Application's sources dependent on the generated sources which is not the
+# case, but to isolate specific sources and maintain that list is likely quite difficult over time.
 
-HdsSchemaGenModel $(dumpExportPkgModelTargetFile)
-	: dumpexportpkg.json : jsonschema2cppmodel.py ;
+local sourcesDependentOnGen =
+	[ FGristFiles $(applicationSources) ] [ FGristFiles $(applicationSources:S=.h) ] ;
 
-HdsSchemaGenModel $(dumpExportRepositoryModelTargetFile)
-	: dumpexportrepository.json : jsonschema2cppmodel.py ;
-
-HdsSchemaGenModel $(dumpExportReferenceModelTargetFile)
-	: dumpexportreference.json : jsonschema2cppmodel.py ;
-
-HdsSchemaGenBulkParser $(dumpExportRepositoryBulkListerTargetFile)
-	: dumpexportrepository.json : jsonschema2cppparser.py ;
-
-HdsSchemaGenBulkParser $(dumpExportPkgBulkListenerTargetFile)
-	: dumpexportpkg.json : jsonschema2cppparser.py ;
-
-HdsSchemaGenParser $(dumpExportReferenceListenerTargetFile)
-	: dumpexportreference.json : jsonschema2cppparser.py ;
-
-HdsSchemaGenAppSrcDependsOnGeneration
-	[ FGristFiles $(generatedPkgParserSourceFiles) ]
-	[ FGristFiles $(generatedPkgParserSourceFiles:S=.h) ]
-	: $(dumpExportPkgBulkListenerTargetDirectory)
-	: $(dumpExportPkgBulkListenerTargetFile) ;
-
-HdsSchemaGenAppSrcDependsOnGeneration
-	[ FGristFiles $(generatedRepositoryParserSourceFiles) ]
-	[ FGristFiles $(generatedRepositoryParserSourceFiles:S=.h) ]
-	: $(dumpExportRepositoryBulkListerTargetDirectory)
-	: $(dumpExportRepositoryBulkListerTargetFile) ;
-
-HdsSchemaGenAppSrcDependsOnGeneration
-	[ FGristFiles $(generatedReferenceParserSourceFiles) ]
-	[ FGristFiles $(generatedReferenceParserSourceFiles:S=.h) ]
-	: $(dumpExportReferenceListenerTargetDirectory)
-	: $(dumpExportReferenceListenerTargetFile) ;
-
-HdsSchemaGenAppSrcDependsOnGeneration
-	[ FGristFiles $(generatedRepositoryModelSourceFiles) ]
-	[ FGristFiles $(generatedRepositoryModelSourceFiles:S=.h) ]
-	: $(dumpExportRepositoryModelTargetDirectory)
-	: $(dumpExportRepositoryModelTargetFile) ;
-
-HdsSchemaGenAppSrcDependsOnGeneration
-	[ FGristFiles $(generatedPkgModelSourceFiles) ]
-	[ FGristFiles $(generatedPkgModelSourceFiles:S=.h) ]
-	: $(dumpExportPkgModelTargetDirectory)
-	: $(dumpExportPkgModelTargetFile) ;
-
-HdsSchemaGenAppSrcDependsOnGeneration
-	[ FGristFiles $(generatedReferenceModelSourceFiles) ]
-	[ FGristFiles $(generatedReferenceModelSourceFiles:S=.h) ]
-	: $(dumpExportReferenceModelTargetDirectory)
-	: $(dumpExportReferenceModelTargetFile) ;
-
-# This will ensure that if any of the generated files' header files change, then
-# the application should be re-built.
-
-Includes [ FGristFiles $(applicationSources) ]
-	:
-	$(dumpExportRepositoryBulkListerTargetDirectory)
-	$(dumpExportPkgBulkListenerTargetDirectory)
-	$(dumpExportReferenceListenerTargetDirectory)
-	$(dumpExportPkgModelTargetDirectory)
-	$(dumpExportRepositoryModelTargetDirectory)
-	$(dumpExportReferenceModelTargetDirectory)
+JsonSchemaModelAndParser
+	$(genServerRepositoryGenDirectory)
+	: $(genServerRepositoryGenFiles)
+	: $(sourcesDependentOnGen)
+	: [ FDirName $(SUBDIR) server schema dumpexportrepository.json ]
 ;
-
-Depends [ FGristFiles $(applicationSources:S=.o) ]
-	:
-	[ FGristFiles $(generatedPkgParserSourceFiles:S=.h) ]
-	[ FGristFiles $(generatedPkgModelSourceFiles:S=.h) ]
-	[ FGristFiles $(generatedRepositoryParserSourceFiles:S=.h) ]
-	[ FGristFiles $(generatedRepositoryModelSourceFiles:S=.h) ]
-	[ FGristFiles $(generatedReferenceParserSourceFiles:S=.h) ]
-	[ FGristFiles $(generatedReferenceModelSourceFiles:S=.h) ]
+JsonSchemaModelAndParser
+	$(genServerPkgGenDirectory)
+	: $(genServerPkgGenFiles)
+	: $(sourcesDependentOnGen)
+	: [ FDirName $(SUBDIR) server schema dumpexportpkg.json ]
+;
+JsonSchemaModelAndParser
+	$(genServerReferenceGenDirectory)
+	: $(genServerReferenceGenFiles)
+	: $(sourcesDependentOnGen)
+	: [ FDirName $(SUBDIR) server schema dumpexportreference.json ]
 ;

@@ -7,6 +7,7 @@
 
 #include "LeafDirectory.h"
 
+#include "Utility.h"
 #include "VerifyHeader.h"
 
 
@@ -27,8 +28,8 @@ LeafDirectory::~LeafDirectory()
 {
 	delete fDataMap;
 	delete fLeafMap;
-	delete fDataBuffer;
-	delete fLeafBuffer;
+	delete[] fDataBuffer;
+	delete[] fLeafBuffer;
 }
 
 
@@ -213,13 +214,22 @@ LeafDirectory::SearchAndFillDataMap(uint64 blockNo)
 {
 	int len = fInode->DataExtentsCount();
 
-	for(int i = 0; i < len - 1; i++) {
+	for (int i = 0; i < len - 1; i++) {
 		FillMapEntry(i, fDataMap);
 		if (fDataMap->br_startoff <= blockNo
 			&& (blockNo <= fDataMap->br_startoff + fDataMap->br_blockcount - 1))
 			// Map found
 			return;
 	}
+}
+
+
+status_t
+LeafDirectory::Rewind()
+{
+	fOffset = 0;
+	fCurBlockNumber = -1;
+	return B_OK;
 }
 
 
@@ -372,8 +382,7 @@ LeafDirectory::Lookup(const char* name, size_t length, xfs_ino_t* ino)
 		TRACE("offset:(%" B_PRIu32 ")\n", offset);
 		ExtentDataEntry* entry = (ExtentDataEntry*)(fDataBuffer + offset);
 
-		int retVal = strncmp(name, (char*)entry->name, entry->namelen);
-		if (retVal == 0) {
+		if (xfs_name_comp(name, length, entry->name, entry->namelen)) {
 			*ino = B_BENDIAN_TO_HOST_INT64(entry->inumber);
 			TRACE("ino:(%" B_PRIu64 ")\n", *ino);
 			return B_OK;

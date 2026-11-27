@@ -37,8 +37,7 @@
 #	include <stdio.h>
 #	include <FunctionTracer.h>
 	static int32 sFunctionDepth = -1;
-#	define CALLED(x...)	FunctionTracer _ft("BTextControl", __FUNCTION__, \
-							sFunctionDepth)
+#	define CALLED(x...)	FunctionTracer _ft(printf, this, __PRETTY_FUNCTION__, sFunctionDepth)
 #	define TRACE(x...)	{ BString _to; \
 							_to.Append(' ', (sFunctionDepth + 1) * 2); \
 							printf("%s", _to.String()); printf(x); }
@@ -361,6 +360,8 @@ BTextControl::Draw(BRect updateRect)
 	rect.InsetBy(-2, -2);
 
 	rgb_color base = ViewColor();
+	rgb_color text = HighColor();
+
 	uint32 flags = fLook;
 	if (!enabled)
 		flags |= BControlLook::B_DISABLED;
@@ -379,7 +380,7 @@ BTextControl::Draw(BRect updateRect)
 		}
 
 		be_control_look->DrawLabel(this, Label(), rect, updateRect,
-			base, flags, BAlignment(fLabelAlign, B_ALIGN_MIDDLE));
+			base, flags, BAlignment(fLabelAlign, B_ALIGN_MIDDLE), &text);
 	}
 }
 
@@ -1086,18 +1087,16 @@ BTextControl::_InitData(const char* label, const BMessage* archive)
 	fDivider = 0.0f;
 	fLayoutData = new LayoutData(bounds.Width(), bounds.Height());
 
-	int32 flags = 0;
-
-	BFont font(be_plain_font);
-
-	if (!archive || !archive->HasString("_fname"))
-		flags |= B_FONT_FAMILY_AND_STYLE;
-
-	if (!archive || !archive->HasFloat("_fflt"))
-		flags |= B_FONT_SIZE;
-
-	if (flags != 0)
-		SetFont(&font, flags);
+	int32 fontFlags = 0;
+	if (archive == NULL || !archive->HasString("_fname"))
+		fontFlags = B_FONT_FAMILY_AND_STYLE;
+	if (archive == NULL || !archive->HasFloat("_fflt"))
+		fontFlags |= B_FONT_SIZE;
+	if (fontFlags != 0) {
+		if (fontFlags == (B_FONT_FAMILY_AND_STYLE | B_FONT_SIZE))
+			fontFlags = B_FONT_ALL;
+		SetFont(be_plain_font, fontFlags);
+	}
 
 	if (label != NULL)
 		fDivider = floorf(bounds.Width() / 2.0f);

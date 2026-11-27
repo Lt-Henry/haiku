@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2020, Axel Dörfler, axeld@pinc-software.de.
+ * Copyright 2001-2026, Axel Dörfler, axeld@pinc-software.de.
  * This file may be used under the terms of the MIT License.
  */
 
@@ -90,7 +90,7 @@ fill_stat_buffer(Inode* inode, struct stat& stat)
 	} else
 		stat.st_size = inode->Size();
 
-	stat.st_blocks = inode->AllocatedSize() / 512;
+	stat.st_blocks = inode->AllocatedSize() / DEV_BSIZE;
 }
 
 
@@ -384,14 +384,14 @@ bfs_remove_vnode(fs_volume* _volume, fs_vnode* _node, bool reenter)
 	ASSERT((inode->Flags() & INODE_DELETED) != 0);
 
 	status_t status = inode->Free(transaction);
+	volume->RemovedInodes().Remove(inode);
+
 	if (status == B_OK) {
 		status = transaction.Done();
 	} else if (transaction.HasParent()) {
 		// TODO: for now, we don't let sub-transactions fail
 		status = transaction.Done();
 	}
-
-	volume->RemovedInodes().Remove(inode);
 
 	// TODO: the VFS currently does not allow this to fail
 	delete inode;
@@ -409,7 +409,7 @@ bfs_can_page(fs_volume* _volume, fs_vnode* _v, void* _cookie)
 
 
 static status_t
-bfs_read_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
+bfs_read_pages(fs_volume* _volume, fs_vnode* _node, void*,
 	off_t pos, const iovec* vecs, size_t count, size_t* _numBytes)
 {
 	Volume* volume = (Volume*)_volume->private_volume;
@@ -451,7 +451,7 @@ bfs_read_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
 
 
 static status_t
-bfs_write_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
+bfs_write_pages(fs_volume* _volume, fs_vnode* _node, void*,
 	off_t pos, const iovec* vecs, size_t count, size_t* _numBytes)
 {
 	Volume* volume = (Volume*)_volume->private_volume;
@@ -783,15 +783,15 @@ bfs_ioctl(fs_volume* _volume, fs_vnode* _node, void* _cookie, uint32 cmd,
 		}
 		case BFS_IOCTL_RESIZE:
 		{
-			if (bufferLength != sizeof(uint64))
+			if (bufferLength != sizeof(resize_control))
 				return B_BAD_VALUE;
 
-			uint64 size;
-			if (user_memcpy((uint8*)&size, buffer, sizeof(uint64)) != B_OK)
+			resize_control control;
+			if (user_memcpy((uint8*)&control, buffer, sizeof(control)) != B_OK)
 				return B_BAD_ADDRESS;
 
 			ResizeVisitor resizer(volume);
-			return resizer.Resize(size, -1);
+			return resizer.Resize(control.new_size, control.dry_run, -1);
 		}
 
 #ifdef DEBUG_FRAGMENTER
@@ -849,7 +849,7 @@ bfs_set_flags(fs_volume* _volume, fs_vnode* _node, void* _cookie, int flags)
 
 
 static status_t
-bfs_fsync(fs_volume* _volume, fs_vnode* _node)
+bfs_fsync(fs_volume* _volume, fs_vnode* _node, bool dataOnly)
 {
 	FUNCTION();
 
@@ -885,16 +885,16 @@ bfs_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat,
 	//	valid - or even better, the VFS should check this before calling us
 
 	bfs_inode& node = inode->Node();
-	bool updateTime = false;
-	uid_t uid = geteuid();
-
-	bool isOwnerOrRoot = uid == 0 || uid == (uid_t)node.UserID();
-	bool hasWriteAccess = inode->CheckPermissions(W_OK) == B_OK;
+	bool updateChangeTime = false, updateModificationTime = false;
 
 	Transaction transaction(volume, inode->BlockNumber());
 	inode->WriteLockInTransaction(transaction);
 
-	if ((mask & B_STAT_SIZE) != 0 && inode->Size() != stat->st_size) {
+	if (check_write_stat_permissions(node.GroupID(), node.UserID(), node.Mode(),
+			mask, stat) != B_OK)
+		RETURN_ERROR(B_NOT_ALLOWED);
+
+	if ((mask & B_STAT_SIZE) != 0) {
 		// Since B_STAT_SIZE is the only thing that can fail directly, we
 		// do it first, so that the inode state will still be consistent
 		// with the on-disk version
@@ -902,8 +902,6 @@ bfs_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat,
 			return B_IS_A_DIRECTORY;
 		if (!inode->IsFile())
 			return B_BAD_VALUE;
-		if (!hasWriteAccess)
-			RETURN_ERROR(B_NOT_ALLOWED);
 
 		off_t oldSize = inode->Size();
 
@@ -924,66 +922,53 @@ bfs_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat,
 			Index index(volume);
 			index.UpdateSize(transaction, inode);
 
-			updateTime = true;
+			updateChangeTime = updateModificationTime = true;
 		}
 	}
 
 	if ((mask & B_STAT_UID) != 0) {
-		// only root should be allowed
-		if (uid != 0)
-			RETURN_ERROR(B_NOT_ALLOWED);
 		node.uid = HOST_ENDIAN_TO_BFS_INT32(stat->st_uid);
-		updateTime = true;
+		updateChangeTime = true;
 	}
 
 	if ((mask & B_STAT_GID) != 0) {
-		// only the user or root can do that
-		if (!isOwnerOrRoot)
-			RETURN_ERROR(B_NOT_ALLOWED);
 		node.gid = HOST_ENDIAN_TO_BFS_INT32(stat->st_gid);
-		updateTime = true;
+		updateChangeTime = true;
 	}
 
 	if ((mask & B_STAT_MODE) != 0) {
-		// only the user or root can do that
-		if (!isOwnerOrRoot)
-			RETURN_ERROR(B_NOT_ALLOWED);
 		PRINT(("original mode = %u, stat->st_mode = %u\n",
 			(unsigned int)node.Mode(), (unsigned int)stat->st_mode));
 		node.mode = HOST_ENDIAN_TO_BFS_INT32((node.Mode() & ~S_IUMSK)
 			| (stat->st_mode & S_IUMSK));
-		updateTime = true;
+		updateChangeTime = true;
 	}
 
 	if ((mask & B_STAT_CREATION_TIME) != 0) {
-		// the user or root can do that or any user with write access
-		if (!isOwnerOrRoot && !hasWriteAccess)
-			RETURN_ERROR(B_NOT_ALLOWED);
 		node.create_time
 			= HOST_ENDIAN_TO_BFS_INT64(bfs_inode::ToInode(stat->st_crtim));
 	}
 
-	if ((mask & B_STAT_MODIFICATION_TIME) != 0) {
-		// the user or root can do that or any user with write access
-		if (!isOwnerOrRoot && !hasWriteAccess)
-			RETURN_ERROR(B_NOT_ALLOWED);
+	if ((mask & B_STAT_MODIFICATION_TIME) != 0 || updateModificationTime) {
+		int64 newTime;
+		if ((mask & B_STAT_MODIFICATION_TIME) == 0)
+			newTime = bfs_inode::ToInode(real_time_clock_usecs());
+		else
+			newTime = bfs_inode::ToInode(stat->st_mtim);
+
 		if (!inode->InLastModifiedIndex()) {
 			// directory modification times are not part of the index
 			node.last_modified_time
-				= HOST_ENDIAN_TO_BFS_INT64(bfs_inode::ToInode(stat->st_mtim));
+				= HOST_ENDIAN_TO_BFS_INT64(newTime);
 		} else if (!inode->IsDeleted()) {
 			// Index::UpdateLastModified() will set the new time in the inode
 			Index index(volume);
-			index.UpdateLastModified(transaction, inode,
-				bfs_inode::ToInode(stat->st_mtim));
+			index.UpdateLastModified(transaction, inode, newTime);
 		}
 	}
 
-	if ((mask & B_STAT_CHANGE_TIME) != 0 || updateTime) {
-		// the user or root can do that or any user with write access
-		if (!isOwnerOrRoot && !hasWriteAccess)
-			RETURN_ERROR(B_NOT_ALLOWED);
-		bigtime_t newTime;
+	if ((mask & B_STAT_CHANGE_TIME) != 0 || updateChangeTime) {
+		int64 newTime;
 		if ((mask & B_STAT_CHANGE_TIME) == 0)
 			newTime = bfs_inode::ToInode(real_time_clock_usecs());
 		else
@@ -1291,15 +1276,13 @@ bfs_rename(fs_volume* _volume, fs_vnode* _oldDir, const char* oldName,
 
 	inode->WriteLockInTransaction(transaction);
 
-	volume->UpdateLiveQueriesRenameMove(inode, oldDirectory->ID(), oldName,
-		newDirectory->ID(), newName);
-
 	// update the name only when they differ
 	if (strcmp(oldName, newName)) {
 		status = inode->SetName(transaction, newName);
 		if (status == B_OK) {
 			Index index(volume);
-			index.UpdateName(transaction, oldName, newName, inode);
+			index.UpdateName(transaction, oldName, newName, inode,
+				false /* we'll notify live queries when finished */);
 		}
 	}
 
@@ -1340,6 +1323,8 @@ bfs_rename(fs_volume* _volume, fs_vnode* _oldDir, const char* oldName,
 				if (status == B_OK) {
 					notify_entry_moved(volume->ID(), oldDirectory->ID(),
 						oldName, newDirectory->ID(), newName, id);
+					volume->UpdateLiveQueriesRenameMove(inode, oldDirectory->ID(), oldName,
+						newDirectory->ID(), newName);
 					return B_OK;
 				}
 
@@ -1365,8 +1350,6 @@ bfs_open(fs_volume* _volume, fs_vnode* _node, int openMode, void** _cookie)
 	// any data from it.
 	if (inode->IsDirectory() && (openMode & O_RWMASK) != O_RDONLY)
 		return B_IS_A_DIRECTORY;
-	if ((openMode & O_DIRECTORY) != 0 && !inode->IsDirectory())
-		return B_NOT_A_DIRECTORY;
 
 	status_t status = inode->CheckPermissions(open_mode_to_access(openMode));
 	if (status != B_OK)
@@ -1400,12 +1383,20 @@ bfs_open(fs_volume* _volume, fs_vnode* _node, int openMode, void** _cookie)
 		inode->WriteLockInTransaction(transaction);
 
 		status_t status = inode->SetFileSize(transaction, 0);
-		if (status == B_OK)
+		if (status == B_OK) {
+			inode->Node().last_modified_time = HOST_ENDIAN_TO_BFS_INT64(
+				bfs_inode::ToInode(real_time_clock_usecs()));
 			status = inode->WriteBack(transaction);
+		}
 		if (status == B_OK)
 			status = transaction.Done();
 		if (status != B_OK)
 			return status;
+
+		if (cookie->last_size != 0) {
+			cookie->last_size = inode->Size();
+			notify_stat_changed(volume->ID(), inode->ParentID(), inode->ID(), B_STAT_SIZE);
+		}
 	}
 
 	fileCacheEnabler.Detach();
@@ -2189,6 +2180,10 @@ bfs_create_index(fs_volume* _volume, const char* name, uint32 type,
 	if (geteuid() != 0)
 		return B_NOT_ALLOWED;
 
+	Inode* indices = volume->IndicesNode();
+	if (indices == NULL)
+		return B_UNSUPPORTED;
+
 	Transaction transaction(volume, volume->Indices());
 
 	Index index(volume);
@@ -2247,7 +2242,7 @@ bfs_stat_index(fs_volume* _volume, const char* name, struct stat* stat)
 	stat->st_mode = node.Mode();
 
 	stat->st_size = node.data.Size();
-	stat->st_blocks = index.Node()->AllocatedSize() / 512;
+	stat->st_blocks = index.Node()->AllocatedSize() / DEV_BSIZE;
 
 	stat->st_nlink = 1;
 	stat->st_blksize = 65536;
@@ -2341,8 +2336,41 @@ bfs_get_supported_operations(partition_data* partition, uint32 mask)
 {
 	// TODO: We should at least check the partition size.
 	return B_DISK_SYSTEM_SUPPORTS_INITIALIZING
+#ifdef FS_SHELL
+		| B_DISK_SYSTEM_SUPPORTS_RESIZING_WHILE_MOUNTED
+#endif
 		| B_DISK_SYSTEM_SUPPORTS_CONTENT_NAME
 		| B_DISK_SYSTEM_SUPPORTS_WRITING;
+}
+
+
+static status_t
+bfs_resize(int fd, partition_id partitionID, off_t size, disk_job_id job)
+{
+//#ifndef FS_SHELL
+#if 0
+	// get Volume pointer from partitionID
+	if (read_lock_disk_device(partitionID) == NULL)
+		return B_ERROR;
+
+	partition_data* partition = get_partition(partitionID);
+	read_unlock_disk_device(partitionID);
+
+	if (partition == NULL)
+		return B_ERROR;
+
+	Volume* volume = (Volume*)partition->mount_cookie;
+	if (volume == NULL)
+		return B_ERROR;
+
+	// do the resize
+	ResizeVisitor resizer(volume);
+	return resizer.Resize(size, job);
+#else
+	// fs_shell can't use this interface as it doesn't have the
+	// partion_data concept
+	return B_ERROR;
+#endif
 }
 
 
@@ -2570,7 +2598,9 @@ static file_system_module_info sBeFileSystem = {
 //	| B_DISK_SYSTEM_SUPPORTS_DEFRAGMENTING_WHILE_MOUNTED
 //	| B_DISK_SYSTEM_SUPPORTS_CHECKING_WHILE_MOUNTED
 //	| B_DISK_SYSTEM_SUPPORTS_REPAIRING_WHILE_MOUNTED
-//	| B_DISK_SYSTEM_SUPPORTS_RESIZING_WHILE_MOUNTED
+#ifdef FS_SHELL
+	| B_DISK_SYSTEM_SUPPORTS_RESIZING_WHILE_MOUNTED
+#endif
 //	| B_DISK_SYSTEM_SUPPORTS_MOVING_WHILE_MOUNTED
 //	| B_DISK_SYSTEM_SUPPORTS_SETTING_CONTENT_NAME_WHILE_MOUNTED
 //	| B_DISK_SYSTEM_SUPPORTS_SETTING_CONTENT_PARAMETERS_WHILE_MOUNTED
@@ -2600,7 +2630,7 @@ static file_system_module_info sBeFileSystem = {
 	/* writing */
 	NULL,	// defragment
 	NULL,	// repair
-	NULL,	// resize
+	bfs_resize,
 	NULL,	// move
 	NULL,	// set_content_name
 	NULL,	// set_content_parameters

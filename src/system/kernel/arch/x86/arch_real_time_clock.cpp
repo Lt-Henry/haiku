@@ -7,7 +7,7 @@
 
 
 #include <arch/real_time_clock.h>
-#include <arch/cpu.h>
+#include <arch/x86/timer.h>
 #include <boot/kernel_args.h>
 
 #include <real_time_clock.h>
@@ -154,7 +154,7 @@ cmos_to_secs(const cmos_time *cmos)
 
 
 static void
-secs_to_cmos(uint32 seconds, cmos_time *cmos)
+secs_to_cmos(uint64 seconds, cmos_time *cmos)
 {
 	int wholeYear;
 
@@ -180,12 +180,12 @@ status_t
 arch_rtc_init(struct kernel_args *args, struct real_time_data *data)
 {
 	data->arch_data.system_time_conversion_factor
-		= args->arch_args.system_time_cv_factor;
+		= gSystemTimeConversionFactor;
 	return B_OK;
 }
 
 
-uint32
+uint64
 arch_rtc_get_hw_time(void)
 {
 	int waitTime;
@@ -209,7 +209,7 @@ arch_rtc_get_hw_time(void)
 
 
 void
-arch_rtc_set_hw_time(uint32 seconds)
+arch_rtc_set_hw_time(uint64 seconds)
 {
 	cmos_time cmos;
 

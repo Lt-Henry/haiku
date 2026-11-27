@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2024, Haiku, Inc. All Rights Reserved.
+ * Copyright 2013-2026, Haiku, Inc. All Rights Reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -74,8 +74,8 @@ PackageProgressListener::~PackageProgressListener()
 
 
 void
-PackageProgressListener::DownloadProgressChanged(const char* packageName,
-	float progress)
+PackageProgressListener::DownloadProgressChanged(const char* packageName, float progress,
+	off_t bytes, off_t totalBytes)
 {
 }
 
@@ -160,15 +160,18 @@ PackageManager::CollectPackageActions(PackageInfoRef package,
 			break;
 		case NONE:
 		case UNINSTALLED:
-			actionList.Add(_CreateInstallPackageAction(package));
+		{
+			BString packageTitle;
+			PackageUtils::TitleOrName(package, packageTitle);
+			actionList.Add(
+				PackageActionRef(new InstallPackageAction(package->Name(), packageTitle), true));
 			break;
+		}
 		case DOWNLOADING:
-			HDINFO("no package actions for [%s] (downloading)",
-				package->Name().String());
+			HDDEBUG("no package actions for [%s] (downloading)", package->Name().String());
 			break;
 		case PENDING:
-			HDINFO("no package actions for [%s] (pending)",
-				package->Name().String());
+			HDDEBUG("no package actions for [%s] (pending)", package->Name().String());
 			break;
 		default:
 			HDFATAL("unexpected status for package [%s]",
@@ -183,7 +186,11 @@ PackageManager::_CollectPackageActionsForActivatedOrInstalled(
 		PackageInfoRef package,
 		Collector<PackageActionRef>& actionList)
 {
-	actionList.Add(_CreateUninstallPackageAction(package));
+	BString packageTitle;
+	PackageUtils::TitleOrName(package, packageTitle);
+
+	actionList.Add(
+		PackageActionRef(new UninstallPackageAction(package->Name(), packageTitle), true));
 
 	// Add OpenPackageActions for each deskbar link found in the
 	// package
@@ -192,60 +199,14 @@ PackageManager::_CollectPackageActionsForActivatedOrInstalled(
 		std::vector<DeskbarLink>::const_iterator it;
 		for (it = foundLinks.begin(); it != foundLinks.end(); it++) {
 			const DeskbarLink& aLink = *it;
-			actionList.Add(_CreateOpenPackageAction(package, aLink));
+			if (aLink.IsValid()) {
+				actionList.Add(
+					PackageActionRef(new OpenPackageAction(package->Name(), aLink), true));
+			} else {
+				HDERROR("broken deskbar link for [%s]", package->Name().String());
+			}
 		}
 	}
-}
-
-
-PackageActionRef
-PackageManager::_CreateUninstallPackageAction(const PackageInfoRef& package)
-{
-	BString actionTitle = B_TRANSLATE("Uninstall %PackageTitle%");
-	BString packageTitle;
-	PackageUtils::TitleOrName(package, packageTitle);
-	actionTitle.ReplaceAll("%PackageTitle%", packageTitle);
-
-	BMessage message(MSG_PKG_UNINSTALL);
-	message.AddString(KEY_TITLE, actionTitle);
-	message.AddString(KEY_PACKAGE_NAME, package->Name());
-
-	return PackageActionRef(new PackageAction(actionTitle, message), true);
-}
-
-
-PackageActionRef
-PackageManager::_CreateInstallPackageAction(const PackageInfoRef& package)
-{
-	BString actionTitle = B_TRANSLATE("Install %PackageTitle%");
-	BString packageTitle;
-	PackageUtils::TitleOrName(package, packageTitle);
-	actionTitle.ReplaceAll("%PackageTitle%", packageTitle);
-
-	BMessage message(MSG_PKG_INSTALL);
-	message.AddString(KEY_TITLE, actionTitle);
-	message.AddString(KEY_PACKAGE_NAME, package->Name());
-
-	return PackageActionRef(new PackageAction(actionTitle, message), true);
-}
-
-
-PackageActionRef
-PackageManager::_CreateOpenPackageAction(const PackageInfoRef& package, const DeskbarLink& link)
-{
-	BString title = B_TRANSLATE("Open %DeskbarLink%");
-	title.ReplaceAll("%DeskbarLink%", link.Title());
-
-	BMessage deskbarLinkMessage;
-	if (link.Archive(&deskbarLinkMessage) != B_OK)
-		HDFATAL("unable to archive the deskbar link");
-
-	BMessage message(MSG_PKG_OPEN);
-	message.AddString(KEY_TITLE, title);
-	message.AddMessage(KEY_DESKBAR_LINK, &deskbarLinkMessage);
-	message.AddString(KEY_PACKAGE_NAME, package->Name());
-
-	return PackageActionRef(new PackageAction(title, message), true);
 }
 
 
@@ -391,12 +352,12 @@ PackageManager::ProgressPackageDownloadStarted(const char* packageName)
 
 
 void
-PackageManager::ProgressPackageDownloadActive(const char* packageName,
-	float completionPercentage, off_t bytes, off_t totalBytes)
+PackageManager::ProgressPackageDownloadActive(const char* packageName, float progress, off_t bytes,
+	off_t totalBytes)
 {
-	for (int32 i = 0; i < fPackageProgressListeners.CountItems(); i++) {
-		fPackageProgressListeners.ItemAt(i)->DownloadProgressChanged(
-			packageName, completionPercentage);
+	for (int32 i = fPackageProgressListeners.CountItems() - 1; i >= 0; i--) {
+		fPackageProgressListeners.ItemAt(i)->DownloadProgressChanged(packageName, progress, bytes,
+			totalBytes);
 	}
 }
 
@@ -404,10 +365,8 @@ PackageManager::ProgressPackageDownloadActive(const char* packageName,
 void
 PackageManager::ProgressPackageDownloadComplete(const char* packageName)
 {
-	for (int32 i = 0; i < fPackageProgressListeners.CountItems(); i++) {
-		fPackageProgressListeners.ItemAt(i)->DownloadProgressComplete(
-			packageName);
-	}
+	for (int32 i = fPackageProgressListeners.CountItems() - 1; i >= 0; i--)
+		fPackageProgressListeners.ItemAt(i)->DownloadProgressComplete(packageName);
 }
 
 
@@ -428,7 +387,7 @@ PackageManager::ProgressPackageChecksumComplete(const char* title)
 void
 PackageManager::ProgressStartApplyingChanges(InstalledRepository& repository)
 {
-	for (int32 i = 0; i < fPackageProgressListeners.CountItems(); i++)
+	for (int32 i = fPackageProgressListeners.CountItems() - 1; i >= 0; i--)
 		fPackageProgressListeners.ItemAt(i)->StartApplyingChanges(repository);
 }
 

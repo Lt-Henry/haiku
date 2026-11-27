@@ -199,7 +199,8 @@ parse_program_headers(image_t* image, char* buff, int phnum, int phentsize)
 				image->dso_tls_id
 					= TLSBlockTemplates::Get().Register(
 						TLSBlockTemplate((void*)pheader->p_vaddr,
-							pheader->p_filesz, pheader->p_memsz));
+							pheader->p_filesz, pheader->p_memsz,
+							pheader->p_align));
 				break;
 			case PT_ARM_UNWIND:
 				// will be handled in libgcc_s.so.1
@@ -248,6 +249,7 @@ parse_dynamic_segment(image_t* image)
 	image->symhash = 0;
 	image->syms = 0;
 	image->strtab = 0;
+	image->gnuhash.buckets = 0;
 
 	d = (elf_dyn*)image->dynamic_ptr;
 	if (!d)
@@ -394,7 +396,7 @@ parse_dynamic_segment(image_t* image)
 	}
 
 	// lets make sure we found all the required sections
-	if (!image->symhash || !image->syms || !image->strtab)
+	if ((image->symhash == 0 && image->gnuhash.buckets == NULL) || !image->syms || !image->strtab)
 		return false;
 
 	if (sonameOffset >= 0)
@@ -652,12 +654,10 @@ load_image(char const* name, image_type type, const char* rpath, const char* run
 		#endif
 	}
 
-	set_abi_api_version(image->abi, image->api_version);
-
 	// init gcc version dependent image flags
 	// symbol resolution strategy
 	if (image->abi == B_HAIKU_ABI_GCC_2_ANCIENT)
-		image->find_undefined_symbol = find_undefined_symbol_beos;
+		image->find_undefined_symbol = find_undefined_symbol_dependencies_only;
 
 	// init version infos
 	status = init_image_version_infos(image);

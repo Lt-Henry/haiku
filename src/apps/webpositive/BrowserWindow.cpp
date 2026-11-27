@@ -104,6 +104,7 @@ enum {
 	STOP										= 'stop',
 	HOME										= 'home',
 	GOTO_URL									= 'goul',
+	GOTO_URL_BUTTON								= 'gobt',
 	RELOAD										= 'reld',
 	SHOW_HIDE_BOOKMARK_BAR						= 'shbb',
 	CLEAR_HISTORY								= 'clhs',
@@ -132,18 +133,12 @@ enum {
 	CYCLE_TABS									= 'ctab',
 };
 
-
-static const int32 kModifiers = B_SHIFT_KEY | B_COMMAND_KEY
-	| B_CONTROL_KEY | B_OPTION_KEY | B_MENU_KEY;
-
-
 static const char* kHandledProtocols[] = {
 	"http",
 	"https",
 	"file",
 	"about",
-	"data",
-	"gopher"
+	"data"
 };
 
 static const char* kBookmarkBarSubdir = "Bookmark bar";
@@ -274,22 +269,30 @@ public:
 		BButton("close button", NULL, message),
 		fOverCloseRect(false)
 	{
-		// Button is 16x16 regardless of font size
-		SetExplicitMinSize(BSize(15, 15));
-		SetExplicitMaxSize(BSize(15, 15));
+		SetExplicitSize(BControlLook::ComposeIconSize(16));
+	}
+
+	virtual bool HasHeightForWidth()
+	{
+		return true;
+	}
+
+	virtual void GetHeightForWidth(float width, float* min, float* max, float* preferred)
+	{
+		if (min)
+			*min = width;
+		if (max)
+			*max = width;
+		if (preferred)
+			*preferred = width;
 	}
 
 	virtual void Draw(BRect updateRect)
 	{
 		BRect frame = Bounds();
-		BRect closeRect(frame.InsetByCopy(4, 4));
-		rgb_color base = ui_color(B_PANEL_BACKGROUND_COLOR);
-		float tint = B_DARKEN_1_TINT;
-
-		if (fOverCloseRect)
-			tint *= 1.4;
-		else
-			tint *= 1.2;
+		int inset = BControlLook::ComposeSpacing(B_USE_SMALL_SPACING) / 2;
+		BRect closeRect(frame.InsetByCopy(inset, inset));
+		rgb_color base = ui_color(B_CONTROL_BACKGROUND_COLOR);
 
 		if (Value() == B_CONTROL_ON && fOverCloseRect) {
 			// Draw the button frame
@@ -299,14 +302,13 @@ public:
 			be_control_look->DrawButtonBackground(this, frame,
 				updateRect, base, BControlLook::B_ACTIVATED);
 			closeRect.OffsetBy(1, 1);
-			tint *= 1.2;
 		} else {
 			SetHighColor(base);
 			FillRect(updateRect);
 		}
 
 		// Draw the ×
-		base = tint_color(base, tint);
+		base = ui_color(B_CONTROL_TEXT_COLOR);
 		SetHighColor(base);
 		SetPenSize(2);
 		StrokeLine(closeRect.LeftTop(), closeRect.RightBottom());
@@ -345,13 +347,12 @@ private:
 // #pragma mark - BrowserWindow
 
 
-BrowserWindow::BrowserWindow(BRect frame, SettingsMessage* appSettings,
-		const BString& url, BPrivate::Network::BUrlContext* context,
-		uint32 interfaceElements, BWebView* webView)
+BrowserWindow::BrowserWindow(BRect frame, SettingsMessage* appSettings, const BString& url,
+	BPrivate::Network::BUrlContext* context, uint32 interfaceElements, BWebView* webView,
+	uint32 workspaces)
 	:
-	BWebWindow(frame, kApplicationName,
-		B_DOCUMENT_WINDOW_LOOK, B_NORMAL_WINDOW_FEEL,
-		B_AUTO_UPDATE_SIZE_LIMITS | B_ASYNCHRONOUS_CONTROLS),
+	BWebWindow(frame, kApplicationName, B_DOCUMENT_WINDOW_LOOK, B_NORMAL_WINDOW_FEEL,
+		B_AUTO_UPDATE_SIZE_LIMITS | B_ASYNCHRONOUS_CONTROLS, workspaces),
 	fIsFullscreen(false),
 	fInterfaceVisible(false),
 	fMenusRunning(false),
@@ -391,11 +392,7 @@ BrowserWindow::BrowserWindow(BRect frame, SettingsMessage* appSettings,
 	fTabManager = new TabManager(BMessenger(this), newTabMessage);
 
 	// Menu
-#if INTEGRATE_MENU_INTO_TAB_BAR
-	BMenu* mainMenu = new BMenu("≡");
-#else
 	BMenu* mainMenu = new BMenuBar("Main menu");
-#endif
 	BMenu* menu = new BMenu(B_TRANSLATE("Window"));
 	BMessage* newWindowMessage = new BMessage(NEW_WINDOW);
 	newWindowMessage->AddString("url", "");
@@ -533,7 +530,7 @@ BrowserWindow::BrowserWindow(BRect frame, SettingsMessage* appSettings,
 		fHomeButton->Hide();
 
 	// URL input group
-	fURLInputGroup = new URLInputGroup(new BMessage(GOTO_URL));
+	fURLInputGroup = new URLInputGroup(new BMessage(GOTO_URL_BUTTON));
 
 	// Status Bar
 	fStatusText = new BStringView("status", "");
@@ -614,14 +611,8 @@ BrowserWindow::BrowserWindow(BRect frame, SettingsMessage* appSettings,
 		new BMessage(TOGGLE_FULLSCREEN));
 	toggleFullscreenButton->SetBackgroundMode(BBitmapButton::MENUBAR_BACKGROUND);
 
-#if !INTEGRATE_MENU_INTO_TAB_BAR
 	BMenu* mainMenuItem = mainMenu;
 	fMenuGroup = (new BGroupView(B_HORIZONTAL, 0))->GroupLayout();
-#else
-	BMenu* mainMenuItem = new BMenuBar("Main menu");
-	mainMenuItem->AddItem(mainMenu);
-	fMenuGroup = fTabManager->MenuContainerLayout();
-#endif
 	BLayoutBuilder::Group<>(fMenuGroup)
 		.Add(mainMenuItem)
 		.Add(toggleFullscreenButton, 0.0f)
@@ -638,9 +629,7 @@ BrowserWindow::BrowserWindow(BRect frame, SettingsMessage* appSettings,
 	// Layout
 	BGroupView* topView = new BGroupView(B_VERTICAL, 0.0);
 
-#if !INTEGRATE_MENU_INTO_TAB_BAR
 	topView->AddChild(fMenuGroup);
-#endif
 	topView->AddChild(fTabManager->TabGroup());
 	topView->AddChild(navigationGroup);
 	if (fBookmarkBar != NULL)
@@ -838,15 +827,22 @@ BrowserWindow::MessageReceived(BMessage* message)
 			_ShowBookmarkBar(fBookmarkBar->IsHidden());
 			break;
 
+		case GOTO_URL_BUTTON:
 		case GOTO_URL:
 		{
 			BString url;
 			if (message->FindString("url", &url) != B_OK)
 				url = fURLInputGroup->Text();
 
-			_SetPageIcon(CurrentWebView(), NULL);
-			_SmartURLHandler(url);
+			if (message->what == GOTO_URL_BUTTON && url.IsEmpty()) {
+				fURLInputGroup->MarkAsInvalid(true);
+				fURLInputGroup->Invalidate();
+			} else {
+				fURLInputGroup->MarkAsInvalid(false);
 
+				_SetPageIcon(CurrentWebView(), NULL);
+				_SmartURLHandler(url);
+			}
 			break;
 		}
 
@@ -1128,8 +1124,10 @@ BrowserWindow::MessageReceived(BMessage* message)
 					index = fTabManager->SelectedTabIndex();
 				_ShutdownTab(index);
 				_UpdateTabGroupVisibility();
-			} else
+			} else {
+				_ShutdownTab(0);
 				PostMessage(B_QUIT_REQUESTED);
+			}
 			break;
 
 		case SELECT_TAB:
@@ -1239,7 +1237,9 @@ BrowserWindow::MessageReceived(BMessage* message)
 status_t
 BrowserWindow::Archive(BMessage* archive, bool deep) const
 {
-	status_t ret = archive->AddRect("window frame", Frame());
+	status_t status = archive->AddRect("window frame", Frame());
+	if (status == B_OK)
+		status = archive->AddUInt32("window workspaces", Workspaces());
 
 	for (int i = 0; i < fTabManager->CountTabs(); i++) {
 		BWebView* view = dynamic_cast<BWebView*>(fTabManager->ViewForTab(i));
@@ -1247,11 +1247,11 @@ BrowserWindow::Archive(BMessage* archive, bool deep) const
 			continue;
 		}
 
-		if (ret == B_OK)
-			ret = archive->AddString("tab", view->MainFrameURL());
+		if (status == B_OK)
+			status = archive->AddString("tab", view->MainFrameURL());
 	}
 
-	return ret;
+	return status;
 }
 
 
@@ -1798,7 +1798,9 @@ BrowserWindow::UpdateGlobalHistory(const BString& url)
 {
 	BrowsingHistory::DefaultInstance()->AddItem(BrowsingHistoryItem(url));
 
-	fURLInputGroup->SetText(CurrentWebView()->MainFrameURL());
+	BWebView* webView = CurrentWebView();
+	if (webView != NULL)
+		fURLInputGroup->SetText(webView->MainFrameURL());
 }
 
 
@@ -1881,7 +1883,6 @@ BrowserWindow::_UpdateTabGroupVisibility()
 	if (Lock()) {
 		if (fInterfaceVisible)
 			fTabGroup->SetVisible(_TabGroupShouldBeVisible());
-		fTabManager->SetCloseButtonsAvailable(fTabManager->CountTabs() > 1);
 		Unlock();
 	}
 }
@@ -2493,10 +2494,7 @@ BrowserWindow::_ShowInterface(bool show)
 	fInterfaceVisible = show;
 
 	if (show) {
-#if !INTEGRATE_MENU_INTO_TAB_BAR
-		fMenuGroup->SetVisible(
-			(fVisibleInterfaceElements & INTERFACE_ELEMENT_MENU) != 0);
-#endif
+		fMenuGroup->SetVisible((fVisibleInterfaceElements & INTERFACE_ELEMENT_MENU) != 0);
 		fTabGroup->SetVisible(_TabGroupShouldBeVisible());
 		fNavigationGroup->SetVisible(
 			(fVisibleInterfaceElements & INTERFACE_ELEMENT_NAVIGATION) != 0);

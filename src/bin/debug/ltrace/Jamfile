@@ -1,12 +1,11 @@
 SubDir HAIKU_TOP src bin debug ltrace ;
 
 UsePrivateHeaders debug ;
-UsePrivateHeaders kernel ;
 UsePrivateHeaders runtime_loader ;
 UsePrivateHeaders shared ;
 UsePrivateSystemHeaders ;
 
-BinCommand ltrace
+Application ltrace
 	:
 	ltrace.cpp
 ;

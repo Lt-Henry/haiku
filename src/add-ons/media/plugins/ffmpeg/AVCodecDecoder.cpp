@@ -148,7 +148,8 @@ AVCodecDecoder::~AVCodecDecoder()
 
 	av_frame_free(&fPostProcessedDecodedPicture);
 	av_frame_free(&fRawDecodedPicture);
-	av_free(fRawDecodedAudio->opaque);
+	if (fRawDecodedAudio != NULL)
+		av_free(fRawDecodedAudio->opaque);
 	av_frame_free(&fRawDecodedAudio);
 	if (fCodecContext != NULL) {
 		fCodecContext->extradata = NULL;
@@ -187,6 +188,11 @@ AVCodecDecoder::Setup(media_format* ioEncodedFormat, const void* infoBuffer,
 	if (ioEncodedFormat->type != B_MEDIA_ENCODED_AUDIO
 		&& ioEncodedFormat->type != B_MEDIA_ENCODED_VIDEO)
 		return B_ERROR;
+
+	// Frames are allocated in the constructor, which can't report errors.
+	if (fPostProcessedDecodedPicture == NULL || fRawDecodedPicture == NULL
+			|| fRawDecodedAudio == NULL || fDecodedDataBuffer == NULL)
+	return B_NO_MEMORY;
 
 	fIsAudio = (ioEncodedFormat->type == B_MEDIA_ENCODED_AUDIO);
 	TRACE("[%c] AVCodecDecoder::Setup()\n", fIsAudio ? 'a' : 'v');
@@ -304,8 +310,13 @@ AVCodecDecoder::NegotiateOutputFormat(media_format* inOutFormat)
 		avcodec_free_context(&fCodecContext);
 	}
 
-	fCodecContext = avcodec_alloc_context3(fCodec);
 	fCodecInitDone = false;
+	fCodecContext = avcodec_alloc_context3(fCodec);
+	if (fCodecContext == NULL)
+		return B_NO_MEMORY;
+
+	// The AVFormatReader hands over pts/dts/duration in microseconds
+	fCodecContext->pkt_timebase = av_make_q(1, 1000000);
 
 	system_info info;
 	get_system_info(&info);
@@ -440,8 +451,9 @@ AVCodecDecoder::_NegotiateAudioOutputFormat(media_format* inOutFormat)
 	if (fRawDecodedAudio->opaque == NULL)
 		return B_NO_MEMORY;
 
+	// sets the passed pointer to NULL
+	swr_free(&fResampleContext);
 	if (av_sample_fmt_is_planar(fCodecContext->sample_fmt)) {
-		fResampleContext = NULL;
 		swr_alloc_set_opts2(&fResampleContext,
 			&fCodecContext->ch_layout,
 			fCodecContext->request_sample_fmt,
@@ -1153,7 +1165,9 @@ AVCodecDecoder::_DecodeSomeAudioFramesIntoEmptyDecodedDataBuffer()
 	if (fDecodedDataBufferSize < 0)
 		fDecodedDataBufferSize = 0;
 
-	if (error == 0)
+	// Don't return an error for EAGAIN (just like we do above)
+	// The caller will loop and feed the next chunk
+	if (error == 0 || error == AVERROR(EAGAIN))
 		return B_OK;
 	else
 		return B_ERROR;
@@ -1671,12 +1685,15 @@ AVCodecDecoder::_DeinterlaceAndColorConvertVideoFrame()
 	fDecodedDataSizeInBytes = fHeader.size_used;
 
 	if (fDecodedData == NULL) {
-		const size_t kOptimalAlignmentForColorConversion = 32;
+		const size_t kOptimalAlignmentForColorConversion = 64;
 		posix_memalign(reinterpret_cast<void**>(&fDecodedData),
-			kOptimalAlignmentForColorConversion, fDecodedDataSizeInBytes);
+			kOptimalAlignmentForColorConversion, fDecodedDataSizeInBytes + 63);
 	}
-	if (fDecodedData == NULL)
+	if (fDecodedData == NULL) {
+		if (useDeinterlacedPicture)
+			av_freep(&deinterlacedPicture.data[0]);
 		return B_NO_MEMORY;
+	}
 
 	fPostProcessedDecodedPicture->data[0] = fDecodedData;
 	fPostProcessedDecodedPicture->linesize[0]

@@ -20,7 +20,7 @@
 #include <generic_syscall.h>
 #include <kernel.h>
 #include <ksignal.h>
-#include <int.h>
+#include <interrupts.h>
 #include <team.h>
 #include <thread.h>
 #include <tls.h>
@@ -70,9 +70,7 @@ class RestartSyscall : public AbstractTraceEntry {
 extern "C" void x86_64_thread_entry();
 
 // Initial thread saved state.
-static arch_thread sInitialState _ALIGNED(64);
-uint16 gFPUControlDefault;
-uint32 gFPUMXCSRDefault;
+arch_thread gInitialState _ALIGNED(64);
 extern uint64 gFPUSaveLength;
 extern bool gHasXsave;
 extern bool gHasXsavec;
@@ -155,6 +153,8 @@ arch_thread_control(const char* subsystem, uint32 function, void* buffer,
 				|| user_memcpy(&base, buffer, sizeof(base)) < B_OK) {
 				return B_BAD_ADDRESS;
 			}
+			if (base > USER_TOP)
+				return B_BAD_VALUE;
 
 			Thread* thread = thread_get_current_thread();
 			thread->arch_info.user_gs_base = base;
@@ -174,26 +174,26 @@ arch_thread_init(kernel_args* args)
 {
 	// Save one global valid FPU state; it will be copied in the arch dependent
 	// part of each new thread.
+	// Use 0xFFFFFFFF as the mask to save all supported state components.
 	if (gHasXsave || gHasXsavec) {
-		memset(sInitialState.fpu_state, 0, gFPUSaveLength);
 		if (gHasXsavec) {
 			asm volatile (
 				"clts;"		\
 				"fninit;"	\
 				"fnclex;"	\
-				"movl $0x7,%%eax;"	\
-				"movl $0x0,%%edx;"	\
+				"movl $0xFFFFFFFF,%%eax;"	\
+				"movl $0xFFFFFFFF,%%edx;"	\
 				"xsavec64 %0"
-				:: "m" (sInitialState.fpu_state));
+				:: "m" (gInitialState.user_fpu_state));
 		} else {
 			asm volatile (
 				"clts;"		\
 				"fninit;"	\
 				"fnclex;"	\
-				"movl $0x7,%%eax;"	\
-				"movl $0x0,%%edx;"	\
+				"movl $0xFFFFFFFF,%%eax;"	\
+				"movl $0xFFFFFFFF,%%edx;"	\
 				"xsave64 %0"
-				:: "m" (sInitialState.fpu_state));
+				:: "m" (gInitialState.user_fpu_state));
 		}
 	} else {
 		asm volatile (
@@ -201,13 +201,20 @@ arch_thread_init(kernel_args* args)
 			"fninit;"	\
 			"fnclex;"	\
 			"fxsaveq %0"
-			:: "m" (sInitialState.fpu_state));
+			:: "m" (gInitialState.user_fpu_state));
 	}
-	gFPUControlDefault = ((savefpu*)&sInitialState.fpu_state)->fp_fxsave.control;
-	gFPUMXCSRDefault = ((savefpu*)&sInitialState.fpu_state)->fp_fxsave.mxcsr;
+
+	// FNINIT does not affect MXCSR or data registers, so we reset them in the state.
+	savefpu* initialState = ((savefpu*)&gInitialState.user_fpu_state);
+	initialState->fp_fxsave.mxcsr = 0x1F80; // __INITIAL_MXCSR__
+	memset(initialState->fp_fxsave.fp, 0, sizeof(initialState->fp_fxsave.fp));
+	memset(initialState->fp_fxsave.xmm, 0, sizeof(initialState->fp_fxsave.xmm));
+	// Clear the rest of the state, which should all be data registers.
+	char* remainingState = (char*)initialState + offsetof(savefpu, fp_ymm);
+	size_t remainingStateSize = sizeof(gInitialState.user_fpu_state) - offsetof(savefpu, fp_ymm);
+	memset(remainingState, 0, remainingStateSize);
 
 	register_generic_syscall(THREAD_SYSCALLS, arch_thread_control, 1, 0);
-
 	return B_OK;
 }
 
@@ -216,7 +223,7 @@ status_t
 arch_thread_init_thread_struct(Thread* thread)
 {
 	// Copy the initial saved FPU state to the new thread.
-	memcpy(&thread->arch_info, &sInitialState, sizeof(arch_thread));
+	memcpy(&thread->arch_info, &gInitialState, sizeof(arch_thread));
 
 	// Initialise the current thread pointer.
 	thread->arch_info.thread = thread;
@@ -250,6 +257,7 @@ arch_thread_init_kthread_stack(Thread* thread, void* _stack, void* _stackTop,
 
 	*--stackTop = uintptr_t(data);
 	*--stackTop = uintptr_t(function);
+	*--stackTop = uintptr_t(thread);
 
 	// Save the stack position.
 	thread->arch_info.current_stack = stackTop;
@@ -264,7 +272,7 @@ arch_thread_dump_info(void* info)
 	kprintf("\trsp: %p\n", thread->current_stack);
 	kprintf("\tsyscall_rsp: %p\n", thread->syscall_rsp);
 	kprintf("\tuser_rsp: %p\n", thread->user_rsp);
-	kprintf("\tfpu_state at %p\n", thread->fpu_state);
+	kprintf("\tuser_fpu_state at %p\n", thread->user_fpu_state);
 }
 
 
@@ -368,13 +376,21 @@ arch_setup_signal_frame(Thread* thread, struct sigaction* action,
 	signalFrameData->context.uc_mcontext.rip = frame->ip;
 	signalFrameData->context.uc_mcontext.rflags = frame->flags;
 
+	uint64 userFPUSaveLength = min_c(gFPUSaveLength, sizeof(savefpu));
+
 	if (frame->fpu != nullptr) {
 		memcpy((void*)&signalFrameData->context.uc_mcontext.fpu, frame->fpu,
-			gFPUSaveLength);
+			userFPUSaveLength);
 	} else {
 		memcpy((void*)&signalFrameData->context.uc_mcontext.fpu,
-			sInitialState.fpu_state, gFPUSaveLength);
+			gInitialState.user_fpu_state, userFPUSaveLength);
 	}
+
+	signalFrameData->context.uc_mcontext.fpu.fp_fxsave.fault_address = x86_read_cr2();
+	signalFrameData->context.uc_mcontext.fpu.fp_fxsave.error_code = frame->error_code;
+	signalFrameData->context.uc_mcontext.fpu.fp_fxsave.cs = frame->cs;
+	signalFrameData->context.uc_mcontext.fpu.fp_fxsave.ss = frame->ss;
+	signalFrameData->context.uc_mcontext.fpu.fp_fxsave.trap_number = frame->vector;
 
 	// Fill in signalFrameData->context.uc_stack.
 	signal_get_user_stack(frame->user_sp, &signalFrameData->context.uc_stack);
@@ -384,10 +400,19 @@ arch_setup_signal_frame(Thread* thread, struct sigaction* action,
 
 	// Get the stack to use and copy the frame data to it.
 	uint8* userStack = get_signal_stack(thread, frame, action,
-		sizeof(*signalFrameData) + sizeof(frame->ip));
+		sizeof(*signalFrameData) + sizeof(frame->ip) + 63);
 
 	signal_frame_data* userSignalFrameData
 		= (signal_frame_data*)(userStack + sizeof(frame->ip));
+
+	// XRSTOR needs the FPU data to be 64-byte-aligned, so make sure it is.
+	// (This is what the extra space we requested from get_signal_stack is for.)
+	addr_t misalignment = ((addr_t)&userSignalFrameData->context.uc_mcontext.fpu) % 64;
+	if (misalignment != 0) {
+		userSignalFrameData = (signal_frame_data*)
+			((uint8*)userSignalFrameData + (64 - misalignment));
+		userStack = ((uint8*)userSignalFrameData) - sizeof(frame->ip);
+	}
 
 	if (user_memcpy(userSignalFrameData, signalFrameData,
 			sizeof(*signalFrameData)) != B_OK) {
@@ -405,6 +430,8 @@ arch_setup_signal_frame(Thread* thread, struct sigaction* action,
 	// Set up the iframe to execute the signal handler wrapper on our prepared
 	// stack. First argument points to the frame data.
 	addr_t* commPageAddress = (addr_t*)thread->team->commpage_address;
+	frame->cs = USER_CODE_SELECTOR;
+	frame->ss = USER_DATA_SELECTOR;
 	frame->user_sp = (addr_t)userStack;
 	arch_cpu_enable_user_access();
 	frame->ip = commPageAddress[COMMPAGE_ENTRY_X86_SIGNAL_HANDLER]
@@ -421,36 +448,9 @@ int64
 arch_restore_signal_frame(struct signal_frame_data* signalFrameData)
 {
 	iframe* frame = x86_get_current_iframe();
-
 	frame->orig_rax = signalFrameData->syscall_restart_return_value;
-	frame->ax = signalFrameData->context.uc_mcontext.rax;
-	frame->bx = signalFrameData->context.uc_mcontext.rbx;
-	frame->cx = signalFrameData->context.uc_mcontext.rcx;
-	frame->dx = signalFrameData->context.uc_mcontext.rdx;
-	frame->di = signalFrameData->context.uc_mcontext.rdi;
-	frame->si = signalFrameData->context.uc_mcontext.rsi;
-	frame->bp = signalFrameData->context.uc_mcontext.rbp;
-	frame->r8 = signalFrameData->context.uc_mcontext.r8;
-	frame->r9 = signalFrameData->context.uc_mcontext.r9;
-	frame->r10 = signalFrameData->context.uc_mcontext.r10;
-	frame->r11 = signalFrameData->context.uc_mcontext.r11;
-	frame->r12 = signalFrameData->context.uc_mcontext.r12;
-	frame->r13 = signalFrameData->context.uc_mcontext.r13;
-	frame->r14 = signalFrameData->context.uc_mcontext.r14;
-	frame->r15 = signalFrameData->context.uc_mcontext.r15;
-	frame->user_sp = signalFrameData->context.uc_mcontext.rsp;
-	frame->ip = signalFrameData->context.uc_mcontext.rip;
-	frame->flags = (frame->flags & ~(uint64)X86_EFLAGS_USER_FLAGS)
-		| (signalFrameData->context.uc_mcontext.rflags & X86_EFLAGS_USER_FLAGS);
 
-	Thread* thread = thread_get_current_thread();
-
-	memcpy(thread->arch_info.fpu_state,
-		(void*)&signalFrameData->context.uc_mcontext.fpu, gFPUSaveLength);
-	frame->fpu = &thread->arch_info.fpu_state;
-
-	// The syscall return code overwrites frame->ax with the return value of
-	// the syscall, need to return it here to ensure the correct value is
-	// restored.
-	return frame->ax;
+	// We don't actually restore any registers here, as the handler
+	// in userspace will do that.
+	return 0;
 }

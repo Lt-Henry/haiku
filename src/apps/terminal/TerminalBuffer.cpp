@@ -32,7 +32,12 @@ TerminalBuffer::TerminalBuffer()
 	fAlternateScreenOffset(0),
 	fAlternateAttributes(),
 	fColorsPalette(NULL),
-	fListenerValid(false)
+	fListenerValid(false),
+	fMode(MODE_INTERPRET_META_KEY | MODE_META_KEY_SENDS_ESCAPE | MODE_CURSOR_BLINKING),
+	fCursorStyle(BLOCK_CURSOR),
+	fMouseMode(MOUSE_MODE_OFF),
+	fMouseProtocol(MOUSE_PROTOCOL_X10),
+	fNextOSCRef(1)
 {
 }
 
@@ -42,6 +47,14 @@ TerminalBuffer::~TerminalBuffer()
 	free(fAlternateScreen);
 	delete fAlternateHistory;
 	delete[] fColorsPalette;
+
+	HyperLinkRefMap::Iterator iterator = fHyperLinkForRef.GetIterator();
+	while (iterator.HasNext()) {
+		HyperLinkRefMap::Entry entry = iterator.Next();
+		delete entry.value;
+	}
+	fHyperLinkForID.Clear();
+	fHyperLinkForRef.Clear();
 }
 
 
@@ -56,7 +69,7 @@ TerminalBuffer::Init(int32 width, int32 height, int32 historySize)
 		return B_NO_MEMORY;
 
 	for (int32 i = 0; i < height; i++)
-		fAlternateScreen[i]->Clear();
+		fAlternateScreen[i]->Clear(width);
 
 	fColorsPalette = new(std::nothrow) rgb_color[kTermColorCount];
 	if (fColorsPalette == NULL)
@@ -91,91 +104,28 @@ TerminalBuffer::Encoding() const
 }
 
 
-void
-TerminalBuffer::EnableInterpretMetaKey(bool enable)
+bool
+TerminalBuffer::IsMode(uint32 mode) const
 {
-	if (fListenerValid) {
-		BMessage message(MSG_ENABLE_META_KEY);
-		message.AddBool("enableInterpretMetaKey", enable);
-		fListener.SendMessage(&message);
-	}
+	return (fMode & mode) != 0;
 }
 
 
 void
-TerminalBuffer::EnableMetaKeySendsEscape(bool enable)
+TerminalBuffer::SetMode(uint32 mode)
 {
-	if (fListenerValid) {
-		BMessage message(MSG_ENABLE_META_KEY);
-		message.AddBool("enableMetaKeySendsEscape", enable);
-		fListener.SendMessage(&message);
-	}
+	fMode |= mode;
+	if (fListenerValid && (mode & MODE_CURSOR_BLINKING) != 0)
+		fListener.SendMessage(MSG_SET_CURSOR_STYLE);
 }
 
 
 void
-TerminalBuffer::EnableBracketedPasteMode(bool enable)
+TerminalBuffer::ResetMode(uint32 mode)
 {
-	if (fListenerValid) {
-		BMessage message(MSG_ENABLE_BRACKETED_PASTE);
-		message.AddBool("enableBracketedPaste", enable);
-		fListener.SendMessage(&message);
-	}
-}
-
-
-void
-TerminalBuffer::ReportX10MouseEvent(bool reportX10MouseEvent)
-{
-	if (fListenerValid) {
-		BMessage message(MSG_REPORT_MOUSE_EVENT);
-		message.AddBool("reportX10MouseEvent", reportX10MouseEvent);
-		fListener.SendMessage(&message);
-	}
-}
-
-
-void
-TerminalBuffer::ReportNormalMouseEvent(bool reportNormalMouseEvent)
-{
-	if (fListenerValid) {
-		BMessage message(MSG_REPORT_MOUSE_EVENT);
-		message.AddBool("reportNormalMouseEvent", reportNormalMouseEvent);
-		fListener.SendMessage(&message);
-	}
-}
-
-
-void
-TerminalBuffer::ReportButtonMouseEvent(bool report)
-{
-	if (fListenerValid) {
-		BMessage message(MSG_REPORT_MOUSE_EVENT);
-		message.AddBool("reportButtonMouseEvent", report);
-		fListener.SendMessage(&message);
-	}
-}
-
-
-void
-TerminalBuffer::ReportAnyMouseEvent(bool reportAnyMouseEvent)
-{
-	if (fListenerValid) {
-		BMessage message(MSG_REPORT_MOUSE_EVENT);
-		message.AddBool("reportAnyMouseEvent", reportAnyMouseEvent);
-		fListener.SendMessage(&message);
-	}
-}
-
-
-void
-TerminalBuffer::EnableExtendedMouseCoordinates(bool enable)
-{
-	if (fListenerValid) {
-		BMessage message(MSG_REPORT_MOUSE_EVENT);
-		message.AddBool("enableExtendedMouseCoordinates", enable);
-		fListener.SendMessage(&message);
-	}
+	fMode &= ~mode;
+	if (fListenerValid && (mode & MODE_CURSOR_BLINKING) != 0)
+		fListener.SendMessage(MSG_SET_CURSOR_STYLE);
 }
 
 
@@ -183,6 +133,20 @@ void
 TerminalBuffer::SetEncoding(int encoding)
 {
 	fEncoding = encoding;
+}
+
+
+void
+TerminalBuffer::SetMouseMode(MouseMode mouseMode)
+{
+	fMouseMode = mouseMode;
+}
+
+
+void
+TerminalBuffer::SetMouseProtocol(MouseProtocol mouseProtocol)
+{
+	fMouseProtocol = mouseProtocol;
 }
 
 
@@ -251,36 +215,9 @@ TerminalBuffer::GetColor(uint8 index)
 
 
 void
-TerminalBuffer::SetCursorStyle(int32 style, bool blinking)
+TerminalBuffer::SetCursorStyle(int32 style)
 {
-	if (fListenerValid) {
-		BMessage message(MSG_SET_CURSOR_STYLE);
-		message.AddInt32("style", style);
-		message.AddBool("blinking", blinking);
-		fListener.SendMessage(&message);
-	}
-}
-
-
-void
-TerminalBuffer::SetCursorBlinking(bool blinking)
-{
-	if (fListenerValid) {
-		BMessage message(MSG_SET_CURSOR_STYLE);
-		message.AddBool("blinking", blinking);
-		fListener.SendMessage(&message);
-	}
-}
-
-
-void
-TerminalBuffer::SetCursorHidden(bool hidden)
-{
-	if (fListenerValid) {
-		BMessage message(MSG_SET_CURSOR_STYLE);
-		message.AddBool("hidden", hidden);
-		fListener.SendMessage(&message);
-	}
+	fCursorStyle = style;
 }
 
 
@@ -408,4 +345,34 @@ TerminalBuffer::_SwitchScreenBuffer()
 	std::swap(fScreenOffset, fAlternateScreenOffset);
 	std::swap(fAttributes, fAlternateAttributes);
 	fAlternateScreenActive = !fAlternateScreenActive;
+}
+
+
+uint32
+TerminalBuffer::PutHyperLink(const char* id, BString& uri)
+{
+	HyperLink* hyperLink = NULL;
+	if (id != NULL)
+		hyperLink = fHyperLinkForID.Get(id);
+	if (hyperLink == NULL) {
+		hyperLink = new (std::nothrow) HyperLink(uri, fNextOSCRef++, id);
+		if (id != NULL)
+			fHyperLinkForID.Put(id, hyperLink);
+		HyperLink* oldHyperLink = fHyperLinkForRef.Get(hyperLink->OSCRef());
+		fHyperLinkForRef.Put(hyperLink->OSCRef(), hyperLink);
+		delete oldHyperLink;
+	}
+	return hyperLink->OSCRef();
+}
+
+
+bool
+TerminalBuffer::GetHyperLink(uint32 ref, HyperLink &_link)
+{
+	HyperLink* hyperLink = fHyperLinkForRef.Get(ref);
+	if (hyperLink == NULL) {
+		return false;
+	}
+	_link = *hyperLink;
+	return true;
 }

@@ -48,6 +48,7 @@ typedef enum StandardHeaderEnum
   STD_HDR_REPLY, /* Things in the reply-to: field. */
   STD_HDR_SUBJECT, /* The Subject: field. */
   STD_HDR_PRIORITY, /* The Priority: and related fields, usually "Normal". */
+  STD_HDR_LABEL, /* The user settable Label text attribute. */
   STD_HDR_STATUS, /* The BeOS mail Read / New status text attribute. */
   STD_HDR_THREAD, /* The subject simplified. */
   STD_HDR_NAME, /* The From address simplified into a plain name. */
@@ -63,6 +64,7 @@ const char *g_StandardAttributeNames [STD_HDR_MAX] =
   B_MAIL_ATTR_REPLY,
   B_MAIL_ATTR_SUBJECT,
   B_MAIL_ATTR_PRIORITY,
+  B_MAIL_ATTR_LABEL,
   B_MAIL_ATTR_STATUS,
   B_MAIL_ATTR_THREAD,
   B_MAIL_ATTR_NAME
@@ -97,8 +99,8 @@ static void DisplayErrorMessage (
 
   if (ErrorNumber != 0)
   {
-    sprintf (ErrorBuffer, "%s, error code $%X/%d (%s) has occured.",
-      MessageString, ErrorNumber, ErrorNumber, strerror (ErrorNumber));
+    sprintf(ErrorBuffer, "%s, error code $%X/%d (%s) has occurred.", MessageString, ErrorNumber,
+        ErrorNumber, strerror(ErrorNumber));
     MessageString = ErrorBuffer;
   }
 
@@ -310,8 +312,7 @@ bool IsStartOfUsenetArticle (char *LineString)
 
   if (memcmp ("of ", StringPntr, 3) != 0)
   {
-    printf ("False alarm, article line \"of\" misssing in \"%s\".\n",
-      LineString);
+    printf("False alarm, article line \"of\" missing in \"%s\".\n", LineString);
     return false;
   }
   StringPntr += 2;

@@ -1,4 +1,4 @@
-1	portuguese (brazil)	x-vnd.haiku-softwareupdater	369324613
+1	portuguese (brazil)	x-vnd.haiku-softwareupdater	1377379822
 Updating version	SoftwareUpdaterWindow	List item text	Atualizando versão
 Click here to install {0, plural, one{# updated package} other{# updated packages}}.	CheckManager		Clique aqui para instalar {0, plural, one{# pacote atualizado} other{# pacotes atualizados}}.
 Packages to be uninstalled	SoftwareUpdaterWindow	List super item label	Pacotes a serem desinstalados
@@ -41,7 +41,6 @@ Exception occurred while checking for updates: %s\n	CheckAction		Ocorreu um erro
 Packages are being updated	UpdateManager		Os pacotes estão sendo atualizados
 Cancel	SoftwareUpdaterWindow		Cancelar
 Don't quit	SoftwareUpdaterWindow		Não sair
-Click here to run SoftwareUpdater. Some updates will require a problem solution to be selected.	CheckManager		Clique aqui para executar o Atualizador de Softwares. Algumas atualizações necessitam de intervenção para selecionar uma solução para o problema encontrado.
 Checking for updates	SoftwareUpdaterWindow		Procurando atualizações
 Updates completed	UpdateManager		Atualização concluída
 Reboot	SoftwareUpdaterWindow		Reiniciar
@@ -52,8 +51,8 @@ No remote repositories are available	UpdateManager	Error message	Nenhum reposit�
 Software {0, plural, one{update} other{updates}} available	CheckManager		{0, plural, one{Atualização} other{Atualizações}} de software {0, plural, one{disponível} other{disponíveis}}
 Reboot	SoftwareUpdaterWindow	Button label	Reiniciar
 Update	SoftwareUpdaterWindow	Alert button label	Atualizar
-Open Repositories	SoftwareUpdaterWindow	Alert button label	Abrir Repositórios
 Updates did not complete	UpdateAction		As atualizações não foram concluídas
+Open Repositories	SoftwareUpdaterWindow	Alert button label	Abrir Repositórios
 Invalid update type, cannot continue with updates	UpdateAction		Tipo de atualização inválida, não se pode continuar com as atualizações
 Uninstalling version	SoftwareUpdaterWindow	List item text	Desinstalando versão
 %i of %i	UpdateManager	Do not translate %i	%i de %i

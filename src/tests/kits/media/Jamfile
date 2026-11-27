@@ -1,11 +1,6 @@
 SubDir HAIKU_TOP src tests kits media ;
 
-SimpleTest TimedEventQueueTest : TimedEventQueueTest.cpp
-	: libmedia.so be ;
-
-SimpleTest mediaFormats :
-	mediaFormats.cpp
-	: media ;
+AddSubDirSupportedPlatforms libbe_test ;
 
 SimpleTest VideoDecoder :
 	VideoDecoder.cpp
@@ -17,7 +12,10 @@ UnitTestLib libmediatest.so :
 	AreaTest.cpp
 	BufferTest.cpp
 	FormatDescriptions.cpp
+	MediaFormats.cpp
 	SizeofTest.cpp
+	TimeCodeTest.cpp
+	TimedEventQueueTest.cpp
 
 	: be media [ TargetLibstdc++ ] [ TargetLibsupc++ ]
 ;

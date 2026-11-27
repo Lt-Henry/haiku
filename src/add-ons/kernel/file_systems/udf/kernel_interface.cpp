@@ -137,6 +137,7 @@ udf_unmount(fs_volume *_volume)
 {
 	TRACE(("udb_unmount: _volume = %p\n", _volume));
 	Volume *volume = (Volume *)_volume->private_volume;
+	put_vnode(_volume, volume->RootIcb()->Id());
 	delete volume;
 	return B_OK;
 }
@@ -290,7 +291,7 @@ udf_read_stat(fs_volume *_volume, fs_vnode *node, struct stat *stat)
 
 	stat->st_mode = icb->Mode();
 	stat->st_size = icb->Length();
-	stat->st_blocks = (stat->st_size + 511) / 512;
+	stat->st_blocks = (stat->st_size + DEV_BSIZE - 1) / DEV_BSIZE;
 
 	// File times. For now, treat the modification time as creation
 	// time as well, since true creation time is an optional extended

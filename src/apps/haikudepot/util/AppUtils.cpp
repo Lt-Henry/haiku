@@ -1,12 +1,10 @@
 /*
- * Copyright 2018-2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2018-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
 
 #include "AppUtils.h"
-
-#include <string.h>
 
 #include <AppFileInfo.h>
 #include <Application.h>
@@ -23,20 +21,13 @@
  */
 
 /*static*/ void
-AppUtils::NotifySimpleError(const char* title, const char* text,
-	alert_type type)
+AppUtils::NotifySimpleError(const SimpleAlert& alertSimple)
 {
 	BMessage message(MSG_ALERT_SIMPLE_ERROR);
-
-	if (title != NULL && strlen(title) != 0)
-		message.AddString(KEY_ALERT_TITLE, title);
-
-	if (text != NULL && strlen(text) != 0)
-		message.AddString(KEY_ALERT_TEXT, text);
-
-	message.AddInt32(KEY_ALERT_TYPE, static_cast<int>(type));
-
-	be_app->PostMessage(&message);
+	if (alertSimple.Archive(&message) != B_OK)
+		HDERROR("unable to archive alert");
+	else
+		be_app->PostMessage(&message);
 }
 
 

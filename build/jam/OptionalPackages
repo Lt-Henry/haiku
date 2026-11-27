@@ -96,16 +96,30 @@ if [ IsOptionalHaikuImagePackageAdded DevelopmentBase ] {
 	}
 
 	# other commonly used tools
-	AddHaikuImageDisabledPackages bison cdrtools flex jam make mawk mkdepend
-		m4@!gcc2 m4_x86@secondary_x86 nasm@!gcc2 nasm_x86@secondary_x86 patch ;
-	AddHaikuImageSourcePackages bison cdrtools make patch
-		m4@!gcc2 m4_x86@secondary_x86 ;
+	AddHaikuImageDisabledPackages
+		bison
+		cdrtools
+		flex
+		jam
+		make
+		mawk
+		mkdepend
+		m4@!gcc2 m4_x86@secondary_x86
+		nasm@!gcc2 nasm_x86@secondary_x86
+		patch@!gcc2 patch_x86@secondary_x86
+		;
+	AddHaikuImageSourcePackages
+		bison
+		cdrtools
+		make
+		m4@!gcc2 m4_x86@secondary_x86
+		patch@!gcc2 patch_x86@secondary_x86
+		;
 }
 
 
 # DevelopmentMin
-if [ IsOptionalHaikuImagePackageAdded DevelopmentMin ]
-		&& ( $(TARGET_ARCH) = x86 || $(TARGET_ARCH) = x86_64 ) {
+if [ IsOptionalHaikuImagePackageAdded DevelopmentMin ] {
 	AddPackageFilesToHaikuImage _packages_
 		:
 		haiku_devel.hpkg

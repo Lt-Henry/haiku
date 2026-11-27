@@ -1,7 +1,5 @@
-1	danish	x-vnd.Haiku-ShowImage	575555985
-ShowImage	System name		Billedviser
+1	danish	x-vnd.Haiku-ShowImage	621535342
 Page setup…	Menus		Sideopsætning…
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		Dokumentet '%s' (side %d) er blevet ændret. Vil du lukke dokumentet?
 Previous file	Menus		Forrige fil
 View	Menus		Vis
 Leave full screen	Menus		Forlad fuldskærm
@@ -26,7 +24,6 @@ Zoom in	Menus		Zoom ind
 Last page	Menus		Sidste side
 Cancel	ClosePrompt		Afbryd
 High-quality zooming	Menus		Højkvalitetszoom
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		Dokumentet '%s' er blevet ændret. Vil du lukke dokumentet?
 Close	Menus		Luk
 Selection mode	Menus		Markeringstilstand
 DPI:	PrintOptionsWindow		DPI:
@@ -43,13 +40,11 @@ Stretch to window	Menus		Udstræk til vindue
 Job setup	PrintOptionsWindow		Jobopsætning
 Clear selection	Menus		Ryd markering
 Rotate clockwise	Menus		Rotér med uret
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		Kunne ikke indlæse billede! Enten eksisterer filen eller en billedeoversætter for den, ikke.
 Rotate counterclockwise	Menus		Rotér mod uret
 Previous page	Menus		Forrige side
 Fit to window	Menus		Tilpas til vindue
 Go to page	Menus		Gå til side
 Browse	Menus		Gennemse
-Progress monitor	ProgressWindow		Fremgangsoversigt
 Edit	Menus		Redigér
 Move to Trash	Menus		Flyt til papirkurven
 Use as background…	Menus		Brug som baggrund…

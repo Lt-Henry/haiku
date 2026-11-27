@@ -174,7 +174,7 @@ ufs2_can_page(fs_volume *_volume, fs_vnode *_node, void *_cookie)
 
 
 static status_t
-ufs2_read_pages(fs_volume *_volume, fs_vnode *_node, void *_cookie,
+ufs2_read_pages(fs_volume *_volume, fs_vnode *_node, void *,
 			   off_t pos, const iovec *vecs, size_t count, size_t *_numBytes)
 {
 	return B_NOT_SUPPORTED;
@@ -263,7 +263,7 @@ ufs2_open(fs_volume * _volume, fs_vnode *_node, int openMode,
 
 	// opening a directory read-only is allowed, although you can't read
 	// any data from it.
-	if (inode->IsDirectory() && (openMode & O_RWMASK) != 0)
+	if (inode->IsDirectory() && (openMode & O_RWMASK) != O_RDONLY)
 		return B_IS_A_DIRECTORY;
 
 	status_t status =  inode->CheckPermissions(open_mode_to_access(openMode)

@@ -1,16 +1,19 @@
 /*
- * Copyright 2019, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2019-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  *
  * All rights reserved. Distributed under the terms of the MIT License.
  */
+
+
 #include "ValidationFailure.h"
+
 
 // These are keys that are used to store this object's data into a BMessage
 // instance.
 
-#define KEY_PROPERTY							"property"
-#define KEY_PREFIX_MESSAGE						"message_"
-#define KEY_PREFIX_ITEM							"item_"
+static const char* const kKeyProperty = "property";
+static const char* const kKeyPrefixMessage = "message_";
+static const char* const kKeyPrefixItem = "item_";
 
 
 // #pragma mark - Single Validation Failure
@@ -18,7 +21,7 @@
 
 ValidationFailure::ValidationFailure(BMessage* from)
 {
-	from->FindString(KEY_PROPERTY, &fProperty);
+	from->FindString(kKeyProperty, &fProperty);
 
 	if (fProperty.IsEmpty())
 		debugger("illegal state; missing property in message");
@@ -28,7 +31,7 @@ ValidationFailure::ValidationFailure(BMessage* from)
 	BString message;
 
 	for (int32 i = 0; result == B_OK; i++) {
-		name.SetToFormat("%s%" B_PRId32, KEY_PREFIX_MESSAGE, i);
+		name.SetToFormat("%s%" B_PRId32, kKeyPrefixMessage, i);
 		result = from->FindString(name, &message);
 
 		if (result == B_OK)
@@ -89,9 +92,9 @@ ValidationFailure::Archive(BMessage* into, bool deep) const
 	status_t result = B_OK;
 	BString key;
 	if (result == B_OK)
-		result = into->AddString(KEY_PROPERTY, fProperty);
+		result = into->AddString(kKeyProperty, fProperty);
 	for (int32 i = 0; result == B_OK && i < fMessages.CountStrings(); i++) {
-		key.SetToFormat("%s%" B_PRId32, KEY_PREFIX_MESSAGE, i);
+		key.SetToFormat("%s%" B_PRId32, kKeyPrefixMessage, i);
 		result = into->AddString(key, fMessages.StringAt(i));
 	}
 	return result;
@@ -145,7 +148,7 @@ ValidationFailures::IsEmpty() const
 bool
 ValidationFailures::Contains(const BString& property) const
 {
-	ValidationFailure* failure = _GetFailure(property);
+	ValidationFailure* failure = GetFailure(property);
 	return failure != NULL && !failure->IsEmpty();
 }
 
@@ -154,7 +157,7 @@ bool
 ValidationFailures::Contains(const BString& property,
 	const BString& message) const
 {
-	ValidationFailure* failure = _GetFailure(property);
+	ValidationFailure* failure = GetFailure(property);
 	return failure != NULL && failure->Contains(message);
 }
 
@@ -177,7 +180,7 @@ ValidationFailures::Archive(BMessage* into, bool deep) const
 		BMessage itemMessage;
 		result = item->Archive(&itemMessage);
 		if (result == B_OK) {
-			key.SetToFormat("%s%" B_PRId32, KEY_PREFIX_ITEM, i);
+			key.SetToFormat("%s%" B_PRId32, kKeyPrefixItem, i);
 			result = into->AddMessage(key, &itemMessage);
 		}
 	}
@@ -187,7 +190,7 @@ ValidationFailures::Archive(BMessage* into, bool deep) const
 
 
 ValidationFailure*
-ValidationFailures::_GetFailure(const BString& property) const
+ValidationFailures::GetFailure(const BString& property) const
 {
 	for (int32 i = 0; i < fItems.CountItems(); i++) {
 		ValidationFailure* item = fItems.ItemAt(i);
@@ -202,7 +205,7 @@ ValidationFailures::_GetFailure(const BString& property) const
 ValidationFailure*
 ValidationFailures::_GetOrCreateFailure(const BString& property)
 {
-	ValidationFailure* item = _GetFailure(property);
+	ValidationFailure* item = GetFailure(property);
 
 	if (item == NULL) {
 		item = new ValidationFailure(property);
@@ -221,7 +224,7 @@ ValidationFailures::_AddFromMessage(const BMessage* from)
 
 	while (true) {
 		BMessage itemMessage;
-		key.SetToFormat("%s%" B_PRId32, KEY_PREFIX_ITEM, i);
+		key.SetToFormat("%s%" B_PRId32, kKeyPrefixItem, i);
 		if (from->FindMessage(key, &itemMessage) != B_OK)
 			return;
 		fItems.AddItem(new ValidationFailure(&itemMessage));

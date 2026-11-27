@@ -56,6 +56,7 @@ of their respective holders. All rights reserved.
 #include <E-mail.h>
 #include <File.h>
 #include <IconUtils.h>
+#include <Keymap.h>
 #include <LayoutBuilder.h>
 #include <Locale.h>
 #include <Node.h>
@@ -65,10 +66,12 @@ of their respective holders. All rights reserved.
 #include <Resources.h>
 #include <Roster.h>
 #include <Screen.h>
+#include <StackOrHeapArray.h>
 #include <String.h>
 #include <StringList.h>
 #include <StringView.h>
 #include <TextView.h>
+#include <UnicodeChar.h>
 #include <UTF8.h>
 #include <VolumeRoster.h>
 
@@ -88,6 +91,7 @@ of their respective holders. All rights reserved.
 #include "FieldMsg.h"
 #include "FindWindow.h"
 #include "Header.h"
+#include "LabelWindow.h"
 #include "Messages.h"
 #include "MailApp.h"
 #include "MailPopUpMenu.h"
@@ -96,7 +100,6 @@ of their respective holders. All rights reserved.
 #include "QueryMenu.h"
 #include "Signature.h"
 #include "Settings.h"
-#include "Status.h"
 #include "String.h"
 #include "Utilities.h"
 
@@ -134,7 +137,6 @@ static const char* kSpamMenuItemTextArray[] = {
 	"Mark as genuine"						// M_TRAIN_GENUINE
 };
 
-static const uint32 kMsgQuitAndKeepAllStatus = 'Casm';
 
 static const char* kQueriesDirectory = "mail/queries";
 static const char* kAttrQueryInitialMode = "_trk/qryinitmode";
@@ -152,6 +154,7 @@ static const uint32 kByForumlaItem = 'Fbyq';
 	// taken from src/kits/tracker/FindPanel.h
 static const int kCopyBufferSize = 64 * 1024;	// 64 KB
 
+static const char* kSameLabelItem = B_TRANSLATE("Same label");
 static const char* kSameRecipientItem = B_TRANSLATE("Same recipient");
 static const char* kSameSenderItem = B_TRANSLATE("Same sender");
 static const char* kSameSubjectItem = B_TRANSLATE("Same subject");
@@ -196,8 +199,10 @@ TMailWindow::TMailWindow(BRect rect, const char* title, TMailApp* app,
 	fFieldState(0),
 	fPanel(NULL),
 	fSaveAddrMenu(NULL),
+	fLabelMenu(NULL),
 	fLeaveStatusMenu(NULL),
 	fEncodingMenu(NULL),
+	fLabel(NULL),
 	fZoom(rect),
 	fEnclosuresView(NULL),
 	fPrevTrackerPositionSaved(false),
@@ -212,7 +217,7 @@ TMailWindow::TMailWindow(BRect rect, const char* title, TMailApp* app,
 
 	fDownloading(false)
 {
-	fKeepStatusOnQuit = false;
+	fKeepStatusOnClose = false;
 
 	if (messenger != NULL)
 		fTrackerMessenger = *messenger;
@@ -273,7 +278,7 @@ TMailWindow::TMailWindow(BRect rect, const char* title, TMailApp* app,
 			subMenu->AddItem(new BMenuItem(
 				B_TRANSLATE_COMMENT("Leave as 'New'",
 				"Do not translate New - this is non-localizable e-mail status"),
-				new BMessage(kMsgQuitAndKeepAllStatus), 'W', B_SHIFT_KEY));
+				new BMessage(kMsgCloseAndKeepAllStatus), 'W', B_SHIFT_KEY));
 		} else {
 			BString status;
 			file.ReadAttrString(B_MAIL_ATTR_STATUS, &status);
@@ -288,7 +293,7 @@ TMailWindow::TMailWindow(BRect rect, const char* title, TMailApp* app,
 			subMenu->AddItem(new BMenuItem(label.String(),
 							new BMessage(B_QUIT_REQUESTED), 'W'));
 			AddShortcut('W', B_COMMAND_KEY | B_SHIFT_KEY,
-				new BMessage(kMsgQuitAndKeepAllStatus));
+				new BMessage(kMsgCloseAndKeepAllStatus));
 		}
 
 		subMenu->AddItem(new BMenuItem(B_TRANSLATE("Move to trash"),
@@ -296,32 +301,21 @@ TMailWindow::TMailWindow(BRect rect, const char* title, TMailApp* app,
 		AddShortcut('T', B_SHIFT_KEY | B_COMMAND_KEY,
 			new BMessage(M_DELETE_NEXT));
 
-		subMenu->AddSeparatorItem();
-
-		subMenu->AddItem(new BMenuItem(B_TRANSLATE("Set to Saved"),
-			new BMessage(M_CLOSE_SAVED), 'W', B_CONTROL_KEY));
-
-		if (add_query_menu_items(subMenu, INDEX_STATUS, M_STATUS,
-			B_TRANSLATE("Set to %s")) > 0)
-			subMenu->AddSeparatorItem();
-
-		subMenu->AddItem(new BMenuItem(B_TRANSLATE("Set to" B_UTF8_ELLIPSIS),
-			new BMessage(M_CLOSE_CUSTOM)));
-
-#if 0
-		subMenu->AddItem(new BMenuItem(new TMenu(
-			B_TRANSLATE("Set to" B_UTF8_ELLIPSIS), INDEX_STATUS, M_STATUS,
-				false, false),
-			new BMessage(M_CLOSE_CUSTOM)));
-#endif
 		menu->AddItem(subMenu);
-
 		fLeaveStatusMenu = subMenu;
 	} else {
 		menu->AddSeparatorItem();
 		menu->AddItem(new BMenuItem(B_TRANSLATE("Close"),
 			new BMessage(B_CLOSE_REQUESTED), 'W'));
 	}
+
+	file.ReadAttrString(B_MAIL_ATTR_LABEL, &fLabel);
+	// Add label file for current mail's label, in case it doesn't exist yet.
+	if (fLabel.Length() > 0)
+		create_label_file(fLabel);
+
+	fLabelMenu = new BMenu(B_TRANSLATE("Set label"));
+	menu->AddItem(fLabelMenu);
 
 	menu->AddSeparatorItem();
 	menu->AddItem(fPrint = new BMenuItem(
@@ -393,6 +387,22 @@ TMailWindow::TMailWindow(BRect rect, const char* title, TMailApp* app,
 		new BMessage(M_ACCOUNTS)));
 	item->SetTarget(be_app);
 
+	if (!fIncoming) {
+		// Add semantic increase quote shortcut, bug #7428
+		BKeymap keymap;
+		keymap.SetToCurrent();
+		BStringList unmodified(3);
+		if (keymap.GetModifiedCharacters("+", B_SHIFT_KEY, 0, unmodified) == B_OK) {
+			int32 count = unmodified.CountStrings();
+			for (int32 i = 0; i < count; i++) {
+				uint32 key = BUnicodeChar::FromUTF8(unmodified.StringAt(i));
+				if (!HasShortcut(key, 0))
+					AddShortcut(key, B_COMMAND_KEY, new BMessage(M_ADD_QUOTE_LEVEL));
+			}
+		}
+		unmodified.MakeEmpty();
+	}
+
 	// View Menu
 
 	if (!resending && fIncoming) {
@@ -433,11 +443,14 @@ TMailWindow::TMailWindow(BRect rect, const char* title, TMailApp* app,
 		menu->AddItem(fDeleteNext);
 		menu->AddSeparatorItem();
 
-		fPrevMsg = new BMenuItem(B_TRANSLATE("Previous message"),
-			new BMessage(M_PREVMSG), B_UP_ARROW);
+		BMessage* prevMsg = new BMessage(M_PREVMSG);
+		prevMsg->AddBool("keepStatus", false);
+		fPrevMsg = new BMenuItem(B_TRANSLATE("Previous message"), prevMsg, B_UP_ARROW);
 		menu->AddItem(fPrevMsg);
-		fNextMsg = new BMenuItem(B_TRANSLATE("Next message"),
-			new BMessage(M_NEXTMSG), B_DOWN_ARROW);
+
+		BMessage* nextMsg = new BMessage(M_NEXTMSG);
+		nextMsg->AddBool("keepStatus", false);
+		fNextMsg = new BMenuItem(B_TRANSLATE("Next message"), nextMsg, B_DOWN_ARROW);
 		menu->AddItem(fNextMsg);
 	} else {
 		menu->AddItem(fSendNow = new BMenuItem(B_TRANSLATE("Send message"),
@@ -983,6 +996,32 @@ TMailWindow::MenusBeginning()
 		} else {
 			fCut->SetEnabled(false);
 			fPaste->SetEnabled(false);
+
+			if (modifiers() & B_SHIFT_KEY) {
+				fPrevMsg->SetLabel(B_TRANSLATE("Previous message, keep status"));
+				fPrevMsg->SetShortcut(B_UP_ARROW, B_SHIFT_KEY);
+				BMessage* prevMsg = new BMessage(M_PREVMSG);
+				prevMsg->AddBool("keepStatus", true);
+				fPrevMsg->SetMessage(prevMsg);
+
+				fNextMsg->SetLabel(B_TRANSLATE("Next message, keep status"));
+				fNextMsg->SetShortcut(B_DOWN_ARROW, B_SHIFT_KEY);
+				BMessage* nextMsg = new BMessage(M_NEXTMSG);
+				nextMsg->AddBool("keepStatus", true);
+				fNextMsg->SetMessage(nextMsg);
+			} else {
+				fPrevMsg->SetLabel(B_TRANSLATE("Previous message"));
+				fPrevMsg->SetShortcut(B_UP_ARROW, 0);
+				BMessage* prevMsg = new BMessage(M_PREVMSG);
+				prevMsg->AddBool("keepStatus", false);
+				fPrevMsg->SetMessage(prevMsg);
+
+				fNextMsg->SetLabel(B_TRANSLATE("Next message"));
+				fNextMsg->SetShortcut(B_DOWN_ARROW, 0);
+				BMessage* nextMsg = new BMessage(M_NEXTMSG);
+				nextMsg->AddBool("keepStatus", false);
+				fNextMsg->SetMessage(nextMsg);
+			}
 		}
 	}
 
@@ -1025,7 +1064,7 @@ TMailWindow::MenusBeginning()
 
 		BMenuItem* LeaveStatus = fLeaveStatusMenu->FindItem(B_QUIT_REQUESTED);
 		if (LeaveStatus == NULL)
-			LeaveStatus = fLeaveStatusMenu->FindItem(kMsgQuitAndKeepAllStatus);
+			LeaveStatus = fLeaveStatusMenu->FindItem(kMsgCloseAndKeepAllStatus);
 
 		if (LeaveStatus != NULL && status.Length() > 0) {
 			BString label;
@@ -1033,6 +1072,46 @@ TMailWindow::MenusBeginning()
 			LeaveStatus->SetLabel(label.String());
 		}
 	}
+
+	// Populate label menu
+	if (fRef != NULL) {
+		BFile file(fRef, B_READ_ONLY);
+		BString currentLabel;
+		file.ReadAttrString(B_MAIL_ATTR_LABEL, &currentLabel);
+
+		BMenuItem* menuItem = new BMenuItem(B_TRANSLATE("Remove label"),
+			new BMessage(M_REMOVE_LABEL), '0');
+		fLabelMenu->AddItem(menuItem);
+		fLabelMenu->AddItem(new BMenuItem(B_TRANSLATE("Label as" B_UTF8_ELLIPSIS),
+			new BMessage(M_NEW_LABEL)));
+
+		fLabelMenu->AddSeparatorItem();
+
+		if (add_folder_menu_items(fLabelMenu, "labels", M_SET_LABEL) > 0)
+			fLabelMenu->AddSeparatorItem();
+
+		fLabelMenu->AddItem(new BMenuItem(B_TRANSLATE("Manage labels" B_UTF8_ELLIPSIS),
+			new BMessage(M_MANAGE_LABELS)));
+
+		if (currentLabel.Length() == 0)
+			menuItem->SetEnabled(false);
+		else {
+			menuItem = fLabelMenu->FindItem(currentLabel);
+			if (menuItem != NULL)
+				menuItem->SetMarked(true);
+		}
+	} else
+		fLabelMenu->SetEnabled(false);
+}
+
+
+void
+TMailWindow::MenusEnded()
+{
+	for (int32 i = fLabelMenu->CountItems(); i > 0; --i)
+		delete fLabelMenu->RemoveItem(i - 1);
+
+	BWindow::MenusEnded();
 }
 
 
@@ -1314,42 +1393,98 @@ TMailWindow::MessageReceived(BMessage* msg)
 		}
 		case M_CLOSE_SAVED:
 		{
-			BMessage message(B_QUIT_REQUESTED);
+			BMessage message(B_CLOSE_REQUESTED);
 			message.AddString("status", "Saved");
 			PostMessage(&message);
 			break;
 		}
 		case kMsgQuitAndKeepAllStatus:
-			fKeepStatusOnQuit = true;
-			be_app->PostMessage(B_QUIT_REQUESTED);
-			break;
-		case M_CLOSE_CUSTOM:
-			if (msg->HasString("status")) {
-				BMessage message(B_CLOSE_REQUESTED);
-				message.AddString("status", msg->GetString("status"));
-				PostMessage(&message);
-			} else {
-				BRect r = Frame();
-				BString string = "could not read";
-				BNode node(fRef);
-				if (node.InitCheck() == B_OK)
-					node.ReadAttrString(B_MAIL_ATTR_STATUS, &string);
-
-				new TStatusWindow(r, this, string.String());
-			}
-			break;
-
-		case M_STATUS:
 		{
-			const char* attribute;
-			if (msg->FindString("attribute", &attribute) != B_OK)
-				break;
-
-			BMessage message(B_CLOSE_REQUESTED);
-			message.AddString("status", attribute);
-			PostMessage(&message);
+			be_app->PostMessage(msg);
 			break;
 		}
+		case kMsgCloseAndKeepAllStatus:
+			fKeepStatusOnClose = true;
+			PostMessage(B_CLOSE_REQUESTED);
+			break;
+
+		case M_REMOVE_LABEL:
+		{
+			BNode node(fRef);
+			if (node.InitCheck() == B_NO_ERROR) {
+				fLabel = "";
+				node.RemoveAttr(B_MAIL_ATTR_LABEL);
+
+				BMenuItem* item = fLabelMenu->FindMarked();
+				if (item != NULL)
+					item->SetMarked(false);
+
+				item = fLabelMenu->FindItem(B_TRANSLATE("Remove label"));
+				if (item != NULL)
+					item->SetEnabled(false);
+
+				item = fQueryMenu->FindItem(kSameLabelItem);
+				if (item != NULL)
+					item->SetEnabled(false);
+			}
+			break;
+		}
+		case M_SET_LABEL:
+		{
+			const char* label = msg->FindString("label");
+			if (label != NULL) {
+				BNode node(fRef);
+				if (node.InitCheck() == B_NO_ERROR) {
+					fLabel = label;
+					node.RemoveAttr(B_MAIL_ATTR_LABEL);
+					WriteAttrString(&node, B_MAIL_ATTR_LABEL, label);
+
+					BMenuItem* item = fLabelMenu->FindMarked();
+					if (item != NULL)
+						item->SetMarked(false);
+
+					item = fLabelMenu->FindItem(label);
+					if (item != NULL) {
+						item->SetMarked(true);
+
+						item = fLabelMenu->FindItem(B_TRANSLATE("Remove label"));
+						if (item != NULL)
+							item->SetEnabled(true);	
+						item = fQueryMenu->FindItem(kSameLabelItem);
+						if (item != NULL)
+							item->SetEnabled(true);
+					}
+				}
+			}
+			break;
+		}
+		case M_MANAGE_LABELS:
+		{
+			BPath path;
+			find_directory(B_USER_SETTINGS_DIRECTORY, &path);
+			path.Append("Mail/labels");
+
+			BEntry entry(path.Path());
+			if (!entry.Exists())
+				create_directory(path.Path(), 0777);
+
+			BEntry folderEntry;
+			if (folderEntry.SetTo(path.Path()) == B_OK
+				&& folderEntry.Exists()) {
+				BMessage openFolderCommand(B_REFS_RECEIVED);
+				BMessenger tracker("application/x-vnd.Be-TRAK");
+
+				entry_ref ref;
+				folderEntry.GetRef(&ref);
+				openFolderCommand.AddRef("refs", &ref);
+				tracker.SendMessage(&openFolderCommand);
+			}
+			break;
+		}
+		case M_NEW_LABEL:
+			new TLabelWindow(Frame(), this);
+			break;
+
 		case M_HEADER:
 		{
 			bool showHeader = !fHeader->IsMarked();
@@ -1595,6 +1730,14 @@ TMailWindow::MessageReceived(BMessage* msg)
 		{
 			if (fRef == NULL)
 				break;
+
+			bool keepStatus;
+			if (msg->FindBool("keepStatus", &keepStatus) != B_OK)
+				keepStatus = false;
+			// When SHIFT-clicking toolbar icon, don't change mail's status
+			if (modifiers() & B_SHIFT_KEY)
+				keepStatus = true;
+
 			entry_ref orgRef = *fRef;
 			entry_ref nextRef = *fRef;
 			if (GetTrackerWindowFile(&nextRef, (msg->what == M_NEXTMSG))) {
@@ -1603,13 +1746,14 @@ TMailWindow::MessageReceived(BMessage* msg)
 				if (window == NULL) {
 					BNode node(fRef);
 					read_flags currentFlag;
-					if (read_read_attr(node, currentFlag) != B_OK)
-						currentFlag = B_UNREAD;
-					if (fAutoMarkRead == true)
-						MarkMessageRead(fRef, B_READ);
-					else if (currentFlag != B_READ && !wasReadMsg)
-						MarkMessageRead(fRef, B_SEEN);
-
+					if (!keepStatus) {
+						if (read_read_attr(node, currentFlag) != B_OK)
+							currentFlag = B_UNREAD;
+						if (fAutoMarkRead == true)
+							MarkMessageRead(fRef, B_READ);
+						else if (currentFlag != B_READ && !wasReadMsg)
+							MarkMessageRead(fRef, B_SEEN);
+					}
 					OpenMessage(&nextRef, _CurrentCharacterSet());
 				} else {
 					window->Activate();
@@ -1660,8 +1804,9 @@ TMailWindow::MessageReceived(BMessage* msg)
 				snooze (1500000);
 			if (!gDictCount) {
 				beep();
-				BAlert* alert = new BAlert("",
-					B_TRANSLATE("Mail couldn't find its dictionary."),
+				BString text(B_TRANSLATE("%appname% couldn't find its dictionary."));
+				text.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("Mail"));
+				BAlert* alert = new BAlert("", text,
 					B_TRANSLATE("OK"), NULL, NULL, B_WIDTH_AS_USUAL,
 					B_OFFSET_SPACING, B_STOP_ALERT);
 				alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
@@ -1672,6 +1817,13 @@ TMailWindow::MessageReceived(BMessage* msg)
 					fSpelling->IsMarked());
 			}
 			break;
+
+		case M_QUERY_LABEL:
+		{
+			if (fLabel != "")
+				_LaunchQuery(kSameLabelItem, B_MAIL_ATTR_LABEL, fLabel);
+			break;
+		}
 
 		case M_QUERY_RECIPIENT:
 		{
@@ -1860,7 +2012,7 @@ TMailWindow::QuitRequested()
 				}
 			}
 		}
-	} else if (fRef != NULL && !fKeepStatusOnQuit) {
+	} else if (fRef != NULL && !fKeepStatusOnClose) {
 		// ...Otherwise just set the message read
 		if (fAutoMarkRead == true)
 			MarkMessageRead(fRef, B_READ);
@@ -3077,6 +3229,9 @@ TMailWindow::_RebuildQueryMenu(bool firstTime)
 			new BMessage(M_QUERY_SENDER)));
 	fQueryMenu->AddItem(new BMenuItem(kSameSubjectItem,
 			new BMessage(M_QUERY_SUBJECT)));
+	BMenuItem* item = new BMenuItem(kSameLabelItem,	new BMessage(M_QUERY_LABEL));
+	fQueryMenu->AddItem(item);
+	item->SetEnabled(fLabel.Length() > 0 ? true : false);
 
 	BPath queryPath;
 	if (_GetQueryPath(&queryPath) < B_OK)
@@ -3161,11 +3316,11 @@ TMailWindow::_BuildQueryString(BEntry* entry) const
 			if (count > 1)
 				queryString << "(";
 
-			char* buffer = new char[info.size];
-			if (node.ReadAttr(kAttrQueryInitialAttrs, B_MESSAGE_TYPE, 0,
+			BStackOrHeapArray<char, 512> buffer(info.size);
+			if (buffer.IsValid() && node.ReadAttr(kAttrQueryInitialAttrs, B_MESSAGE_TYPE, 0,
 					buffer, (size_t)info.size) == info.size) {
 				BMessage message;
-				if (message.Unflatten(buffer) == B_OK) {
+				if (message.Unflatten(buffer, info.size) == B_OK) {
 					for (int32 index = 0; /*index < count*/; index++) {
 						const char* field;
 						const char* value;
@@ -3201,7 +3356,6 @@ TMailWindow::_BuildQueryString(BEntry* entry) const
 			if (count > 1)
 				queryString << ")";
 
-			delete [] buffer;
 			break;
 		}
 

@@ -15,7 +15,11 @@
 #include <Locker.h>
 #include <Messenger.h>
 
+#include <HashMap.h>
+#include <HashString.h>
+
 #include "BasicTerminalBuffer.h"
+#include "HyperLink.h"
 
 
 class TerminalBuffer : public BasicTerminalBuffer, public BLocker {
@@ -38,12 +42,17 @@ public:
 			void				ResetColors(uint8* indexes,
 									int32 count = 1, bool dynamic = false);
 			void				GetColor(uint8 index);
-			void				SetCursorStyle(int32 style, bool blinking);
-			void				SetCursorBlinking(bool blinking);
-			void				SetCursorHidden(bool hidden);
+			void				SetCursorStyle(int32 style);
+			int32				CursorStyle() const { return fCursorStyle; };
 			void				SetPaletteColor(uint8 index, rgb_color color);
 			inline const rgb_color*
 								Palette() const { return fColorsPalette; }
+
+			void				SetMouseMode(MouseMode mouseMode);
+			bool				IsMouseMode(MouseMode mouseMode) { return mouseMode == fMouseMode; };
+			void				SetMouseProtocol(MouseProtocol mouseProtocol);
+			bool				IsMouseProtocol(MouseProtocol mouseProtocol) {
+									return mouseProtocol == fMouseProtocol; };
 
 			void				NotifyQuit(int32 reason);
 
@@ -54,15 +63,12 @@ public:
 			void				UseAlternateScreenBuffer(bool clear);
 			void				UseNormalScreenBuffer();
 
-			void				EnableInterpretMetaKey(bool enable);
-			void				EnableMetaKeySendsEscape(bool enable);
-			void				EnableBracketedPasteMode(bool enable);
+			bool				IsMode(uint32 mode) const;
+			void				SetMode(uint32 mode);
+			void				ResetMode(uint32 mode);
 
-			void				ReportX10MouseEvent(bool report);
-			void				ReportNormalMouseEvent(bool report);
-			void				ReportButtonMouseEvent(bool report);
-			void				ReportAnyMouseEvent(bool report);
-			void				EnableExtendedMouseCoordinates(bool enable);
+			uint32				PutHyperLink(const char* id, BString& uri);
+			bool				GetHyperLink(uint32 ref, HyperLink& _link);
 
 protected:
 	virtual	void				NotifyListener();
@@ -82,6 +88,17 @@ private:
 			// listener/dirty region management
 			BMessenger			fListener;
 			bool				fListenerValid;
+
+			uint32				fMode;
+			int					fCursorStyle;
+			int					fMouseMode;
+			int					fMouseProtocol;
+
+			typedef HashMap<HashKey32<int32>, HyperLink*> HyperLinkRefMap;
+			HyperLinkRefMap		fHyperLinkForRef;
+			typedef HashMap<HashString, HyperLink*> HyperLinkIDMap;
+			HyperLinkIDMap		fHyperLinkForID;
+			uint32				fNextOSCRef;
 };
 
 

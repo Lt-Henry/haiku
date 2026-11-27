@@ -121,13 +121,12 @@ BitmapManager::CreateBitmap(ClientMemoryAllocator* allocator,
 			overlayToken);
 
 		overlay_client_data* clientData = NULL;
-		bool newArea = false;
 
 		if (overlay != NULL && overlay->InitCheck() == B_OK) {
 			// allocate client memory to communicate the overlay semaphore
 			// and buffer location to the BBitmap
 			clientData = (overlay_client_data*)bitmap->fClientMemory.Allocate(
-				allocator, sizeof(overlay_client_data), newArea);
+				allocator, sizeof(overlay_client_data));
 		}
 
 		if (clientData != NULL) {
@@ -139,19 +138,18 @@ BitmapManager::CreateBitmap(ClientMemoryAllocator* allocator,
 
 			buffer = (uint8*)overlay->OverlayBuffer()->buffer;
 			if (_allocationFlags)
-				*_allocationFlags = kFramebuffer | (newArea ? kNewAllocatorArea : 0);
+				*_allocationFlags = kFramebuffer;
 		} else
 			delete overlay;
 	} else if (allocator != NULL) {
 		// standard bitmaps
-		bool newArea;
 		buffer = (uint8*)bitmap->fClientMemory.Allocate(allocator,
-			bitmap->BitsLength(), newArea);
+			bitmap->BitsLength());
 		if (buffer != NULL) {
 			bitmap->fMemory = &bitmap->fClientMemory;
 
 			if (_allocationFlags)
-				*_allocationFlags = kAllocator | (newArea ? kNewAllocatorArea : 0);
+				*_allocationFlags = kAllocator;
 		}
 	} else {
 		// server side only bitmaps
@@ -191,7 +189,7 @@ BitmapManager::CreateBitmap(ClientMemoryAllocator* allocator,
 
 
 ServerBitmap*
-BitmapManager::CloneFromClient(area_id clientArea, int32 areaOffset,
+BitmapManager::CloneFromClient(area_id clientArea, size_t areaOffset,
 	BRect bounds, color_space space, uint32 flags, int32 bytesPerRow)
 {
 	BAutolock locker(fLock);

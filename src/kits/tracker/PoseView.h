@@ -79,6 +79,10 @@ const uint32 kListMode = 'Tlst';
 
 const uint32 kCheckTypeahead = 'Tcty';
 
+const uint32 kMsgMouseDragged = 'Mdrg';
+const uint32 kMsgMouseLongDown = 'Mold';
+
+
 class BPoseView : public BView {
 public:
 	BPoseView(Model*, uint32 viewMode);
@@ -88,7 +92,10 @@ public:
 	virtual void Init(AttributeStreamNode*);
 	virtual void Init(const BMessage&);
 	void InitCommon();
-	virtual void DetachedFromWindow();
+
+	// base class of these are not virtual but ours are
+	virtual void AdoptSystemColors();
+	virtual bool HasSystemColors() const;
 
 	// Returns true if for instance, node ref is a remote desktop
 	// directory and this is a desktop pose view.
@@ -101,8 +108,9 @@ public:
 	Model* TargetModel() const;
 
 	virtual bool IsFilePanel() const;
-	bool IsDesktop() const;
 	virtual bool IsDesktopView() const;
+	virtual bool IsOpenWithView() const;
+	virtual bool IsQueryView() const;
 
 	// state saving/restoring
 	virtual void SaveState(AttributeStreamNode* node);
@@ -125,8 +133,7 @@ public:
 	uint32 ViewMode() const;
 
 	// re-use the pose view for a new directory
- 	virtual void SwitchDir(const entry_ref*,
- 		AttributeStreamNode* node = NULL);
+	virtual void SwitchDir(const entry_ref*, AttributeStreamNode* node = NULL);
 
 	// in the rare cases where a pose view needs to be explicitly
 	// refreshed (for instance in a query window with a dynamic
@@ -134,22 +141,23 @@ public:
 	virtual void Refresh();
 
 	// callbacks
-	virtual void MessageReceived(BMessage* message);
 	virtual void AttachedToWindow();
-	virtual void WindowActivated(bool active);
-	virtual void MakeFocus(bool = true);
-	virtual	BSize MinSize();
+	virtual void DetachedFromWindow();
 	virtual void Draw(BRect update_rect);
 	virtual void DrawAfterChildren(BRect update_rect);
+	virtual void KeyDown(const char*, int32);
+	virtual void MessageReceived(BMessage* message);
+	virtual void MakeFocus(bool = true);
+	virtual	BSize MinSize();
 	virtual void MouseMoved(BPoint, uint32, const BMessage*);
 	virtual void MouseDown(BPoint where);
 	virtual void MouseUp(BPoint where);
 	virtual void MouseDragged(const BMessage*);
 	virtual void MouseLongDown(const BMessage*);
 	virtual void MouseIdle(const BMessage*);
-	virtual void KeyDown(const char*, int32);
 	virtual void Pulse();
 	virtual void ScrollTo(BPoint);
+	virtual void WindowActivated(bool active);
 
 	// misc. mode setters
 	void SetMultipleSelection(bool);
@@ -207,16 +215,15 @@ public:
 	BSize IconSize() const;
 
 	BRect Extent() const;
+	BRect ListModeExtent() const;
+	BRect IconModeExtent() const;
 	void GetLayoutInfo(uint32 viewMode, BPoint* grid,
 		BPoint* offset) const;
 
 	int32 CountItems() const;
 	void UpdateCount();
 
-	virtual rgb_color TextColor(bool selected = false) const;
-	virtual rgb_color BackColor(bool selected = false) const;
-
-	bool WidgetTextOutline() const;
+	bool WidgetTextOutline() const { return fWidgetTextOutline; };
 	void SetWidgetTextOutline(bool);
 		// used to not erase when we have a background image and
 		// invalidate instead
@@ -278,14 +285,11 @@ public:
 	virtual void OpenParent();
 	virtual bool CanOpenParent();
 
-	virtual void OpenSelection(BPose* clicked_pose = NULL,
-		int32* index = NULL);
-	void OpenSelectionUsing(BPose* clicked_pose = NULL,
-		int32* index = NULL);
+	virtual void OpenSelection(BPose* clicked_pose = NULL, int32* index = NULL);
+	void OpenSelectionUsing(BPose* clicked_pose = NULL, int32* index = NULL);
 		// launches the open with window
-	virtual void MoveSelectionTo(BPoint, BPoint, BContainerWindow*);
-	void DuplicateSelection(BPoint* dropStart = NULL,
-		BPoint* dropEnd = NULL);
+	virtual void MoveSelectionTo(Model*, BPoint, BContainerWindow*, BPoint, uint32);
+	void DuplicateSelection(BPoint* dropStart = NULL,BPoint* dropEnd = NULL);
 
 	// Move to trash calls try to select the next pose in the view
 	// when they are dones
@@ -307,6 +311,8 @@ public:
 	void AddRemovePoseFromSelection(BPose* pose, int32 index,
 		bool select);
 	int32 CountSelected() const;
+	bool ExtendSelection() const;
+
 	bool SelectedVolumeIsReadOnly() const;
 	bool TargetVolumeIsReadOnly() const;
 	bool CanEditName() const;
@@ -358,37 +364,30 @@ public:
 
 	// drag&drop handling
 	virtual bool HandleMessageDropped(BMessage*);
-	static bool HandleDropCommon(BMessage* dragMessage, Model* target,
-		BPose*, BView* view, BPoint dropPoint);
+	static bool HandleDropCommon(BMessage* dragMessage, Model* target, BPose*, BView* view,
+		BPoint dropPoint);
 		// used by pose views and info windows
-	static bool CanHandleDragSelection(const Model* target,
-		const BMessage* dragMessage, bool ignoreTypes);
-	virtual void DragSelectedPoses(const BPose* clickedPose, BPoint);
+	static bool CanHandleDragSelection(const Model* target, const BMessage* dragMessage,
+		bool ignoreTypes);
+	virtual void DragSelectedPoses(const BPose* pose, BPoint, uint32 buttons);
 
-	void MoveSelectionInto(Model* destFolder, BContainerWindow* srcWindow,
-		bool forceCopy, bool forceMove = false, bool createLink = false,
-		bool relativeLink = false);
-	static void MoveSelectionInto(Model* destFolder,
-		BContainerWindow* srcWindow, BContainerWindow* destWindow,
-		uint32 buttons, BPoint loc, bool forceCopy,
-		bool forceMove = false, bool createLink = false,
-		bool relativeLink = false, BPoint clickPoint = BPoint(0, 0),
-		bool pinToGrid = false);
+	void MoveSelectionInto(Model* destFolder, BContainerWindow* srcWindow, bool forceCopy,
+		bool forceMove = false, bool createLink = false, bool relativeLink = false);
+	static void MoveSelectionInto(Model* destFolder, BContainerWindow* srcWindow,
+		BContainerWindow* destWindow, uint32 buttons, BPoint dropPoint, bool forceCopy,
+		bool forceMove = false, bool createLink = false, bool relativeLink = false,
+		BPoint dragStart = B_ORIGIN, bool pinToGrid = false);
 
-	bool UpdateDropTarget(BPoint, const BMessage*,
-		bool trackingContextMenu);
+	bool UpdateDropTarget(BPoint, const BMessage*, bool trackingContextMenu);
 		// return true if drop target changed
 	void HiliteDropTarget(bool hiliteState);
-
-	void DragStop();
-		// throw away cached up structures
 
 	static bool MenuTrackingHook(BMenu* menu, void* castToThis);
 		// hook for spring loaded nav-menus
 
 	// scripting
-	virtual BHandler* ResolveSpecifier(BMessage* message, int32 index,
-		BMessage* specifier, int32 form, const char* property);
+	virtual BHandler* ResolveSpecifier(BMessage* message, int32 index, BMessage* specifier,
+		int32 form, const char* property);
 	virtual status_t GetSupportedSuites(BMessage*);
 
 	// string width calls that use local width caches, faster than using
@@ -404,10 +403,22 @@ public:
 	void ShowBarberPole();
 	void HideBarberPole();
 
-	bool fShowSelectionWhenInactive;
-	bool fIsDrawingSelectionRect;
+	// drag & drop support
+	status_t DragStart(const BMessage*);
+	void DragStop();
+	inline bool IsDragging() const { return fDragMessage != NULL && fCachedTypesList != NULL; };
 
-	bool IsWatchingDateFormatChange();
+	inline BMessage* DragMessage() const { return fDragMessage; };
+
+	inline bool WaitingForRefs() const { return fWaitingForRefs; };
+	void SetWaitingForRefs(bool waiting) { fWaitingForRefs = waiting; };
+
+	inline BStringList* CachedTypesList() const { return fCachedTypesList; };
+
+	inline bool ShowSelectionWhenInactive() const { return fShowSelectionWhenInactive; };
+	bool IsDrawingSelectionRect() const { return fIsDrawingSelectionRect; };
+
+	inline bool IsWatchingDateFormatChange() const { return fIsWatchingDateFormatChange; };
 	void StartWatchDateFormatChange();
 	void StopWatchDateFormatChange();
 
@@ -471,21 +482,17 @@ protected:
 	BPose* EntryCreated(const node_ref*, const node_ref*, const char*,
 		int32* index = 0);
 
-	void AddPoseToList(PoseList* list, bool visibleList,
-		bool insertionSort, BPose* pose, BRect&viewBounds,
-		float& listViewScrollBy, bool forceDraw, int32* indexPtr = NULL);
-	BPose* CreatePose(Model*, PoseInfo*, bool insertionSort = true,
-		int32* index = 0, BRect* boundsPointer = 0, bool forceDraw = true);
-	virtual void CreatePoses(Model**models, PoseInfo* poseInfoArray,
-		int32 count, BPose** resultingPoses, bool insertionSort = true,
-		int32* lastPoseIndexPointer = 0, BRect* boundsPointer = 0,
-		bool forceDraw = false);
-	virtual bool ShouldShowPose(const Model*, const PoseInfo*);
-		// filter, subclasses override to control which poses show up
-		// subclasses should always call inherited
-	void CreateVolumePose(BVolume*, bool watchIndividually);
+	void AddPoseToList(PoseList* list, bool visibleList, bool insertionSort, BPose* pose,
+		BRect& viewBounds, float& listViewScrollBy, bool forceDraw, int32* indexPtr = NULL);
+	BPose* CreatePose(Model*, PoseInfo*, bool insertionSort = true, int32* index = NULL,
+		BRect* boundsPointer = NULL, bool forceDraw = true);
+	virtual void CreatePoses(Model**models, PoseInfo* poseInfoArray, int32 count,
+		BPose** resultingPoses, bool insertionSort = true, int32* lastPoseIndexPointer = 0,
+		BRect* boundsPointer = 0, bool forceDraw = false);
+	void CreateVolumePose(BVolume*);
 
-	void CreateTrashPose();
+	virtual void CreateRootPose();
+	virtual void RemoveRootPose();
 
 	virtual bool AddPosesThreadValid(const entry_ref*) const;
 		// verifies whether or not the current set of AddPoses threads
@@ -497,24 +504,20 @@ protected:
 		// if <model> is zero, PoseView has other means of iterating
 		// through all the entries thaat it adds
 
-	virtual void AddRootPoses(bool watchIndividually, bool mountShared);
-		// watchIndividually is used when placing a volume pose onto
-		// the Desktop where unlike in the Root window it will not be
-		// watched by the folder representing root. If set, each volume
-		// will therefore be watched individually
-	virtual void RemoveRootPoses();
+	virtual void AddVolumePoses();
+	virtual void RemoveVolumePoses();
+	virtual void ToggleDisksVolumes();
+	virtual bool IsVolumesRoot() const { return IsDesktopView(); };
+
 	virtual void AddTrashPoses();
 
-	virtual bool DeletePose(const node_ref*, BPose* pose = NULL,
-		int32 index = 0);
-	virtual void DeleteSymLinkPoseTarget(const node_ref* itemNode,
-		BPose* pose, int32 index);
+	virtual bool DeletePose(const node_ref*, BPose* pose = NULL, int32 index = 0);
+	virtual void DeleteSymLinkPoseTarget(const node_ref* itemNode, BPose* pose, int32 index);
 		// the pose itself wasn't deleted but it's target node was - the
 		// pose must be a symlink
-	static void PoseHandleDeviceUnmounted(BPose* pose, Model* model,
-		int32 index, BPoseView* poseView, dev_t device);
-	static void RemoveNonBootDesktopModels(BPose*, Model* model, int32,
-		BPoseView* poseView, dev_t);
+	static void PoseHandleDeviceUnmounted(BPose* pose, Model* model, int32 index,
+		BPoseView* poseView, dev_t device);
+	static void RemoveNonBootDesktopModels(BPose*, Model* model, int32, BPoseView*, dev_t);
 
 	// pose placement
 	void CheckAutoPlacedPoses();
@@ -535,19 +538,15 @@ protected:
 	BPose* ConvertZombieToPose(Model* zombie, int32 index);
 
 	// pose handling
-	BRect CalcPoseRect(const BPose*, int32 index,
-		bool firstColumnOnly = false) const;
+	BRect CalcPoseRect(const BPose*, int32 index, bool firstColumnOnly = false) const;
 	BRect CalcPoseRectIcon(const BPose*) const;
-	BRect CalcPoseRectList(const BPose*, int32 index,
-		bool firstColumnOnly = false) const;
+	BRect CalcPoseRectList(const BPose*, int32 index, bool firstColumnOnly = false) const;
 	void DrawPose(BPose*, int32 index, bool fullDraw = true);
 	void DrawViewCommon(const BRect&updateRect);
 
 	// pose list handling
-	int32 BSearchList(PoseList* poseList, const BPose*, int32* index,
-		int32 oldIndex);
-	void InsertPoseAfter(BPose* pose, int32* index, int32 orientation,
-		BRect* invalidRect);
+	int32 BSearchList(PoseList* poseList, const BPose*, int32* index, int32 oldIndex);
+	void InsertPoseAfter(BPose* pose, int32* index, int32 orientation, BRect* invalidRect);
 		// does a CopyBits to scroll poses making room for a new pose,
 		// returns rectangle that needs invalidating
 	void CloseGapInList(BRect* invalidRect);
@@ -572,34 +571,30 @@ protected:
 	virtual uint32 WatchNewNodeMask();
 		// override to change different watch modes for query pose
 		// view, etc.
+	status_t StopWatchingNode(const node_ref* item);
 
 	// drag&drop handling
 	static bool EachItemInDraggedSelection(const BMessage* message,
-		bool (*)(BPose*, BPoseView*, void*), BPoseView* poseView,
-		void* = NULL);
+		bool (*)(BPose*, BPoseView*, void*), BPoseView* poseView, void* = NULL);
 		// iterates through each pose in current selectiond in the source
 		// window of the current drag message; locks the window
 		// add const version
-	BRect GetDragRect(int32 clickedPoseIndex);
-	BBitmap* MakeDragBitmap(BRect dragRect, BPoint clickedPoint,
-		int32 clickedPoseIndex, BPoint&offset);
-	static bool FindDragNDropAction(const BMessage* dragMessage,
-		bool&canCopy, bool&canMove, bool&canLink, bool&canErase);
+	BRect GetDragRect(int32 poseIndex);
+	BBitmap* MakeDragBitmap(BRect dragRect, BPoint clickedPoint, int32 poseIndex, BPoint& offset);
+	static bool FindDragNDropAction(const BMessage* dragMessage, bool& canCopy, bool& canMove,
+		bool& canLink, bool& canErase);
 
 	static bool CanTrashForeignDrag(const Model*);
 	static bool CanCopyOrMoveForeignDrag(const Model*, const BMessage*);
-	static bool DragSelectionContains(const BPose* target,
-		const BMessage* dragMessage);
-	static status_t CreateClippingFile(BPoseView* poseView, BFile&result,
-		char* resultingName, BDirectory* directory, BMessage* message,
-		const char* fallbackName, bool setLocation = false,
-		BPoint dropPoint = BPoint(0, 0));
+	static bool DragSelectionContains(const BPose* target, const BMessage* dragMessage);
+	static status_t CreateClippingFile(BPoseView* poseView, BFile&result, char* resultingName,
+		BDirectory* directory, BMessage* message, const char* fallbackName,
+		bool setLocation = false, BPoint dropPoint = B_ORIGIN);
 
 	// opening files, lanunching
 	void OpenSelectionCommon(BPose*, int32*, bool);
 		// used by OpenSelection and OpenSelectionUsing
-	static void LaunchAppWithSelection(Model*, const BMessage*,
-		bool checkTypes = true);
+	static void LaunchAppWithSelection(Model*, const BMessage*, bool checkTypes = true);
 
 	// node monitoring calls
 	virtual bool EntryMoved(const BMessage*);
@@ -608,14 +603,12 @@ protected:
 	virtual void MetaMimeChanged(const char*, const char*);
 
 	// click handling
-	bool WasDoubleClick(const BPose*, BPoint point, int32 buttons);
-	bool WasClickInPath(const BPose*, int32 index,
-		BPoint mouseLocation) const;
+	bool WasDoubleClick(const BPose*, BPoint where);
+	bool WasClickInPath(const BPose*, int32 index, BPoint where) const;
 
 	// selection
 	void SelectPoses(BRect, BList**);
-	void AddRemoveSelectionRange(BPoint where, bool extendSelection,
-		BPose* pose);
+	void AddRemoveSelectionRange(BPoint where, bool extendSelection, BPose* pose);
 
 	void _BeginSelectionRect(const BPoint& point, bool extendSelection);
 	void _UpdateSelectionRect(const BPoint& point);
@@ -652,6 +645,7 @@ protected:
 	// background AddPoses task calls
 	static status_t AddPosesTask(void*);
 	virtual void AddPosesCompleted();
+	virtual void CreateTrashPose();
 	bool IsValidAddPosesThread(thread_id) const;
 
 	// typeahead filtering
@@ -669,7 +663,7 @@ protected:
 
 	// misc
 	BList* GetDropPointList(BPoint dropPoint, BPoint startPoint,
-		const PoseList*, bool sourceInListMode, bool dropOnGrid) const;
+		const PoseList*, BPoseView*, bool pinToGrid) const;
 	void SendSelectionAsRefs(uint32 what, bool onlyQueries = false);
 	void MoveListToTrash(BObjectList<entry_ref, true>*, bool selectNext,
 		bool deleteDirectly);
@@ -686,7 +680,6 @@ protected:
 
 private:
 	void DrawOpenAnimation(BRect);
-	void ApplyBackgroundColor();
 
 	void MoveSelectionOrEntryToTrash(const entry_ref* ref, bool selectNext);
 
@@ -721,12 +714,6 @@ protected:
 
 protected:
 	BViewState* fViewState;
-	bool fStateNeedsSaving;
-
-	bool fSavePoseLocations : 1;
-	bool fMultipleSelection : 1;
-	bool fDragEnabled : 1;
-	bool fDropEnabled : 1;
 
 	BLooper* fSelectionHandler;
 
@@ -752,7 +739,6 @@ private:
 	BObjectList<BColumn, true>* fColumnList;
 	BStringList fMimeTypeList;
 	BObjectList<Model>* fBrokenLinks;
-	bool fMimeTypeListIsDirty;
 	BCountView* fCountView;
 	float fListElemHeight;
 	float fListOffset;
@@ -771,12 +757,11 @@ private:
 	BPoint fHintLocation;
 	float fAutoScrollInc;
 	int32 fAutoScrollState;
-	bool fWidgetTextOutline;
 	const BPose* fSelectionPivotPose;
 	const BPose* fRealPivotPose;
 	BMessageRunner* fKeyRunner;
-	bool fTrackRightMouseUp;
-	bool fTrackMouseUp;
+	BMessage* fDragMessage;
+	BStringList* fCachedTypesList;
 
 	struct SelectionRectInfo {
 		SelectionRectInfo()
@@ -794,22 +779,6 @@ private:
 		BList* selection;
 	};
 	SelectionRectInfo fSelectionRectInfo;
-
-	bool fSelectionVisible : 1;
-	bool fSelectionRectEnabled : 1;
-	bool fTransparentSelection : 1;
-	bool fAlwaysAutoPlace : 1;
-	bool fAllowPoseEditing : 1;
-	bool fSelectionChangedHook : 1;
-		// get rid of this
-	bool fOkToMapIcons : 1;
-	bool fEnsurePosesVisible : 1;
-	bool fShouldAutoScroll : 1;
-	bool fIsDesktop : 1;
-	bool fIsWatchingDateFormatChange : 1;
-	bool fHasPosesInClipboard : 1;
-	bool fCursorCheck : 1;
-	bool fTypeAheadFiltering : 1;
 
 	BObjectList<BString, true> fFilterStrings;
 	int32 fLastFilterStringCount;
@@ -836,6 +805,36 @@ private:
 	mutable BSize fCachedIconSize;
 
 	typedef BView _inherited;
+
+protected:
+	bool fStateNeedsSaving : 1;
+	bool fSavePoseLocations : 1;
+	bool fMultipleSelection : 1;
+	bool fDragEnabled : 1;
+	bool fDropEnabled : 1;
+
+private:
+	bool fMimeTypeListIsDirty : 1;
+	bool fWidgetTextOutline : 1;
+	bool fTrackRightMouseUp : 1;
+	bool fTrackMouseUp : 1;
+	bool fSelectionVisible : 1;
+	bool fSelectionRectEnabled : 1;
+	bool fAlwaysAutoPlace : 1;
+	bool fAllowPoseEditing : 1;
+	bool fSelectionChangedHook : 1;
+		// get rid of this
+	bool fOkToMapIcons : 1;
+	bool fEnsurePosesVisible : 1;
+	bool fShouldAutoScroll : 1;
+	bool fIsWatchingDateFormatChange : 1;
+	bool fHasPosesInClipboard : 1;
+	bool fCursorCheck : 1;
+	bool fTypeAheadFiltering : 1;
+	bool fShowSelectionWhenInactive : 1;
+	bool fIsDrawingSelectionRect : 1;
+	bool fTransparentSelection : 1;
+	bool fWaitingForRefs : 1;
 };
 
 
@@ -931,11 +930,24 @@ BPoseView::SelectionList() const
 	return fSelectionList;
 }
 
+
 inline int32
 BPoseView::CountSelected() const
 {
 	return fSelectionList->CountItems();
 }
+
+
+inline bool
+BPoseView::ExtendSelection() const
+{
+	if (!fMultipleSelection)
+		return false;
+
+	uint32 mods = modifiers();
+	return fTrackMouseUp && ((mods & B_COMMAND_KEY) != 0 || (mods & B_SHIFT_KEY) != 0);
+}
+
 
 inline BStringList*
 BPoseView::MimeTypesInSelection()
@@ -1022,14 +1034,21 @@ BPoseView::IsFilePanel() const
 
 
 inline bool
-BPoseView::IsDesktop() const
+BPoseView::IsDesktopView() const
 {
-	return fIsDesktop;
+	return false;
 }
 
 
 inline bool
-BPoseView::IsDesktopView() const
+BPoseView::IsOpenWithView() const
+{
+	return false;
+}
+
+
+inline bool
+BPoseView::IsQueryView() const
 {
 	return false;
 }
@@ -1285,7 +1304,10 @@ BPoseView::SetHasPosesInClipboard(bool hasPoses)
 inline PoseList*
 BPoseView::CurrentPoseList() const
 {
-	return IsFiltering() ? fFilteredPoseList : fPoseList;
+	if (ViewMode() == kListMode)
+		return IsFiltering() ? fFilteredPoseList : fPoseList;
+	else
+		return fVSPoseList;
 }
 
 

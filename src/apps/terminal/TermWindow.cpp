@@ -181,9 +181,9 @@ struct TermWindow::Session {
 // #pragma mark - TermWindow
 
 
-TermWindow::TermWindow(const BString& title, Arguments* args)
+TermWindow::TermWindow(const Arguments& args)
 	:
-	BWindow(BRect(0, 0, 0, 0), title, B_DOCUMENT_WINDOW,
+	BWindow(BRect(0, 0, 0, 0), args.Title(), B_DOCUMENT_WINDOW,
 		B_CURRENT_WORKSPACE | B_QUIT_ON_WINDOW_CLOSE),
 	fTitleUpdateRunner(this, BMessage(kUpdateTitles), 1000000),
 	fNextSessionID(0),
@@ -216,7 +216,7 @@ TermWindow::TermWindow(const BString& title, Arguments* args)
 	get_key_map(&fKeymap, &fKeymapChars);
 
 	// apply the title settings
-	fTitle.pattern = title;
+	fTitle.pattern = args.Title();
 	if (fTitle.pattern.Length() == 0) {
 		fTitle.pattern = B_TRANSLATE_SYSTEM_NAME("Terminal");
 
@@ -228,7 +228,7 @@ TermWindow::TermWindow(const BString& title, Arguments* args)
 		fTitle.patternUserDefined = true;
 
 	fTitle.title = fTitle.pattern;
-	fTitle.pattern = title;
+	fTitle.pattern = args.Title();
 
 	_TitleSettingsChanged();
 
@@ -259,7 +259,7 @@ TermWindow::TermWindow(const BString& title, Arguments* args)
 
 	// init the GUI and add a tab
 	_InitWindow();
-	_AddTab(args);
+	_AddTab(&args, args.WorkingDir());
 
 	// Announce our window as no longer minimized. That's not true, since it's
 	// still hidden at this point, but it will be shown very soon.
@@ -377,7 +377,7 @@ TermWindow::_CanClose(int32 index)
 		// the terminal will be closed.
 		alertMessage = index == -1 || fSessions.CountItems() == 1
 			? B_TRANSLATE("The process \"%1\" is still running.\n"
-				"If you close the Terminal, the process will be killed.")
+				"If you close %appname%, the process will be killed.")
 			: B_TRANSLATE("The process \"%1\" is still running.\n"
 				"If you close the tab, the process will be killed.");
 	} else {
@@ -385,9 +385,9 @@ TermWindow::_CanClose(int32 index)
 		alertMessage = B_TRANSLATE(
 			"The following processes are still running:\n\n"
 			"\t%1\n\n"
-			"If you close the Terminal, the processes will be killed.");
+			"If you close %appname%, the processes will be killed.");
 	}
-
+	alertMessage.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("Terminal"));
 	alertMessage.ReplaceFirst("%1", busyProcessNames);
 
 	BAlert* alert = new BAlert(B_TRANSLATE("Really close?"),
@@ -498,13 +498,16 @@ TermWindow::_SetupMenu()
 	if (fEncodingMenu != NULL)
 		MakeEncodingMenu(fEncodingMenu);
 
+	BString newTerminal(B_TRANSLATE("New %appname%"));
+	newTerminal.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("Terminal"));
+
 	BLayoutBuilder::Menu<>(fMenuBar = new BMenuBar(Bounds(), "mbar"))
 		// Terminal
-		.AddMenu(B_TRANSLATE_COMMENT("Terminal", "The title for the main window"
-				" menubar entry related to terminal sessions"))
-			.AddItem(B_TRANSLATE("Switch Terminals"), MENU_SWITCH_TERM, B_TAB)
+		.AddMenu(B_TRANSLATE_SYSTEM_NAME("Terminal"))
+			.AddItem(B_TRANSLATE_COMMENT("Switch Terminals", "'Terminals' being this application's "
+				"name"), MENU_SWITCH_TERM, B_TAB)
 				.GetItem(fSwitchTerminalsMenuItem)
-			.AddItem(B_TRANSLATE("New Terminal"), MENU_NEW_TERM, 'N')
+			.AddItem(newTerminal, MENU_NEW_TERM, 'N')
 			.AddItem(B_TRANSLATE("New tab"), kNewTab, 'T')
 			.AddSeparator()
 			.AddItem(B_TRANSLATE("Page setup" B_UTF8_ELLIPSIS), MENU_PAGE_SETUP)
@@ -749,19 +752,22 @@ TermWindow::MessageReceived(BMessage *message)
 		{
 			// Set our current working directory to that of the active tab, so
 			// that the new terminal and its shell inherit it.
-			// Note: That's a bit lame. We should rather fork() and change the
-			// CWD in the child, but since ATM there aren't any side effects of
-			// changing our CWD, we save ourselves the trouble.
+			const char* argv[] = {NULL, NULL, NULL};
+			int32 argc = 0;
+
 			ActiveProcessInfo activeProcessInfo;
-			if (_ActiveTermView()->GetActiveProcessInfo(activeProcessInfo))
-				chdir(activeProcessInfo.CurrentDirectory());
+			if (_ActiveTermView()->GetActiveProcessInfo(activeProcessInfo)) {
+				argv[0] = "-w";
+				argv[1] = activeProcessInfo.CurrentDirectory();
+				argc = 2;
+			}
 
 			app_info info;
 			be_app->GetAppInfo(&info);
 
 			// try launching two different ways to work around possible problems
-			if (be_roster->Launch(&info.ref) != B_OK)
-				be_roster->Launch(TERM_SIGNATURE);
+			if (be_roster->Launch(&info.ref, argc, argv) != B_OK)
+				be_roster->Launch(TERM_SIGNATURE, argc, argv);
 			break;
 		}
 
@@ -905,7 +911,8 @@ TermWindow::MessageReceived(BMessage *message)
 
 		case MSG_HALF_FONT_CHANGED:
 		case MSG_FULL_FONT_CHANGED:
-		case MSG_ALLOW_BOLD_CHANGED:
+		case MSG_BOLD_STYLE_CHANGED:
+		case MSG_BRIGHTEN_ANSI_CHANGED:
 		{
 			BFont font;
 			_GetPreferredFont(font);
@@ -1007,8 +1014,6 @@ TermWindow::MessageReceived(BMessage *message)
 			break;
 
 		case MSG_COLOR_SCHEME_CHANGED:
-		case BColorListView::B_MESSAGE_SET_CURRENT_COLOR:
-		case BColorListView::B_MESSAGE_SET_COLOR:
 		case MSG_UPDATE_COLOR:
 			_SetTermColors();
 			break;
@@ -1343,7 +1348,7 @@ TermWindow::_NewTab()
 
 
 void
-TermWindow::_AddTab(Arguments* args, const BString& currentDirectory)
+TermWindow::_AddTab(const Arguments* args, const BString& currentDirectory)
 {
 	int argc = 0;
 	const char* const* argv = NULL;
@@ -1359,14 +1364,16 @@ TermWindow::_AddTab(Arguments* args, const BString& currentDirectory)
 			PrefHandler::Default()->getInt32(PREF_HISTORY_SIZE));
 		view->SetListener(this);
 
+		bool firstSession = fSessions.IsEmpty();
+
 		TermViewContainerView* containerView = new TermViewContainerView(view);
 		BScrollView* scrollView = new TermScrollView("scrollView",
-			containerView, view, fSessions.IsEmpty());
+			containerView, view, firstSession);
 		if (!fFullScreen)
 			scrollView->ScrollBar(B_VERTICAL)
 				->ResizeBy(0, -(be_control_look->GetScrollBarWidth(B_VERTICAL) - 1));
 
-		if (fSessions.IsEmpty())
+		if (firstSession)
 			fTabView->SetScrollView(scrollView);
 
 		Session* session = new Session(_NewSessionID(), _NewSessionIndex(),
@@ -1384,7 +1391,7 @@ TermWindow::_AddTab(Arguments* args, const BString& currentDirectory)
 		if (fMenuBar != NULL)
 			minimumHeight += fMenuBar->Bounds().Height() + 1;
 
-		if (fTabView != NULL && fTabView->CountTabs() > 0)
+		if (!firstSession)
 			minimumHeight += fTabView->TabHeight() + 1;
 
 		SetSizeLimits(MIN_COLS * width - 1, MAX_COLS * width - 1,
@@ -1394,7 +1401,7 @@ TermWindow::_AddTab(Arguments* args, const BString& currentDirectory)
 			// the terminal can be resized smaller than MIN_ROWS/MIN_COLS!
 
 		// If it's the first time we're called, setup the window
-		if (fTabView != NULL && fTabView->CountTabs() == 0) {
+		if (firstSession) {
 			float viewWidth, viewHeight;
 			containerView->GetPreferredSize(&viewWidth, &viewHeight);
 
@@ -1409,6 +1416,9 @@ TermWindow::_AddTab(Arguments* args, const BString& currentDirectory)
 		fTabView->AddTab(scrollView, tab);
 		view->SetScrollBar(scrollView->ScrollBar(B_VERTICAL));
 		view->SetMouseClipboard(gMouseClipboard);
+		// Only sync clipboard for the initial tab.
+		if (firstSession)
+			view->SyncClipboard();
 
 		const BCharacterSet* charset
 			= BCharacterSetRoster::FindCharacterSetByName(
@@ -1804,15 +1814,19 @@ TermWindow::MakeWindowSizeMenu(BMenu* menu)
 	};
 
 	const int32 sizeNum = sizeof(windowSizes) / sizeof(windowSizes[0]);
+	BString label;
+
 	for (int32 i = 0; i < sizeNum; i++) {
-		char label[32];
 		int32 columns = windowSizes[i][0];
 		int32 rows = windowSizes[i][1];
-		snprintf(label, sizeof(label), "%" B_PRId32 " × %" B_PRId32, columns, rows);
+
+		label.SetToFormat("%" B_PRId32 " × %" B_PRId32, columns, rows);
+
 		BMessage* message = new BMessage(MSG_COLS_CHANGED);
 		message->AddInt32("columns", columns);
 		message->AddInt32("rows", rows);
-		menu->AddItem(new BMenuItem(label, message));
+
+		menu->AddItem(new BMenuItem(label.String(), message));
 	}
 }
 

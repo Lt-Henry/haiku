@@ -37,6 +37,7 @@ class Partition : public Node, public partition_data {
 
 		bool IsFileSystem() const { return fIsFileSystem; }
 		bool IsPartitioningSystem() const { return fIsPartitioningSystem; }
+		off_t BlockForIdentifierChecksum() { return fBlockForChecksum; }
 		const char *ModuleName() const { return fModuleName; }
 
 		int FD() const { return fFD; }
@@ -49,6 +50,7 @@ class Partition : public Node, public partition_data {
 		Partition	*fParent;
 		bool		fIsFileSystem, fIsPartitioningSystem;
 		const char	*fModuleName;
+		off_t		fBlockForChecksum;
 };
 
 }	// namespace boot
@@ -68,6 +70,7 @@ class Partition : public Node, public partition_data {
 #define kPartitionTypeEXT2		"EXT2 Filesystem"
 #define kPartitionTypeEXT3		"EXT3 Filesystem"
 #define kPartitionTypeFAT12		"FAT12 Filesystem"
+#define kPartitionTypeFAT16		"FAT16 Filesystem"
 #define kPartitionTypeFAT32		"FAT32 Filesystem"
 #define kPartitionTypeHFS		"HFS Filesystem"
 #define kPartitionTypeHFSPlus	"HFS+ Filesystem"
@@ -91,7 +94,7 @@ extern partition_module_info gIntelExtendedPartitionModule;
 struct file_system_module_info {
 	const char	*module_name;
 	const char	*pretty_name;
-	float		(*identify_file_system)(boot::Partition *device);
+	float		(*identify_file_system)(boot::Partition *device, off_t *_blockForChecksum);
 	status_t	(*get_file_system)(boot::Partition *device, Directory **_root);
 };
 

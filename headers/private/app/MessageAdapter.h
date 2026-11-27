@@ -10,7 +10,7 @@
 
 
 #include <Message.h>
-#include <util/KMessage.h>
+#include <kernel/util/KMessage.h>
 
 
 // message formats
@@ -36,7 +36,7 @@ public:
 									BDataIO* stream, ssize_t* size);
 
 	static	status_t			Unflatten(uint32 format, BMessage* into,
-									const char* buffer);
+									const void* buffer, ssize_t size);
 	static	status_t			Unflatten(uint32 format, BMessage* into,
 									BDataIO* stream);
 

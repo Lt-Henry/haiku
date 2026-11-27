@@ -1,9 +1,10 @@
 /*
- * Copyright 2019, Haiku, Inc.
+ * Copyright 2019-2025, Haiku, Inc.
  * Distributed under the terms of the MIT License.
  *
- * Author:
+ * Authors:
  *		Preetpal Kaur <preetpalok123@gmail.com>
+ *		Samuel Rodríguez Pérez <samuelrp84@gmail.com>
  */
 
 
@@ -15,6 +16,7 @@
 #include <CheckBox.h>
 #include <GroupView.h>
 #include <Invoker.h>
+#include <OptionPopUp.h>
 #include <Slider.h>
 #include <StringView.h>
 #include <View.h>
@@ -38,6 +40,9 @@ const uint REVERT_SETTINGS = '&rse';
 const uint PADBLOCK_TIME_CHANGED = '&ptc';
 const uint PAD_SPEED_CHANGED = '&psc';
 const uint PAD_ACCELERATION_CHANGED = '&pac';
+const uint EDGE_MOTION_CHANGED = '&emc';
+const uint FINGER_CLICK_CHANGED = '&fcc';
+const uint SOFTWARE_BUTTON_AREAS_CHANGED = '&sbc';
 
 class DeviceListView;
 
@@ -97,6 +102,9 @@ private:
 			BCheckBox*		fScrollReverseBox;
 			BCheckBox*		fTwoFingerBox;
 			BCheckBox*		fTwoFingerHorizontalBox;
+			BCheckBox*		fTwoFingerNaturalScrollingBox;
+			BCheckBox*		fFingerClickBox;
+			BCheckBox*		fSoftwareButtonAreasBox;
 			BSlider*		fScrollStepXSlider;
 			BSlider*		fScrollStepYSlider;
 			BSlider*		fScrollAccelSlider;
@@ -104,6 +112,7 @@ private:
 			BSlider*		fTapSlider;
 			BSlider*		fSpeedSlider;
 			BSlider*		fAccelSlider;
+			BOptionPopUp*	fEdgeMotionOptionPopUp;
 			BButton*		fDefaultButton;
 			BButton*		fRevertButton;
 };

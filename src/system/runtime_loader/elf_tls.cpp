@@ -5,6 +5,7 @@
 
 #include "elf_tls.h"
 
+#include <malloc.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -57,12 +58,8 @@ public:
 	inline	TLSBlock&	operator[](unsigned dso);
 
 private:
-			bool		_DoesExist() const	{ return *fVector != NULL; }
 			unsigned	_Size() const
-							{ return _DoesExist()
-									? fGeneration->Size() : 0; }
-
-			unsigned	_Generation() const;
+							{ return (*fVector != NULL) ? fGeneration->Size() : 0; }
 
 			status_t	_ResizeVector(unsigned minimumSize);
 
@@ -85,7 +82,7 @@ TLSBlockTemplate::SetBaseAddress(addr_t baseAddress)
 TLSBlock
 TLSBlockTemplate::CreateBlock()
 {
-	void* pointer = malloc(fMemorySize + TLS_DTV_OFFSET);
+	void* pointer = memalign(fMemoryAlignment, fMemorySize + TLS_DTV_OFFSET);
 	if (pointer == NULL)
 		return TLSBlock();
 	memset(pointer, 0, TLS_DTV_OFFSET);
@@ -227,21 +224,28 @@ DynamicThreadVector::DestroyAll()
 	*fVector = NULL;
 
 	delete fGeneration;
+	fGeneration = NULL;
 }
 
 
 TLSBlock&
 DynamicThreadVector::operator[](unsigned dso)
 {
+	if (fGeneration == NULL) {
+		fGeneration = new Generation;
+		if (fGeneration == NULL)
+			return fNullBlock;
+	}
+
 	unsigned generation = TLSBlockTemplates::Get().GetGeneration(-1);
-	if (_Generation() < generation) {
+	if (fGeneration->Counter() < generation) {
 		// We need to destroy any blocks whose DSO generation has changed
 		// to be greater than our own generation.
 		for (unsigned dsoIndex = 0; dsoIndex < _Size(); dsoIndex++) {
 			TLSBlock& block = (*fVector)[dsoIndex + 1];
 			unsigned dsoGeneration
 				= TLSBlockTemplates::Get().GetGeneration(dsoIndex);
-			if (dsoGeneration > _Generation() && dsoGeneration <= generation)
+			if (dsoGeneration > fGeneration->Counter() && dsoGeneration <= generation)
 				block.Destroy();
 		}
 
@@ -265,15 +269,6 @@ DynamicThreadVector::operator[](unsigned dso)
 }
 
 
-unsigned
-DynamicThreadVector::_Generation() const
-{
-	if (fGeneration != NULL)
-		return fGeneration->Counter();
-	return unsigned(-1);
-}
-
-
 status_t
 DynamicThreadVector::_ResizeVector(unsigned minimumSize)
 {
@@ -289,11 +284,6 @@ DynamicThreadVector::_ResizeVector(unsigned minimumSize)
 
 	*fVector = (TLSBlock*)newVector;
 	memset((void*)(*fVector + oldSize + 1), 0, (size - oldSize) * sizeof(TLSBlock));
-	if (fGeneration == NULL) {
-		fGeneration = new Generation;
-		if (fGeneration == NULL)
-			return B_NO_MEMORY;
-	}
 
 	*(Generation**)*fVector = fGeneration;
 	fGeneration->SetSize(size);

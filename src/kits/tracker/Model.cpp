@@ -317,27 +317,57 @@ Model::InitCheck() const
 
 
 int
-Model::CompareFolderNamesFirst(const Model* compareModel) const
+Model::CompareFolderNamesFirst(const Model* compare) const
 {
-	if (compareModel == NULL)
+	if (compare == NULL)
 		return -1;
 
-	const Model* resolvedCompareModel = compareModel->ResolveIfLink();
-	const Model* resolvedMe = ResolveIfLink();
+	const Model* resolved = ResolveIfLink();
+	const Model* resolvedCompare = compare->ResolveIfLink();
 
-	bool meIsDirOrVolume = resolvedMe->IsDirectory() || resolvedMe->IsVolume()
-		|| resolvedMe->IsVirtualDirectory();
-	bool otherIsDirOrVolume = resolvedCompareModel->IsDirectory()
-		|| resolvedCompareModel->IsVolume()
-		|| resolvedCompareModel->IsVirtualDirectory();
+	bool meIsRoot = resolved->IsRoot();
+	bool otherIsRoot = resolvedCompare->IsRoot();
 
-	if (meIsDirOrVolume) {
-		if (!otherIsDirOrVolume)
-			return -1;
-	} else if (otherIsDirOrVolume)
+	// sort root directory first
+
+	if (meIsRoot && !otherIsRoot)
+		return -1;
+	else if (!meIsRoot && otherIsRoot)
 		return 1;
 
-	return NaturalCompare(Name(), compareModel->Name());
+	bool meIsVolume = resolved->IsVolume();
+	bool otherIsVolume = resolvedCompare->IsVolume();
+
+	// sort volume as a directory if capacity is 0
+
+	if (meIsVolume) {
+		BVolume volume(resolved->NodeRef()->device);
+		if (volume.InitCheck() == B_OK && volume.Capacity() == 0)
+			meIsVolume = false;
+	}
+
+	if (otherIsVolume) {
+		BVolume volume(resolvedCompare->NodeRef()->device);
+		if (volume.InitCheck() == B_OK && volume.Capacity() == 0)
+			otherIsVolume = false;
+	}
+
+	// sort by volume then by directory then by file name
+
+	if (meIsVolume && !otherIsVolume)
+		return -1;
+	else if (!meIsVolume && otherIsVolume)
+		return 1;
+
+	bool meIsDir = resolved->IsDirectory() || resolved->IsVirtualDirectory();
+	bool otherIsDir = resolvedCompare->IsDirectory() || resolvedCompare->IsVirtualDirectory();
+
+	if (meIsDir && !otherIsDir)
+		return -1;
+	else if (!meIsDir && otherIsDir)
+		return 1;
+
+	return NaturalCompare(Name(), compare->Name());
 }
 
 
@@ -464,13 +494,8 @@ Model::OpenNodeCommon(bool writable)
 #if DEBUG
 			PrintToStream();
 #endif
-			TRESPASS();
-				// this can only happen if GetStat failed before,
-				// in which case we shouldn't be here
-
-			// ToDo: Obviously, we can also be here if the type could not
-			// be determined, for example for block devices (so the TRESPASS()
-			// macro shouldn't be used here)!
+			// Unhandled node type (for example, a device or a fifo pipe)
+			// TODO: handle and display them in some form
 			return fStatus = B_ERROR;
 	}
 
@@ -728,16 +753,6 @@ Model::FinishSettingUpType()
 
 
 bool
-Model::ShouldUseWellKnownIcon() const
-{
-	if (fBaseType == kDirectoryNode || fBaseType == kVolumeNode
-		|| fBaseType == kTrashNode || fBaseType == kDesktopNode)
-		return !CheckAppIconHint();
-	return false;
-}
-
-
-bool
 Model::CheckAppIconHint() const
 {
 	attr_info info;
@@ -770,7 +785,14 @@ Model::ResetIconFrom()
 	if (InitCheck() != B_OK)
 		return;
 
-	if (ShouldUseWellKnownIcon()) {
+	bool hasAttrIcon = CheckAppIconHint();
+
+	if (hasAttrIcon && (fBaseType == kDesktopNode || fBaseType == kTrashNode)) {
+		// Desktop or Trash with an icon attribute
+		fIconFrom = kNode;
+		return;
+	} else if (!hasAttrIcon && (fBaseType == kDirectoryNode || fBaseType == kVolumeNode)) {
+		// No icon attribute override, check if well-known or root directory
 		BDirectory* directory = dynamic_cast<BDirectory*>(fNode);
 		if (WellKnowEntryList::Match(NodeRef()) > (directory_which)-1) {
 			fIconFrom = kTrackerSupplied;
@@ -780,6 +802,7 @@ Model::ResetIconFrom()
 			return;
 		}
 	}
+
 	fIconFrom = kUnknownSource;
 }
 
@@ -921,13 +944,8 @@ Model::AttrChanged(const char* attrName)
 	// return true if icon needs updating
 
 	ASSERT(IsNodeOpen());
-	if (attrName != NULL
-		&& (strcmp(attrName, kAttrIcon) == 0
-			|| strcmp(attrName, kAttrMiniIcon) == 0
-			|| strcmp(attrName, kAttrLargeIcon) == 0
-			|| strcmp(attrName, kAttrThumbnail) == 0)) {
+	if (IconAttrChanged(attrName))
 		return true;
-	}
 
 	if (attrName == NULL
 		|| strcmp(attrName, kAttrMIMEType) == 0
@@ -939,10 +957,8 @@ Model::AttrChanged(const char* attrName)
 		else {
 			// node has a specific mime type
 			fMimeType = type;
-			if (!IsVolume() && !IsSymLink()
-				&& info.GetPreferredApp(type) == B_OK) {
+			if (!IsVolume() && !IsSymLink() && info.GetPreferredApp(type) == B_OK)
 				SetPreferredAppSignature(type);
-			}
 		}
 
 #if xDEBUG
@@ -964,8 +980,27 @@ Model::AttrChanged(const char* attrName)
 
 
 bool
+Model::IconAttrChanged(const char* attrName)
+{
+	// called on an icon attribute changed by node monitor
+	// return true if icon needs updating
+
+	ASSERT(IsNodeOpen());
+
+	return attrName != NULL
+		&& (strcmp(attrName, kAttrIcon) == 0
+			|| strcmp(attrName, kAttrLargeIcon) == 0
+			|| strcmp(attrName, kAttrMiniIcon) == 0
+			|| strcmp(attrName, kAttrThumbnail) == 0);
+}
+
+
+bool
 Model::StatChanged()
 {
+	if (fNode == NULL)
+		return false;
+
 	ASSERT(IsNodeOpen());
 	mode_t oldMode = fStatBuf.st_mode;
 	fStatus = fNode->GetStat(&fStatBuf);
@@ -1250,7 +1285,24 @@ Model::Mimeset(bool force)
 	opener.OpenNode();
 	AttrChanged(NULL);
 
-	return !oldType.ICompare(MimeType());
+	return oldType.ICompare(MimeType()) != 0;
+}
+
+
+void
+Model::SniffMimeIfNeeded()
+{
+	if (fMimeType != B_FILE_MIMETYPE)
+		return;
+
+	BVolume volume(fStatBuf.st_dev);
+	if (volume.InitCheck() == B_OK && !volume.KnowsMime()) {
+		BMimeType mimeType;
+		if (BMimeType::GuessMimeType(&fEntryRef, &mimeType) == B_OK)
+			fMimeType = mimeType.Type();
+	}
+
+	return;
 }
 
 
@@ -1455,8 +1507,14 @@ Model::PrintToStream(int32 level, bool deep)
 		PRINT(("symlink to:\n"));
 		tmp.PrintToStream();
 	}
+
+#if 0
+	// Results in infinite recursion through TrackIconSource -> BModelOpener
+	// -> ModelNodeLatyOpener -> ModelNodeLazyOpener::OpenNode -> OpenNode -> OpenNodeCommon
+	// -> PrintToStream
 	TrackIconSource(B_MINI_ICON);
 	TrackIconSource(B_LARGE_ICON);
+#endif
 }
 
 

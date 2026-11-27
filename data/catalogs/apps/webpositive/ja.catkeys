@@ -1,4 +1,4 @@
-1	japanese	x-vnd.Haiku-WebPositive	371749163
+1	japanese	x-vnd.Haiku-WebPositive	3459776802
 Authentication required	Authentication Panel		認証が必要です
 Previous	WebPositive Window		前へ
 Copy	Console Window		コピー
@@ -63,7 +63,6 @@ WebPositive	System name		WebPositive
 Old name: %s	BookmarkBar		以前の名前: %s
 Expiration	Cookie Manager		有効期限
 Reload	WebPositive Window		再読み込み
-Your CPU is too old and does not support the SSE2 extensions, without which WebPositive cannot run. We recommend installing NetSurf instead.	WebPositive		CPUが古く、SSE2拡張をサポートしていません。そのためWebPositiveを動作できません。代わりにNetSurfのインストールをお勧めします。
 Download finished	Download Window		ダウンロードが完了しました
 Cookie manager	WebPositive Window		Cookie マネージャー
 Username:	Authentication Panel		ユーザー名:
@@ -90,6 +89,7 @@ New tab	WebPositive Window		新しいタブ
 Increase size	WebPositive Window		拡大
 Today	WebPositive Window		今日
 Open location	WebPositive Window		場所を開く
+There are still downloads in progress, do you really want to quit %appname% now?	WebPositive		まだダウンロードが進行中です。本当に %appname% をすぐに終了しますか?
 New browser window	Download Window		新しいブラウザーウィンドウ
 Open	Download Window		開く
 New window	WebPositive Window		新しいウィンドウ
@@ -109,6 +109,7 @@ Apply	Settings Window		適用
 There was an error trying to show the Bookmarks folder.\n\nError: %error	WebPositive Window	Don't translate variable %error	ブックマークフォルダーを表示する際にエラーが発生しました。\n\nエラー: %error
 Revert	Settings Window		戻す
 Copy	WebPositive Window		コピー
+Your CPU is too old and does not support the SSE2 extensions, without which %appname% cannot run. We recommend installing NetSurf instead.	WebPositive		CPUが古く、SSE2拡張をサポートしていません。そのため%appname%を動作できません。代わりにNetSurfのインストールをお勧めします
 {0, plural,one{Last line repeated # time.}other{Last line repeated # times.}}	Console Window		{0, plural,one{最後の行が # 回繰り返されました。}other{最後の行が # 回繰り返されました。}}
 Default standard font size:	Settings Window		標準フォントサイズ:
 Custom	Settings Window		ユーザー設定
@@ -118,7 +119,6 @@ Remove	Download Window		除去
 Close tab	WebPositive Window		タブを閉じる
 About	WebPositive Window		このソフトウェアについて
 Continue downloads	WebPositive		ダウンロードを続ける
-There are still downloads in progress, do you really want to quit WebPositive now?	WebPositive		まだダウンロードが進行中です。本当に WebPositive をすぐに終了しますか?
 Proxy server requires authentication	Settings Window		プロキシサーバーが認証を要求する
 Cancel	Settings Window		中止
 Reset size	WebPositive Window		リセット
@@ -142,7 +142,6 @@ Next	WebPositive Window		次へ
 Bookmark error	WebPositive Window		ブックマークエラー
 OK	WebPositive Window		OK
 (%currentSize% of %expectedSize%, %rate%/s)	Download Window		(%currentSize% / %expectedSize%, %rate%/s)
-WebPositive	Download Window		WebPositive
 Save page as…	WebPositive Window		名前を付けてページを保存...
 Zoom text only	WebPositive Window		文字サイズのみ変更
 Page source error	WebPositive Window		ページソースエラー
@@ -153,6 +152,8 @@ Window	WebPositive Window		ウィンドウ
 Proxy server address:	Settings Window		アドレス:
 Search page:	Settings Window		検索ページ:
 Settings	WebPositive Window		設定
+Show in Tracker	BookmarkBar		Tracker に表示
+(%currentSize% received, %rate%/s)	Download Window		(%currentSize% 受信済, %rate%/s)
 Clear	URL Bar		クリア
 Loading %url	WebPositive Window		%url の読み込み中
 The quick brown fox jumps over the lazy dog.	Font Selection view	Don't translate this literally ! Use a phrase showing all chars from A to Z.	The quick brown fox jumps over the lazy dog.

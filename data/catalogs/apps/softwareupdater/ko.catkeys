@@ -1,4 +1,4 @@
-1	korean	x-vnd.haiku-softwareupdater	369324613
+1	korean	x-vnd.haiku-softwareupdater	1377379822
 Updating version	SoftwareUpdaterWindow	List item text	업데이트 될 버전
 Click here to install {0, plural, one{# updated package} other{# updated packages}}.	CheckManager		{0, plural, one{#개의 패키지} other{#개의 패키지}} 업데이트를 설치하려면 여기를 클릭하세요.
 Packages to be uninstalled	SoftwareUpdaterWindow	List super item label	제거 될 패키지
@@ -41,7 +41,6 @@ Exception occurred while checking for updates: %s\n	CheckAction		업데이트 �
 Packages are being updated	UpdateManager		패키기가 업데이트 되는 중입니다
 Cancel	SoftwareUpdaterWindow		취소
 Don't quit	SoftwareUpdaterWindow		종료하지 않기
-Click here to run SoftwareUpdater. Some updates will require a problem solution to be selected.	CheckManager		여기를 클릭하여 SoftwareUpdater를 실행하세요. 일부 업데이트는 선택하기 전에 질문에 대한 답을 요구할 수 있습니다.
 Checking for updates	SoftwareUpdaterWindow		업데이트 확인 중
 Updates completed	UpdateManager		완료된 업데이트
 Reboot	SoftwareUpdaterWindow		재부팅
@@ -52,8 +51,8 @@ No remote repositories are available	UpdateManager	Error message	사용 가능�
 Software {0, plural, one{update} other{updates}} available	CheckManager		소프트웨어 {0, plural, one{업데이트가} other{업데이트가}} 사용 가능합니다
 Reboot	SoftwareUpdaterWindow	Button label	재부팅
 Update	SoftwareUpdaterWindow	Alert button label	업데이트
-Open Repositories	SoftwareUpdaterWindow	Alert button label	저장소 목록 열기
 Updates did not complete	UpdateAction		업데이트를 완료하지 못했습니다
+Open Repositories	SoftwareUpdaterWindow	Alert button label	저장소 목록 열기
 Invalid update type, cannot continue with updates	UpdateAction		업데이트 형식이 잘못되어 계속 진행할 수 없습니다
 Uninstalling version	SoftwareUpdaterWindow	List item text	삭제 중인 버전
 %i of %i	UpdateManager	Do not translate %i	%i / %i

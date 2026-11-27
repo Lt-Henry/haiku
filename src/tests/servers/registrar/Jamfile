@@ -29,7 +29,6 @@ SimpleTest run_test_registrar
 
 # a shutdown working with the emulation under R5
 UsePrivateHeaders app ;
-UsePrivateHeaders kernel ;
 
 SimpleTest <test>shutdown
 	: shutdown.cpp
@@ -67,7 +66,7 @@ SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src servers registrar ] ;
 SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src servers registrar mime ] ;
 SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src kits storage mime ] ;
 
-Server test_registrar
+Application test_registrar
  	:
 	AppInfoList.cpp
 	AppInfoListMessagingTargetSet.cpp

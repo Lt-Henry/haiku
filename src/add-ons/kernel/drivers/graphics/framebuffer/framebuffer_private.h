@@ -23,10 +23,9 @@ struct framebuffer_info {
 	struct vesa_shared_info* shared_info;
 	area_id			shared_area;
 
+	area_id			frame_buffer_area;
 	addr_t			frame_buffer;
-	addr_t			physical_frame_buffer;
-	size_t			physical_frame_buffer_size;
-	bool			complete_frame_buffer_mapped;
+	bool			owns_frame_buffer;
 };
 
 extern status_t framebuffer_init(framebuffer_info& info);

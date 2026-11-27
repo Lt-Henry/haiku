@@ -20,7 +20,6 @@
 #include <elf.h>
 #include <kernel.h>
 #include <low_resource_manager.h>
-#include <slab/ObjectDepot.h>
 #include <smp.h>
 #include <tracing.h>
 #include <util/AutoLock.h>
@@ -28,14 +27,19 @@
 #include <vm/vm.h>
 #include <vm/VMAddressSpace.h>
 
+#include "SmallObjectCache.h"
 #include "HashedObjectCache.h"
+#include "ObjectDepot.h"
 #include "MemoryManager.h"
 #include "slab_debug.h"
 #include "slab_private.h"
-#include "SmallObjectCache.h"
+
+#if DEBUG_HEAPS
+#include "../debug/heaps.h"
+#endif
 
 
-#if !USE_GUARDED_HEAP_FOR_OBJECT_CACHE
+#if !USE_DEBUG_HEAPS_FOR_ALL_OBJECT_CACHES
 
 
 typedef DoublyLinkedList<ObjectCache> ObjectCacheList;
@@ -251,7 +255,7 @@ static void
 dump_slab(::slab* slab)
 {
 	kprintf("  %p  %p  %6" B_PRIuSIZE " %6" B_PRIuSIZE " %6" B_PRIuSIZE "  %p\n",
-		slab, slab->pages, slab->size, slab->count, slab->offset, slab->free);
+		slab, slab->pages, slab->size, slab->count, slab->offset, slab->free.head);
 }
 
 
@@ -304,7 +308,7 @@ dump_cache_info(int argc, char* argv[])
 	kprintf("resize entry don't wait: %p\n", cache->resize_entry_dont_wait);
 	kprintf("resize entry can wait:   %p\n", cache->resize_entry_can_wait);
 
-	kprintf("  %-*s    %-*s      size   used offset  free\n",
+	kprintf("  %-*s    %-*s      size   free offset  head\n",
 		B_PRINTF_POINTER_WIDTH, "slab", B_PRINTF_POINTER_WIDTH, "chunk");
 
 	SlabList::Iterator iterator = cache->empty.GetIterator();
@@ -357,9 +361,20 @@ dump_object_info(int argc, char* argv[])
 		slab* slab = cache->ObjectSlab(object);
 		const char* slabType = cache->empty.Contains(slab) ? "empty"
 			: cache->partial.Contains(slab) ? "partial"
-			: cache->full.Contains(slab) ? "full" : NULL;
+			: cache->full.Contains(slab) ? "full" : "NULL";
 
 		kprintf("\tobject is in %s slab: %p\n", slabType, slab);
+
+		slab_queue_link* itemLink = slab != NULL ? slab->free.head : NULL;
+		while (itemLink != NULL) {
+			void* item = link_to_object(itemLink, cache->object_size);
+			if ((addr_t)object >= (addr_t)item
+					&& (addr_t)object < ((addr_t)item + cache->object_size)) {
+				kprintf("\tobject is free: %p\n", item);
+				break;
+			}
+			itemLink = itemLink->next;
+		}
 	}
 
 	return 0;
@@ -1164,6 +1179,23 @@ create_object_cache_etc(const char* name, size_t objectSize, size_t alignment,
 	uint32 flags, void* cookie, object_cache_constructor constructor,
 	object_cache_destructor destructor, object_cache_reclaimer reclaimer)
 {
+#if DEBUG_HEAPS && GUARDED_HEAP_CAN_REPLACE_OBJECT_CACHES
+	if (guarded_heap_replaces_object_cache(name)) {
+		ObjectCache* cache = (ObjectCache*)
+			kernel_guarded_heap.memalign(0, sizeof(ObjectCache), flags);
+		memset((void*)cache, 0, sizeof(ObjectCache));
+		strcpy(cache->name, name);
+		cache->object_size = objectSize;
+		cache->alignment = alignment;
+		cache->constructor = constructor;
+		cache->destructor = destructor;
+		cache->cookie = cookie;
+
+		cache->flags = (uint32)-1;
+		return cache;
+	}
+#endif
+
 	ObjectCache* cache;
 
 	if (objectSize == 0) {
@@ -1191,6 +1223,13 @@ create_object_cache_etc(const char* name, size_t objectSize, size_t alignment,
 void
 delete_object_cache(object_cache* cache)
 {
+#if DEBUG_HEAPS && GUARDED_HEAP_CAN_REPLACE_OBJECT_CACHES
+	if (cache->flags == (uint32)-1) {
+		kernel_guarded_heap.free(cache, 0);
+		return;
+	}
+#endif
+
 	T(Delete(cache));
 
 	{
@@ -1224,6 +1263,11 @@ delete_object_cache(object_cache* cache)
 status_t
 object_cache_set_minimum_reserve(object_cache* cache, size_t objectCount)
 {
+#if DEBUG_HEAPS && GUARDED_HEAP_CAN_REPLACE_OBJECT_CACHES
+	if (cache->flags == (uint32)-1)
+		return B_OK;
+#endif
+
 	MutexLocker _(cache->lock);
 
 	if (cache->min_object_reserve == objectCount)
@@ -1240,59 +1284,74 @@ object_cache_set_minimum_reserve(object_cache* cache, size_t objectCount)
 void*
 object_cache_alloc(object_cache* cache, uint32 flags)
 {
-	if (!(cache->flags & CACHE_NO_DEPOT)) {
-		void* object = object_depot_obtain(&cache->depot);
-		if (object) {
-			add_alloc_tracing_entry(cache, flags, object);
-			return fill_allocated_block(object, cache->object_size);
+#if DEBUG_HEAPS && GUARDED_HEAP_CAN_REPLACE_OBJECT_CACHES
+	if (cache->flags == (uint32)-1) {
+		void* object = kernel_guarded_heap.memalign(cache->alignment,
+			cache->object_size, flags);
+		if (cache->constructor != NULL)
+			cache->constructor(cache->cookie, object);
+		return object;
+	}
+#endif
+
+	void* object = NULL;
+	if ((cache->flags & CACHE_NO_DEPOT) == 0)
+		object = object_depot_obtain(&cache->depot);
+
+	if (object == NULL) {
+		MutexLocker locker(cache->lock);
+		slab* source = NULL;
+
+		while (true) {
+			source = cache->partial.Head();
+			if (source != NULL)
+				break;
+
+			source = cache->empty.RemoveHead();
+			if (source != NULL) {
+				cache->empty_count--;
+				cache->partial.Add(source);
+				break;
+			}
+
+			if (object_cache_reserve_internal(cache, 1, flags) != B_OK) {
+				T(Alloc(cache, flags, NULL));
+				return NULL;
+			}
+
+			cache->pressure++;
 		}
+
+		ParanoiaChecker _2(source);
+
+		slab_queue_link* link = source->free.Pop();
+		source->count--;
+		cache->used_count++;
+
+		if (cache->total_objects - cache->used_count < cache->min_object_reserve)
+			increase_object_reserve(cache);
+
+		REMOVE_PARANOIA_CHECK(PARANOIA_SUSPICIOUS, source, &link->next,
+			sizeof(void*));
+
+		TRACE_CACHE(cache, "allocate %p (%p) from %p, %lu remaining.",
+			link_to_object(link, cache->object_size), link, source, source->count);
+
+		if (source->count == 0) {
+			cache->partial.Remove(source);
+			cache->full.Add(source);
+		}
+
+		object = link_to_object(link, cache->object_size);
+		locker.Unlock();
 	}
 
-	MutexLocker locker(cache->lock);
-	slab* source = NULL;
-
-	while (true) {
-		source = cache->partial.Head();
-		if (source != NULL)
-			break;
-
-		source = cache->empty.RemoveHead();
-		if (source != NULL) {
-			cache->empty_count--;
-			cache->partial.Add(source);
-			break;
-		}
-
-		if (object_cache_reserve_internal(cache, 1, flags) != B_OK) {
-			T(Alloc(cache, flags, NULL));
-			return NULL;
-		}
-
-		cache->pressure++;
+#if PARANOID_KERNEL_FREE
+	if (cache->object_size >= (sizeof(void*) * 2)) {
+		ASSERT_ALWAYS_PRINT(*(uint32*)object == 0xdeadbeef,
+			"object %p @! slab_object %p", object, object);
 	}
-
-	ParanoiaChecker _2(source);
-
-	object_link* link = _pop(source->free);
-	source->count--;
-	cache->used_count++;
-
-	if (cache->total_objects - cache->used_count < cache->min_object_reserve)
-		increase_object_reserve(cache);
-
-	REMOVE_PARANOIA_CHECK(PARANOIA_SUSPICIOUS, source, &link->next,
-		sizeof(void*));
-
-	TRACE_CACHE(cache, "allocate %p (%p) from %p, %lu remaining.",
-		link_to_object(link, cache->object_size), link, source, source->count);
-
-	if (source->count == 0) {
-		cache->partial.Remove(source);
-		cache->full.Add(source);
-	}
-
-	void* object = link_to_object(link, cache->object_size);
-	locker.Unlock();
+#endif
 
 	add_alloc_tracing_entry(cache, flags, object);
 	return fill_allocated_block(object, cache->object_size);
@@ -1302,6 +1361,15 @@ object_cache_alloc(object_cache* cache, uint32 flags)
 void
 object_cache_free(object_cache* cache, void* object, uint32 flags)
 {
+#if DEBUG_HEAPS && GUARDED_HEAP_CAN_REPLACE_OBJECT_CACHES
+	if (cache->flags == (uint32)-1) {
+		if (cache->destructor != NULL)
+			cache->destructor(cache->cookie, object);
+		kernel_guarded_heap.free(object, flags);
+		return;
+	}
+#endif
+
 	if (object == NULL)
 		return;
 
@@ -1343,6 +1411,11 @@ object_cache_free(object_cache* cache, void* object, uint32 flags)
 status_t
 object_cache_reserve(object_cache* cache, size_t objectCount, uint32 flags)
 {
+#if DEBUG_HEAPS && GUARDED_HEAP_CAN_REPLACE_OBJECT_CACHES
+	if (cache->flags == (uint32)-1)
+		return B_OK;
+#endif
+
 	if (objectCount == 0)
 		return B_OK;
 
@@ -1367,8 +1440,6 @@ slab_init(kernel_args* args)
 	MemoryManager::Init(args);
 
 	new (&sObjectCaches) ObjectCacheList();
-
-	block_allocator_init_boot();
 }
 
 
@@ -1426,8 +1497,6 @@ slab_init_post_sem()
 	register_low_resource_handler(object_cache_low_memory, NULL,
 		B_KERNEL_RESOURCE_PAGES | B_KERNEL_RESOURCE_MEMORY
 			| B_KERNEL_RESOURCE_ADDRESS_SPACE, 5);
-
-	block_allocator_init_rest();
 }
 
 
@@ -1452,4 +1521,4 @@ slab_init_post_thread()
 RANGE_MARKER_FUNCTION_END(Slab)
 
 
-#endif	// !USE_GUARDED_HEAP_FOR_OBJECT_CACHE
+#endif	// !USE_DEBUG_HEAPS_FOR_ALL_OBJECT_CACHES

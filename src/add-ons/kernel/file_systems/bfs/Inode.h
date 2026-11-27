@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2020, Axel Dörfler, axeld@pinc-software.de.
+ * Copyright 2001-2025, Axel Dörfler, axeld@pinc-software.de.
  * This file may be used under the terms of the MIT License.
  */
 #ifndef INODE_H
@@ -21,6 +21,9 @@ class Index;
 class InodeAllocator;
 class NodeGetter;
 class Transaction;
+class BlockRunBuffer;
+
+
 
 
 // To be used in Inode::Create() as publishFlags
@@ -41,6 +44,7 @@ public:
 			ino_t				ID() const { return fID; }
 			off_t				BlockNumber() const
 									{ return fVolume->VnodeToBlock(fID); }
+			void				SetID(ino_t ID);
 
 			rw_lock&			Lock() { return fLock; }
 			ReadLocker			ReadLock() { return ReadLocker(fLock); }
@@ -143,7 +147,7 @@ public:
 
 			// manipulating the data stream
 			status_t			FindBlockRun(off_t pos, block_run& run,
-									off_t& offset);
+									off_t& offset) const;
 
 			status_t			ReadAt(off_t pos, uint8* buffer, size_t* length);
 			status_t			WriteAt(Transaction& transaction, off_t pos,
@@ -155,6 +159,9 @@ public:
 			status_t			Append(Transaction& transaction, off_t bytes);
 			status_t			TrimPreallocation(Transaction& transaction);
 			bool				NeedsTrimming() const;
+
+			status_t			MoveStream();
+			status_t			StreamCompletelyInsideAllowedRange(bool& inRange) const;
 
 			status_t			Free(Transaction& transaction);
 			status_t			Sync();
@@ -191,6 +198,9 @@ public:
 			void				SetFileCache(void* cache) { fCache = cache; }
 			void*				Map() const { return fMap; }
 			void				SetMap(void* map) { fMap = map; }
+
+			// resize support
+			status_t			CopyBlockTo(Transaction& transaction, off_t targetBlock);
 
 #if _KERNEL_MODE && KDEBUG
 			void				AssertReadLocked()
@@ -253,6 +263,20 @@ private:
 									off_t size);
 			status_t			_ShrinkStream(Transaction& transaction,
 									off_t size);
+			status_t			_AddBlockRun(Transaction& transaction,
+									data_stream* dataStream, block_run run,
+									off_t targetSize, int32* rest = NULL);
+
+			// moving the data stream
+			status_t			_WriteBufferedRuns(Transaction& transaction,
+									BlockRunBuffer& buffer,
+									data_stream* dataStream, off_t targetSize,
+									bool flush = false);
+			status_t			_FreeIndirectBlocks(Transaction& transaction,
+									data_stream *dataStream);
+
+			status_t			_GetNextBlockRun(off_t& position,
+									block_run& run) const;
 
 private:
 			rw_lock				fLock;
@@ -354,13 +378,11 @@ public:
 		return CachedBlock::SetTo(fVolume->VnodeToBlock(inode->ID()));
 	}
 
-	status_t SetToWritable(Transaction& transaction, const Inode* inode,
-		bool empty = false)
+	status_t SetToWritable(Transaction& transaction, const Inode* inode, bool empty = false)
 	{
 		Unset();
 		fVolume = inode->GetVolume();
-		return CachedBlock::SetToWritable(transaction,
-			fVolume->VnodeToBlock(inode->ID()), empty);
+		return CachedBlock::SetToWritable(transaction, fVolume->VnodeToBlock(inode->ID()), empty);
 	}
 
 	const bfs_inode* Node() const { return (const bfs_inode*)Block(); }

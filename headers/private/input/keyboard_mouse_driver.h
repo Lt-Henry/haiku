@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2010, Haiku. All rights reserved.
+ * Copyright 2002-2025, Haiku. All rights reserved.
  * Distributed under the terms of the MIT License.
  */
 #ifndef _KEYBOARD_MOUSE_DRIVER_H
@@ -118,10 +118,21 @@ typedef struct {
 } tablet_movement;
 
 
+// TODO: The following constants are not in use by drivers yet
+// so they cannot be used by movement_maker.cpp and these
+// values do not match with Synaptics driver finger width value.
+// See more info on touchpad_movement.fingerWidth TODO comment.
 #define B_ONE_FINGER	0x01
 #define B_TWO_FINGER	0x02
 #define B_MULTI_FINGER	0x04
 #define B_PEN			0x08
+
+
+#define B_EDGE_MOTION_DISABLED					0x00
+#define B_EDGE_MOTION_ON_MOVE					0x01
+#define B_EDGE_MOTION_ON_TAP_DRAG				0x02
+#define B_EDGE_MOTION_ON_BUTTON_CLICK_MOVE		0x04
+#define B_EDGE_MOTION_ON_BUTTON_CLICK_DRAG		0x08
 
 
 typedef struct {
@@ -148,13 +159,29 @@ typedef struct {
 	uint8		fingers;
 	bool		gesture;
 	uint8		fingerWidth;
+		// TODO: Finger width is currently operating with these values
+		// on drivers and movement_maker.cpp probably following
+		// Synaptics driver finger width value interpretation of "w":
+		//
+		// 0		Two finger on the pad
+		// 1		Three or more fingers
+		// 2		Pen (instead of finger)
+		// 3		?
+		// 4 - 7	normal width
+		// 8 - 14	very wide finger or palm
+		// 15		maximum reportable width; extreme wide contact
+		//
+		// While it looks like the idea is to decouple this to end up with
+		// values related to the width only and not mixed with other features:
+		// For instance:
+		//
+		// 1 - 4	normal width
+		// 5 - 11	very wide finger or palm
+		// 12		maximum reportable width; extreme wide contact
 	int32		wheel_ydelta;
 	int32		wheel_xdelta;
 	int32		wheel_zdelta;
 	int32		wheel_wdelta;
-	// 1 - 4	normal width
-	// 5 - 11	very wide finger or palm
-	// 12		maximum reportable width; extreme wide contact
 } touchpad_movement;
 
 

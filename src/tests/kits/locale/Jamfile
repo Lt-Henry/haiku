@@ -4,6 +4,8 @@ UsePublicHeaders locale ;
 UsePrivateHeaders locale shared ;
 UseBuildFeatureHeaders icu ;
 
+AddSubDirSupportedPlatforms libbe_test ;
+
 # Pseudo target to build all locale kit tests
 NotFile LocaleKitTests ;
 Depends LocaleKitTests
@@ -47,12 +49,14 @@ UnitTestLib liblocaletest.so :
 	LocaleKitTestAddon.cpp
 
 	CollatorTest.cpp
-	DateFormatTest.cpp
+	DateFormatTest.cpp 
+	DateTimeFormatTest.cpp
 	DurationFormatTest.cpp
 	LanguageTest.cpp
 	NumberFormatTest.cpp
 	RelativeDateTimeFormatTest.cpp
 	StringFormatTest.cpp
+	TimeFormatTest.cpp
 	UnicodeCharTest.cpp
 
 	: be [ TargetLibstdc++ ]

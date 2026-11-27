@@ -55,6 +55,7 @@ All rights reserved.
 #include <Path.h>
 #include <PathMonitor.h>
 #include <Roster.h>
+#include <StackOrHeapArray.h>
 #include <StopWatch.h>
 #include <Volume.h>
 #include <VolumeRoster.h>
@@ -63,6 +64,7 @@ All rights reserved.
 
 #include "Attributes.h"
 #include "AutoLock.h"
+#include "Background.h"
 #include "BackgroundImage.h"
 #include "Bitmaps.h"
 #include "Commands.h"
@@ -296,6 +298,9 @@ TTracker::TTracker()
 
 	// init Desktop now that pose view is created and window is locked
 	deskWindow->Init();
+
+	// create this before ReadyToRun() so that the Trash icon gets set
+	fTrashWatcher = new BTrashWatcher();
 }
 
 
@@ -306,6 +311,8 @@ TTracker::~TTracker()
 
 	BPathMonitor::SetWatchingInterface(NULL);
 	delete fWatchingInterface;
+
+	delete fMimeTypeList;
 }
 
 
@@ -345,7 +352,8 @@ TTracker::QuitRequested()
 			= dynamic_cast<BContainerWindow*>(fWindowList.ItemAt(i));
 
 		if (window != NULL && window->Lock()) {
-			if (window->TargetModel() != NULL && !window->TargetModel()->IsDesktop()) {
+			if (window->TargetModel() != NULL && window->PoseView() != NULL
+				&& !window->PoseView()->IsDesktopView()) {
 				if (window->TargetModel()->IsRoot()) {
 					message.AddBool("open_disks_window", true);
 				} else {
@@ -530,12 +538,11 @@ TTracker::MessageReceived(BMessage* message)
 			MountServer().SendMessage(message);
 			break;
 
-
-		case kRestoreBackgroundImage:
+		case B_RESTORE_BACKGROUND_IMAGE:
 		{
 			BDeskWindow* desktop = GetDeskWindow();
 			AutoLock<BWindow> lock(desktop);
-			desktop->UpdateDesktopBackgroundImages();
+			desktop->PostMessage(message, desktop);
 			break;
 		}
 
@@ -1166,6 +1173,7 @@ TTracker::OpenInfoWindows(BMessage* message)
 				wind->Activate();
 				delete model;
 			} else {
+				model->SniffMimeIfNeeded();
 				wind = new BInfoWindow(model, index, &fWindowList);
 				wind->PostMessage(kRestoreState);
 			}
@@ -1187,6 +1195,22 @@ TTracker::GetDeskWindow() const
 	TRESPASS();
 
 	return NULL;
+}
+
+
+void
+TTracker::PostMessageToAllContainerWindows(BMessage& message) const
+{
+	ASSERT(fWindowList.IsLocked());
+
+	int32 count = fWindowList.CountItems();
+	for (int32 index = 0; index < count; index++) {
+		BContainerWindow* window = dynamic_cast<BContainerWindow*>(
+			fWindowList.ItemAt(index));
+
+		if (window != NULL)
+			window->PostMessage(&message);
+	}
 }
 
 
@@ -1459,16 +1483,13 @@ TTracker::_OpenPreviouslyOpenedWindows(const char* pathFilter)
 		return;
 	}
 
-	char* buffer = (char*)malloc((size_t)attrInfo.size);
+	BStackOrHeapArray<char, 512> buffer(attrInfo.size);
 	BMessage message;
-	if (deskDir.ReadAttr(kAttrOpenWindows, B_MESSAGE_TYPE, 0, buffer,
+	if (!buffer.IsValid() || deskDir.ReadAttr(kAttrOpenWindows, B_MESSAGE_TYPE, 0, buffer,
 			(size_t)attrInfo.size) != attrInfo.size
-		|| message.Unflatten(buffer) != B_OK) {
-		free(buffer);
+		|| message.Unflatten(buffer, attrInfo.size) != B_OK) {
 		return;
 	}
-
-	free(buffer);
 
 	node_ref nodeRef;
 	deskDir.GetNodeRef(&nodeRef);
@@ -1532,7 +1553,6 @@ TTracker::ReadyToRun()
 	InstallIndices();
 	InstallTemporaryBackgroundImages();
 
-	fTrashWatcher = new BTrashWatcher();
 	fTrashWatcher->Run();
 
 	fClipboardRefsWatcher = new BClipboardRefsWatcher();

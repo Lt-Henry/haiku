@@ -1,7 +1,9 @@
 /*
- * Copyright 2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2024-2025, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
+
+
 #include "PackageScreenshotRepository.h"
 
 #include <unistd.h>
@@ -11,19 +13,18 @@
 
 #include "FileIO.h"
 #include "Logger.h"
+#include "Model.h"
 #include "StorageUtils.h"
-#include "WebAppInterface.h"
 
 
 static const uint32 kMaxRetainedCachedScreenshots = 25;
 
 
 PackageScreenshotRepository::PackageScreenshotRepository(
-	PackageScreenshotRepositoryListenerRef listener,
-	WebAppInterface* webAppInterface)
+	PackageScreenshotRepositoryListenerRef listener, Model* model)
 	:
 	fListener(listener),
-	fWebAppInterface(webAppInterface)
+	fModel(model)
 {
 	_Init();
 }
@@ -162,8 +163,7 @@ PackageScreenshotRepository::_Init()
 {
 	fBaseDirectory.Unset();
 
-	status_t result = StorageUtils::LocalWorkingDirectoryPath(
-		"screenshot_cache", fBaseDirectory);
+	status_t result = StorageUtils::LocalWorkingDirectoryPath("screenshot_cache", fBaseDirectory);
 
 	if (B_OK != result)
 		HDERROR("unable to setup the cache directory");
@@ -202,8 +202,8 @@ PackageScreenshotRepository::_DownloadToLocalFile(const ScreenshotCoordinate& co
 	}
 
 	BFileIO outputDataStream(file, true); // takes ownership
-	status_t result = fWebAppInterface->RetrieveScreenshot(
-		coord.Code(), coord.Width(), coord.Height(), &outputDataStream);
+	status_t result = _WebApp()->RetrieveScreenshot(coord.Code(), coord.Width(), coord.Height(),
+		&outputDataStream);
 
 	if (result == B_OK)
 		result = outputDataStream.Flush();
@@ -225,7 +225,8 @@ PackageScreenshotRepository::_DeriveCachePath(const ScreenshotCoordinate& coord)
 
 
 status_t
-PackageScreenshotRepository::_CreateCachedData(const ScreenshotCoordinate& coord, BPositionIO** data)
+PackageScreenshotRepository::_CreateCachedData(const ScreenshotCoordinate& coord,
+	BPositionIO** data)
 {
 	status_t result = B_OK;
 	BPath path = _DeriveCachePath(coord);
@@ -241,5 +242,12 @@ PackageScreenshotRepository::_CreateCachedData(const ScreenshotCoordinate& coord
 		*data = new BFileIO(file, true); // takes ownership
 
 	return result;
+}
+
+
+WebAppInterfaceRef
+PackageScreenshotRepository::_WebApp()
+{
+	return fModel->WebApp();
 }
 

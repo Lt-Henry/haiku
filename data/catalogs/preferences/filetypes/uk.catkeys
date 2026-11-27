@@ -1,4 +1,4 @@
-1	ukrainian	x-vnd.Haiku-FileTypes	436017301
+1	ukrainian	x-vnd.Haiku-FileTypes	224411584
 Left	Attribute Window	Attribute column alignment in Tracker	Вліво
 Float	Attribute ListView		З рухомою комою
 Final	Application Types Window		Завершення
@@ -17,9 +17,9 @@ Add…	Application Type Window		Додати…
 Attribute name:	Attribute Window		Назва атрибута:
 Long description:	Application Type Window		Докладний опис:
 Cancel	Preferred App Menu		Скасувати
-Remove	FileTypes Window		Вилучити
+Remove	FileTypes Window		Прибрати
 The application \"%s\" does not support this file type.\nAre you sure you want to set it anyway?	Preferred App Menu		Програма \«%s\» Не підтримує цей тип файлів.\nВи дійсно бажаєте встановити його?
-Remove	Application Type Window		Вилучити
+Remove	Application Type Window		Прибрати
 Gamma	Application Type Window		Гамма
 Cancel	Application Type Window		Скасувати
 Attribute	Attribute Window		Атрибут
@@ -100,7 +100,7 @@ no icon	FileTypes Window		значок відсутній
 Single launch	Application Type Window		Одноразовий запуск
 %s file type	FileType Window		Тип файлу %s
 Default	Attribute ListView		За замовчуванням
-Removing a super type cannot be reverted.\nAll file types that belong to this super type will be lost!\n\nAre you sure you want to do this? To remove the whole group, hold down the Shift key and press \"Remove\".	FileTypes Window		Вилучення головного типу незоротнє.\nВсі типи файлів що відносяться до нього будуть втрачені!\n\nВи впевнені, що бажаєте цього? Щоб вилучити цілу групу, утримуйти клавішу Shift та натисніть \«Вилучити\».
+Removing a super type cannot be reverted.\nAll file types that belong to this super type will be lost!\n\nAre you sure you want to do this? To remove the whole group, hold down the Shift key and press \"Remove\".	FileTypes Window		Вилучення головного типу незоротнє.\nВсі типи файлів що відносяться до нього будуть втрачені!\n\nВи впевнені, що бажаєте цього? Щоб вилучити цілу групу, утримуйти клавішу Shift та натисніть \«Прибрати\».
 String	Attribute ListView		Рядок
 Add type	New File Type Window		Додати тип
 Remove icon	Icon View		Вилучити значок
@@ -144,7 +144,6 @@ Open file	FileTypes		Відкрити файл
 Version info	Application Type Window		Інформація про версію
 Final	Application Type Window		Фінальна
 Preferred application	FileType Window		Пріоритетна програма
-FileTypes	FileTypes		FileTypes
 Set preferred application	Preferred App Menu		Вибрати пріоритетну програму
 New file type	New File Type Window		Новий тип файлу
 Short description:	Application Type Window		Короткий опис:

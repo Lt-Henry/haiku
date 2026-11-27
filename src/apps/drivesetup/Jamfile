@@ -4,7 +4,7 @@ AddSubDirSupportedPlatforms libbe_test ;
 
 UsePrivateHeaders interface shared storage tracker ;
 
-Preference DriveSetup :
+Application DriveSetup :
 	AbstractParametersPanel.cpp
 	ChangeParametersPanel.cpp
 	CreateParametersPanel.cpp
@@ -16,7 +16,7 @@ Preference DriveSetup :
 	PartitionList.cpp
 	Support.cpp
 
-	: be localestub libcolumnlistview.a shared
+	: be localestub libcolumnlistview.a shared tracker
 		[ TargetLibsupc++ ]
 	: DriveSetup.rdef
 ;

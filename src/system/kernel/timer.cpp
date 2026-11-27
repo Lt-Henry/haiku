@@ -410,11 +410,8 @@ cancel_timer(timer* event)
 		// invalidate CPU field
 		event->cpu = 0xffff;
 
-		// If on the current CPU, also reset the hardware timer.
-		// FIXME: Theoretically we should be able to skip this if (previous == NULL).
-		// But it seems adding that causes problems on some systems, possibly due to
-		// some other bug. For now, just reset the hardware timer on every cancellation.
-		if (cpu == smp_get_current_cpu()) {
+		// If we changed the next event for the current CPU, reset the hardware timer.
+		if (previous == NULL && cpu == smp_get_current_cpu()) {
 			if (cpuData.events == NULL)
 				arch_timer_clear_hardware_timer();
 			else
@@ -446,8 +443,9 @@ cancel_timer(timer* event)
 void
 spin(bigtime_t microseconds)
 {
-	bigtime_t time = system_time();
+	bigtime_t target = system_time() + microseconds;
+	ASSERT(target > microseconds);
 
-	while ((system_time() - time) < microseconds)
+	while (system_time() < target)
 		cpu_pause();
 }

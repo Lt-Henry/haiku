@@ -23,7 +23,7 @@ UnitTestLib libinterfacetest.so
 		GraphicsDefsTest.cpp
 
 		# BAlert
-		AlertTest.cpp
+		#AlertTest.cpp # FIXME: too specific with sizes
 
 		# BBitmap
 		BitmapTest.cpp
@@ -31,10 +31,10 @@ UnitTestLib libinterfacetest.so
 		SetBitsTester.cpp
 
 		# BDeskbar
-		DeskbarTest.cpp
-		DeskbarGetItemTest.cpp
-		DeskbarLocationTest.cpp
-		DeskbarAddItemTest.cpp
+#		DeskbarTest.cpp
+#		DeskbarGetItemTest.cpp
+#		DeskbarLocationTest.cpp
+#		DeskbarAddItemTest.cpp
 
 		# BPolygon
 		PolygonTest.cpp

@@ -118,6 +118,7 @@
   1:
 
 #define CLEAR_FPU_STATE() \
+	CODEPATCH_START \
 	pxor %xmm0, %xmm0; \
 	pxor %xmm1, %xmm1; \
 	pxor %xmm2, %xmm2; \
@@ -133,7 +134,8 @@
 	pxor %xmm12, %xmm12; \
 	pxor %xmm13, %xmm13; \
 	pxor %xmm14, %xmm14; \
-	pxor %xmm15, %xmm15
+	pxor %xmm15, %xmm15; \
+	CODEPATCH_END(ALTCODEPATCH_TAG_CLEAR_FPU)
 
 // The following code defines the interrupt service routines for all 256
 // interrupts. It creates a block of handlers, each 16 bytes, that the IDT
@@ -145,14 +147,14 @@
 	ASM_CLAC							\
 	push	$0;							\
 	push	$nr;						\
-	jmp		int_bottom;
+	jmp		intr_bottom;
 
 // Interrupt with an error code.
 #define DEFINE_ISR_E(nr)				\
 	.align 16;							\
 	ASM_CLAC							\
 	push	$nr;						\
-	jmp		int_bottom;
+	jmp		intr_bottom;
 
 // Array of interrupt service routines.
 .align 16
@@ -200,14 +202,13 @@ SYMBOL(isr_array):
 
 
 // Common interrupt handling code.
-STATIC_FUNCTION(int_bottom):
+STATIC_FUNCTION(intr_bottom):
 	// Coming from user-mode requires special handling.
 	testl	$3, 24(%rsp)
-	jnz		int_bottom_user
+	jnz		intr_bottom_user
 
 	// Push the rest of the interrupt frame to the stack.
 	PUSH_IFRAME_BOTTOM(IFRAME_TYPE_OTHER)
-
 	cld
 
 	// Frame pointer is the iframe.
@@ -250,11 +251,11 @@ STATIC_FUNCTION(int_bottom):
 	RESTORE_IFRAME()
 
 	iretq
-FUNCTION_END(int_bottom)
+FUNCTION_END(intr_bottom)
 
 
 // Handler for an interrupt that occurred in user-mode.
-STATIC_FUNCTION(int_bottom_user):
+STATIC_FUNCTION(intr_bottom_user):
 	// Load the kernel GS segment base.
 	swapgs
 	lfence
@@ -265,32 +266,23 @@ STATIC_FUNCTION(int_bottom_user):
 
 	// Frame pointer is the iframe.
 	movq	%rsp, %rbp
+	andq	$~15, %rsp
 
-	// xsave needs a 64-byte alignment
-	andq	$~63, %rsp
-	movq	(gFPUSaveLength), %rcx
-	subq	%rcx, %rsp
-	leaq	(%rsp), %rdi
-	shrq	$3, %rcx
-	movq	$0, %rax
-	rep stosq
+	// Get thread pointer.
+	movq	%gs:0, %r12
+
 	movl	(gXsaveMask), %eax
 	movl	(gXsaveMask+4), %edx
-
-	movq	%rsp, %rdi
+	leaq	THREAD_user_fpu_state(%r12), %rdi
 	CODEPATCH_START
 	fxsaveq	(%rdi)
 	CODEPATCH_END(ALTCODEPATCH_TAG_XSAVE)
-
-	movq	%rsp, IFRAME_fpu(%rbp)
+	movq	%rdi, IFRAME_fpu(%rbp)
 
 	// Set the RF (resume flag) in RFLAGS. This prevents an instruction
 	// breakpoint on the instruction we're returning to to trigger a debug
 	// exception.
 	orq		$X86_EFLAGS_RESUME, IFRAME_flags(%rbp)
-
-	// Get thread pointer.
-	movq	%gs:0, %r12
 
 	STOP_USER_DEBUGGING()
 	UPDATE_THREAD_USER_TIME()
@@ -314,7 +306,7 @@ STATIC_FUNCTION(int_bottom_user):
 
 	movl	(gXsaveMask), %eax
 	movl	(gXsaveMask+4), %edx
-	movq	%rsp, %rdi
+	leaq	THREAD_user_fpu_state(%r12), %rdi
 	CODEPATCH_START
 	fxrstorq	(%rdi)
 	CODEPATCH_END(ALTCODEPATCH_TAG_XRSTOR)
@@ -347,7 +339,7 @@ STATIC_FUNCTION(int_bottom_user):
 1:
 	movl	(gXsaveMask), %eax
 	movl	(gXsaveMask+4), %edx
-	movq	%rsp, %rdi
+	leaq	THREAD_user_fpu_state(%r12), %rdi
 	CODEPATCH_START
 	fxrstorq	(%rdi)
 	CODEPATCH_END(ALTCODEPATCH_TAG_XRSTOR)
@@ -366,7 +358,7 @@ STATIC_FUNCTION(int_bottom_user):
 	sti
 	call	thread_at_kernel_exit
 	jmp		.Lkernel_exit_work_done
-FUNCTION_END(int_bottom_user)
+FUNCTION_END(intr_bottom_user)
 
 
 // SYSCALL entry point.
@@ -392,7 +384,6 @@ FUNCTION(x86_64_syscall_entry):
 	push	$0							// error_code
 	push	$99							// vector
 	PUSH_IFRAME_BOTTOM(IFRAME_TYPE_SYSCALL)
-
 	cld
 
 	// Frame pointer is the iframe.
@@ -410,7 +401,7 @@ FUNCTION(x86_64_syscall_entry):
 
 	// Check whether the syscall number is valid.
 	cmpq	$SYSCALL_COUNT, %r14
-	jae		.Lsyscall_return
+	jae		.Lsyscall_finished
 
 	// Get the system call table entry. Note I'm hardcoding the shift because
 	// sizeof(syscall_info) is 16 and scale factors of 16 aren't supported,
@@ -449,7 +440,7 @@ FUNCTION(x86_64_syscall_entry):
 
 	// TODO: post-syscall tracing
 
-.Lsyscall_return:
+.Lsyscall_finished:
 	// Restore the original stack pointer and return.
 	movq	%rbp, %rsp
 
@@ -474,10 +465,7 @@ FUNCTION(x86_64_syscall_entry):
 
 	UPDATE_THREAD_KERNEL_TIME()
 
-	// If we've just restored a signal frame, use the IRET path.
-	cmpq	$SYSCALL_RESTORE_SIGNAL_FRAME, %r14
-	je		.Lrestore_fpu
-
+.Lsyscall_return:
 	CLEAR_FPU_STATE()
 
 	// Restore the iframe and RCX/R11 for SYSRET.
@@ -543,31 +531,10 @@ FUNCTION(x86_64_syscall_entry):
 1:
 	// Install breakpoints, if defined.
 	testl	$THREAD_FLAGS_BREAKPOINTS_DEFINED, THREAD_flags(%r12)
-	jz		1f
+	jz		.Lsyscall_return
 	movq	%rbp, %rdi
 	call	x86_init_user_debug_at_kernel_exit
-1:
-	// On this return path it is possible that the frame has been modified,
-	// for example to execute a signal handler. In this case it is safer to
-	// return via IRET.
-	CLEAR_FPU_STATE()
-	jmp .Liret
-
-.Lrestore_fpu:
-	movq	IFRAME_fpu(%rbp), %rdi
-
-	movl	(gXsaveMask), %eax
-	movl	(gXsaveMask+4), %edx
-	CODEPATCH_START
-	fxrstorq	(%rdi)
-	CODEPATCH_END(ALTCODEPATCH_TAG_XRSTOR)
-.Liret:
-	// Restore the saved registers.
-	RESTORE_IFRAME()
-
-	// Restore the previous GS base and return.
-	swapgs
-	iretq
+	jmp		.Lsyscall_return
 
 .Lpost_syscall_handle_signals:
 	call	thread_at_kernel_exit
@@ -609,7 +576,7 @@ FUNCTION(x86_64_syscall_entry):
 .Lbad_syscall_args:
 	movq	$0, THREAD_fault_handler(%r12)
 	movq	%rbp, %rsp
-	jmp		.Lsyscall_return
+	jmp		.Lsyscall_finished
 FUNCTION_END(x86_64_syscall_entry)
 
 
@@ -637,8 +604,9 @@ FUNCTION(x86_return_to_userland):
 			, THREAD_flags(%r12)
 	jnz		.Luserland_return_work
 
-	// update the thread's kernel time and return
 	UPDATE_THREAD_KERNEL_TIME()
+
+	CLEAR_FPU_STATE()
 
 	// Restore the frame and return.
 	RESTORE_IFRAME()
@@ -662,10 +630,10 @@ FUNCTION(x86_return_to_userland):
 	movq	%rbp, %rdi
 	call	x86_init_user_debug_at_kernel_exit
 1:
-	// Restore the saved registers.
-	RESTORE_IFRAME()
+	CLEAR_FPU_STATE()
 
-	// Restore the previous GS base and return.
+	// Restore the frame and return.
+	RESTORE_IFRAME()
 	swapgs
 	iretq
 .Luserland_return_handle_signals:

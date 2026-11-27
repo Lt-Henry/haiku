@@ -49,6 +49,7 @@ public:
 			bool				RemoveInput(int32 inputID);
 			bool				RemoveOutput();
 			int32				CreateInputID();
+			int32				CountInputs() { return fInputs->CountItems(); }
 
 	// index = 0 to count-1, NOT inputID
 			MixerInput*			Input(int index);
@@ -70,6 +71,7 @@ public:
 			void				SetOutputBufferGroup(BBufferGroup* group);
 			void				SetTimingInfo(BTimeSource* timeSource,
 									bigtime_t downstreamLatency);
+			BTimeSource*		TimeSource() const { return fTimeSource; }
 			void				EnableOutput(bool enabled);
 
 			bool				Start();

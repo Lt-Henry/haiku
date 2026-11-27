@@ -16,7 +16,7 @@
 #include <debug.h>
 #include <debug_heap.h>
 #include <elf.h>
-#include <int.h>
+#include <interrupts.h>
 #include <kernel.h>
 #include <team.h>
 #include <thread.h>
@@ -1671,7 +1671,7 @@ capture_tracing_stack_trace(int32 maxCount, int32 skipFrames, bool kernelOnly)
 			sizeof(tracing_stack_trace) + maxCount * sizeof(addr_t));
 
 	if (stackTrace != NULL) {
-		stackTrace->depth = arch_debug_get_stack_trace(
+		stackTrace->depth = arch_get_stack_trace(
 			stackTrace->return_addresses, maxCount, 0, skipFrames + 1,
 			STACK_TRACE_KERNEL | (kernelOnly ? 0 : STACK_TRACE_USER));
 	}

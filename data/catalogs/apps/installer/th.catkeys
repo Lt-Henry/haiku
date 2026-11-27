@@ -1,4 +1,4 @@
-1	thai	x-vnd.Haiku-Installer	3048445457
+1	thai	x-vnd.Haiku-Installer	4172419982
 Performing installation.	InstallProgress		กำลังทำการติดตั้ง
 Please close the DriveSetup window before closing the Installer window.	InstallerWindow		โปรดปิดหน้าต่าง DriveSetup ก่อนที่จะปิดหน้าต่างตัวติดตั้ง
 No optional packages available.	PackagesView		ไม่มีแพ็คเกจเสริม
@@ -8,7 +8,6 @@ Please choose target	InstallerWindow		กรุณาเลือกเป้า
 Cancel	InstallProgress		ยกเลิก
 Are you sure you want to to stop the installation?	InstallerWindow		คุณแน่ใจหรือไม่ว่าต้องการหยุดการติดตั้ง?
 Installer	System name		การติดตั้ง
-Unknown Type	InstallProgress	Partition content type	ไม่ทราบชนิด
 README	InstallerApp		อ่าน
 Quit	InstallerWindow		ปิด
 Write boot sector to '%s'	InstallerWindow		เขียนบูตเซกเตอร์ไปที่ '%s'
@@ -54,7 +53,6 @@ Set up partitions…	InstallerWindow		ตั้งค่าพาร์ติช
 Install progress:  	InstallerWindow		ความคืบหน้าการติดตั้ง:
 You can't install the contents of a disk onto itself. Please choose a different disk.	InstallProgress		คุณไม่สามารถติดตั้งเนื้อหาของดิสก์ลงบนตัวเอง โปรดเลือกดิสก์อื่น
 OK	InstallProgress		ตกลง
-Are you sure you want to install onto the current boot disk? The Installer will have to reboot your machine if you proceed.	InstallProgress		แน่ใจหรือไม่ว่าคุณต้องการติดตั้งลงในดิสก์สำหรับบูตปัจจุบัน ตัวติดตั้งจะต้องรีบู๊ตเครื่องของคุณหากคุณดำเนินการต่อ
 Onto:	InstallerWindow		บน:
 Tools	InstallerWindow		เครื่องมือ
 scanning…	InstallerWindow		กำลังค้นหา

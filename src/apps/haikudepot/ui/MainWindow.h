@@ -2,11 +2,12 @@
  * Copyright 2013-2014, Stephan Aßmus <superstippi@gmx.de>.
  * Copyright 2013, Rene Gollent <rene@gollent.com>.
  * Copyright 2017, Julian Harnath <julian.harnath@rwth-aachen.de>.
- * Copyright 2017-2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2017-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 #ifndef MAIN_WINDOW_H
 #define MAIN_WINDOW_H
+
 
 #include <Window.h>
 
@@ -35,13 +36,24 @@ class ShuttingDownWindow;
 class WorkStatusView;
 
 
-class MainWindow :
-	private ProcessCoordinatorConsumer, public ProcessCoordinatorListener,
-	public UserDetailVerifierListener, public BWindow {
+enum PackageDesktopFilterMode { DESKTOP, NATIVE_DESKTOP, DESKTOP_AND_NON_DESKTOP };
+
+
+/*! Keys used with BMessages */
+namespace main_window_keys {
+
+extern const char* const kKeyWindowSettings;
+
+}; // namespace main_window_keys
+
+
+class MainWindow : public ProcessCoordinatorListener,
+				   public UserDetailVerifierListener,
+				   public BWindow {
 public:
 								MainWindow(const BMessage& settings);
 								MainWindow(const BMessage& settings,
-									PackageInfoRef& package);
+									const PackageInfoRef package);
 	virtual						~MainWindow();
 
 	// BWindow interface
@@ -49,9 +61,6 @@ public:
 	virtual	void				MessageReceived(BMessage* message);
 
 			void				StoreSettings(BMessage& message);
-
-	// ProcessCoordinatorConsumer
-	virtual	void				Consume(ProcessCoordinator *item);
 
 	// ProcessCoordinatorListener
 	virtual void				CoordinatorChanged(
@@ -63,12 +72,13 @@ public:
 									const UserDetail& userDetail);
 
 	// services PackageInfoListener via MainWindowPackageInfoListener
-			void				PackageChanged(
-									const PackageInfoEvent& event);
+			void				PackagesChanged(const PackageChangeEvents& events);
 
 private:
 	static	const BString		_WindowTitleForPackage(const PackageInfoRef& pkg);
 
+			const std::vector<PackageInfoRef>
+								_CreateSnapshotOfFilteredPackages();
 			std::vector<DepotInfoRef>
 								_CreateSnapshotOfDepots();
 
@@ -95,20 +105,14 @@ private:
 
 			void				_AdoptModelControls();
 			void				_AdoptModel();
-			void				_AddRemovePackageFromLists(
-									const PackageInfoRef& package);
 
 			void				_AdoptPackage(const PackageInfoRef& package);
 			void				_ClearPackage();
 
-			void				_SetupDelayedIncrementViewCounter(
-									const PackageInfoRef package);
-			void				_HandleIncrementViewCounter(
-									const BMessage* message);
-			void				_IncrementViewCounter(
-									const PackageInfoRef package);
+			void				_SetupDelayedIncrementViewCounter(const PackageInfoRef package);
+			void				_HandleIncrementViewCounter(const BMessage* message);
+			void				_IncrementViewCounter(const BString& packageName);
 
-			void				_PopulatePackageAsync(bool forcePopulate);
 			void				_StartBulkLoad(bool force = false);
 			void				_BulkLoadCompleteReceived(status_t errorStatus);
 
@@ -123,10 +127,18 @@ private:
 			void				_HandleExternalPackageUpdateMessageReceived(
 									const BMessage* message);
 
+			void				_HandlePkgInstallMessageReceived(const BMessage* message);
+			bool				_QuickPreflightForPkgInstall(const BString& packageName);
+
 			void				_HandleChangePackageListViewMode();
 
 			void				_HandleProcessCoordinatorChanged(
 									ProcessCoordinatorState& coordinatorState);
+
+			void				_HandleSelectedPackageChanged();
+
+			void				_HandlePackagesChanged(const BMessage* message);
+			void				_HandlePackagesChanged(const PackageChangeEvents& events);
 
 	static	status_t			_RefreshModelThreadWorker(void* arg);
 	static	status_t			_PopulatePackageWorker(void* arg);
@@ -136,6 +148,7 @@ private:
 									const BMessage& onSuccessMessage);
 			void				_OpenSettingsWindow();
 			void				_StartUserVerify();
+			void				_StartServerRuntimeInformationVerify();
 			void				_UpdateAuthorization();
 			void				_UpdateAvailableRepositories();
 			void				_RatePackage();
@@ -148,6 +161,18 @@ private:
 									const UserDetail& userDetail);
 
 			void				_HandleScreenshotCached(const BMessage* message);
+			void				_HandleIconsChanged();
+
+			void				_SetStateForPackagesByName(
+									BStringList& packageNames,
+									PackageState state);
+
+			void				_SetPackageDesktopFilterMode(PackageDesktopFilterMode mode);
+
+			void				_PackageListViewRevokeFocus();
+			bool				_IsPackageListView(BView* view);
+
+			void				_HandleLogout();
 
 private:
 			FilterView*			fFilterView;
@@ -166,11 +191,15 @@ private:
 			BMenuItem*			fLogInItem;
 			BMenuItem*			fLogOutItem;
 			BMenuItem*			fUsersUserUsageConditionsMenuItem;
+			BMenuItem*			fLatestUserUsageConditionsMenuItem;
 
 			BMenuItem*			fShowAvailablePackagesItem;
 			BMenuItem*			fShowInstalledPackagesItem;
 			BMenuItem*			fShowDevelopPackagesItem;
 			BMenuItem*			fShowSourcePackagesItem;
+			BMenuItem*			fShowOnlyDesktopItem;
+			BMenuItem*			fShowOnlyNativeDesktopItem;
+			BMenuItem*			fShowDesktopAndNonDesktopItem;
 
 			BMenuItem*			fRefreshRepositoriesItem;
 
@@ -191,7 +220,6 @@ private:
 
 			BMessageRunner*		fIncrementViewCounterDelayedRunner;
 };
-
 
 
 #endif // MAIN_WINDOW_H

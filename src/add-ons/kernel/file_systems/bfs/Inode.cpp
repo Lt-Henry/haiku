@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2020, Axel Dörfler, axeld@pinc-software.de.
+ * Copyright 2001-2025, Axel Dörfler, axeld@pinc-software.de.
  * This file may be used under the terms of the MIT License.
  */
 
@@ -159,6 +159,48 @@ private:
 };
 
 
+/*! Circular buffer storing block runs, which can be read from disk in
+	chunks at a time. Used in MoveStream().
+*/
+class BlockRunBuffer {
+public:
+								BlockRunBuffer(Volume* volume,
+									bool useBlockCache);
+								~BlockRunBuffer();
+
+			const uint8*		GetBlocks(off_t blocksRequested,
+									off_t& blocksWritten);
+			void				PutRun(block_run run);
+			off_t				NumBlocks() const { return fNumBlocks; }
+			bool				IsEmpty() const { return fNumBlocks == 0; }
+			bool				IsFull() const;
+
+			void				Reset();
+
+			status_t			AllocateBuffers();
+
+private:
+			Volume*				fVolume;
+			bool				fUseBlockCache;
+
+			// fields to manage the circular buffer of block_run's
+			block_run*			fBuffer;
+	static const int32			kSize = 512;
+									// 512 * sizeof(block_run) == 4 kB
+
+			int32				fHead;
+			int32				fTail;
+
+			uint16				fOffset;
+			off_t				fNumBlocks;
+
+			// buffer to store block data as we write it to disk
+			uint8*				fDataBuffer;
+	static const int32			kDataBufferSize = 32 * 1024;
+									// == 32 kB
+};
+
+
 InodeAllocator::InodeAllocator(Transaction& transaction)
 	:
 	fTransaction(&transaction),
@@ -305,6 +347,122 @@ InodeAllocator::_TransactionListener(int32 id, int32 event, void* _inode)
 //	#pragma mark -
 
 
+BlockRunBuffer::BlockRunBuffer(Volume* volume, bool useBlockCache)
+	:
+	fVolume(volume),
+	fUseBlockCache(useBlockCache),
+	fBuffer(NULL),
+	fDataBuffer(NULL)
+{
+	Reset();
+}
+
+
+BlockRunBuffer::~BlockRunBuffer()
+{
+	delete[] fBuffer;
+	delete[] fDataBuffer;
+}
+
+
+void
+BlockRunBuffer::Reset()
+{
+	fHead = fTail = fOffset = fNumBlocks = 0;
+}
+
+
+bool
+BlockRunBuffer::IsFull() const
+{
+	// The buffer is full when the tail points to the block before the head.
+	// The remaining free position is ignored to make it easier to separate
+	// the full state from the empty state.
+	return fHead == (fTail + 1) % kSize;
+}
+
+
+void
+BlockRunBuffer::PutRun(block_run run)
+{
+	ASSERT(fBuffer != NULL && fDataBuffer != NULL && !IsFull());
+
+	fBuffer[fTail] = run;
+	fTail = (fTail + 1) % kSize;
+
+	fNumBlocks += run.Length();
+}
+
+
+const uint8*
+BlockRunBuffer::GetBlocks(off_t blocksRequested, off_t& blocksWritten)
+{
+	ASSERT(fBuffer != NULL && fDataBuffer != NULL);
+
+	uint32 blockShift = fVolume->BlockShift();
+	int32 blockSize = fVolume->BlockSize();
+
+	// the amount of blocks we can return is the minimum of the blocks
+	// requested, the blocks in the buffer and the size of the data buffer
+	blocksWritten = blocksRequested;
+
+	if (blocksWritten > fNumBlocks)
+		blocksWritten = fNumBlocks;
+
+	if (blocksWritten > (kDataBufferSize >> blockShift))
+		blocksWritten = kDataBufferSize >> blockShift;
+
+	CachedBlock cached(fVolume);
+
+	for (off_t i = 0; i < blocksWritten; i++) {
+		off_t blockNumber = fVolume->ToBlock(fBuffer[fHead]) + fOffset;
+
+		if (fUseBlockCache) {
+			status_t status = cached.SetTo(blockNumber);
+			if (status != B_OK)
+				return NULL;
+			const void* data = cached.Block();
+
+			memcpy(fDataBuffer + (i << blockShift), data, blockSize);
+		} else {
+			ssize_t bytesRead = read_pos(fVolume->Device(),
+				blockNumber << blockShift, fDataBuffer + (i << blockShift),
+				blockSize);
+
+			if (bytesRead != blockSize)
+				return NULL;
+		}
+
+		if (++fOffset == fBuffer[fHead].Length()) {
+			fHead = (fHead + 1) % kSize;
+			fOffset = 0;
+		}
+
+		fNumBlocks--;
+		ASSERT(fNumBlocks >= 0);
+	}
+
+	return fDataBuffer;
+}
+
+
+status_t
+BlockRunBuffer::AllocateBuffers()
+{
+	// allocate block run buffer
+	fBuffer = new(std::nothrow) block_run[kSize];
+	fDataBuffer = new(std::nothrow) uint8[kDataBufferSize];
+
+	if (fBuffer == NULL || fDataBuffer == NULL)
+		return B_NO_MEMORY;
+
+	return B_OK;
+}
+
+
+//	#pragma mark -
+
+
 status_t
 bfs_inode::InitCheck(Volume* volume) const
 {
@@ -346,7 +504,7 @@ Inode::Inode(Volume* volume, ino_t id)
 	fCache(NULL),
 	fMap(NULL)
 {
-	PRINT(("Inode::Inode(volume = %p, id = %" B_PRIdINO ") @ %p\n",
+	FUNCTION_START(("Inode::Inode(volume = %p, id = %" B_PRIdINO ") @ %p\n",
 		volume, id, this));
 
 	rw_lock_init(&fLock, "bfs inode");
@@ -380,7 +538,7 @@ Inode::Inode(Volume* volume, Transaction& transaction, ino_t id, mode_t mode,
 	fCache(NULL),
 	fMap(NULL)
 {
-	PRINT(("Inode::Inode(volume = %p, transaction = %p, id = %" B_PRIdINO
+	FUNCTION_START(("Inode::Inode(volume = %p, transaction = %p, id = %" B_PRIdINO
 		") @ %p\n", volume, &transaction, id, this));
 
 	rw_lock_init(&fLock, "bfs inode");
@@ -418,7 +576,7 @@ Inode::Inode(Volume* volume, Transaction& transaction, ino_t id, mode_t mode,
 
 Inode::~Inode()
 {
-	PRINT(("Inode::~Inode() @ %p\n", this));
+	FUNCTION_START(("Inode::~Inode() @ %p\n", this));
 
 	file_cache_delete(FileCache());
 	file_map_delete(Map());
@@ -464,6 +622,18 @@ Inode::InitCheck(bool checkNode) const
 }
 
 
+void
+Inode::SetID(ino_t ID)
+{
+	// set parent ID if we are our own parent
+	if (Parent() == BlockRun())
+		fNode.parent = fVolume->ToBlockRun(ID);
+
+	fID = ID;
+	fNode.inode_num = fVolume->ToBlockRun(ID);
+}
+
+
 /*!	Adds this inode to the specified transaction. This means that the inode will
 	be write locked until the transaction ended.
 	To ensure that the inode will stay valid until that point, an extra reference
@@ -481,7 +651,7 @@ Inode::WriteLockInTransaction(Transaction& transaction)
 	if ((Flags() & INODE_DELETED) != 0)
 		fVolume->RemovedInodes().Remove(this);
 
-	if (!fVolume->IsInitializing())
+	if (!fVolume->IsInitializing() && this != fVolume->IndicesNode())
 		acquire_vnode(fVolume->FSVolume(), ID());
 
 	rw_lock_write_lock(&Lock());
@@ -1082,7 +1252,7 @@ Inode::ReadAttribute(const char* name, int32 type, off_t pos, uint8* buffer,
 		ReleaseAttribute(attribute);
 	}
 
-	RETURN_ERROR(status);
+	return status;
 }
 
 
@@ -1469,9 +1639,9 @@ Inode::AllocatedSize() const
 	The caller has to make sure that "pos" is inside the stream.
 */
 status_t
-Inode::FindBlockRun(off_t pos, block_run& run, off_t& offset)
+Inode::FindBlockRun(off_t pos, block_run& run, off_t& offset) const
 {
-	data_stream* data = &Node().data;
+	const data_stream* data = &Node().data;
 
 	// find matching block run
 
@@ -1574,7 +1744,7 @@ Inode::FindBlockRun(off_t pos, block_run& run, off_t& offset)
 status_t
 Inode::ReadAt(off_t pos, uint8* buffer, size_t* _length)
 {
-	return file_cache_read(FileCache(), NULL, pos, buffer, _length);
+	return file_cache_read(FileCache(), pos, buffer, _length);
 }
 
 
@@ -1650,7 +1820,7 @@ Inode::WriteAt(Transaction& transaction, off_t pos, const uint8* buffer,
 	if (length == 0)
 		return B_OK;
 
-	status_t status = file_cache_write(FileCache(), NULL, pos, buffer, _length);
+	status_t status = file_cache_write(FileCache(), pos, buffer, _length);
 
 	if (transaction.IsStarted())
 		WriteLockInTransaction(transaction);
@@ -1675,7 +1845,7 @@ Inode::FillGapWithZeros(off_t pos, off_t newSize)
 		else
 			size = newSize - pos;
 
-		status_t status = file_cache_write(FileCache(), NULL, pos, NULL, &size);
+		status_t status = file_cache_write(FileCache(), pos, NULL, &size);
 		if (status < B_OK)
 			return status;
 
@@ -1712,6 +1882,256 @@ Inode::_AllocateBlockArray(Transaction& transaction, block_run& run,
 			return status;
 	}
 	return B_OK;
+}
+
+
+/*! Adds \a run to \a dataStream, allocating indirection blocks if necessary.
+	If the block run cannot be added as is, due to constraints on block run
+	size in the double indirect range, \a rest is set to the number of blocks
+	that need to be shaved off the run and the function returns.
+
+	If the physical stream size ends up larger than \a targetSize, the stream
+	size is set to the target file size.
+*/
+status_t
+Inode::_AddBlockRun(Transaction& transaction, data_stream* dataStream,
+	block_run run, off_t targetSize, int32* rest)
+{
+	status_t status;
+
+	if (rest)
+		*rest = 0;
+
+	bool cutSize = targetSize < dataStream->Size()
+		+ (run.Length() << fVolume->BlockShift());
+		// if adding this block_run means overshooting the target stream size,
+		// we need to set dataStream->size to targetSize.
+
+	// Direct block range
+
+	if (dataStream->Size() <= dataStream->MaxDirectRange()) {
+		// let's try to put them into the direct block range
+		int32 free = 0;
+		for (; free < NUM_DIRECT_BLOCKS; free++) {
+			if (dataStream->direct[free].IsZero())
+				break;
+		}
+
+		if (free < NUM_DIRECT_BLOCKS) {
+			// can we merge the last allocated run with the new one?
+			int32 last = free - 1;
+			if (free > 0 && dataStream->direct[last].MergeableWith(run)) {
+				dataStream->direct[last].length = HOST_ENDIAN_TO_BFS_INT16(
+					dataStream->direct[last].Length() + run.Length());
+			} else
+				dataStream->direct[free] = run;
+
+			dataStream->max_direct_range = HOST_ENDIAN_TO_BFS_INT64(
+				dataStream->MaxDirectRange()
+				+ run.Length() * fVolume->BlockSize());
+			dataStream->size = cutSize ? HOST_ENDIAN_TO_BFS_INT64(targetSize)
+				: dataStream->max_direct_range;
+			return B_OK;
+		}
+	}
+
+	// Indirect block range
+
+	if (dataStream->Size() <= dataStream->MaxIndirectRange()
+		|| !dataStream->MaxIndirectRange()) {
+		CachedBlock cached(fVolume);
+		block_run* runs = NULL;
+		uint32 free = 0;
+		off_t block;
+
+		// if there is no indirect block yet, create one
+		if (dataStream->indirect.IsZero()) {
+			status = _AllocateBlockArray(transaction, dataStream->indirect,
+				NUM_ARRAY_BLOCKS, true);
+			if (status != B_OK)
+				return status;
+
+			dataStream->max_indirect_range = dataStream->max_direct_range;
+			// insert the block_run in the first block
+			status = cached.SetTo(dataStream->indirect);
+			if (status != B_OK)
+				return status;
+
+			runs = (block_run*)cached.Block();
+		} else {
+			uint32 numberOfRuns = fVolume->BlockSize() / sizeof(block_run);
+			block = fVolume->ToBlock(dataStream->indirect);
+
+			// search first empty entry
+			int32 i = 0;
+			for (; i < dataStream->indirect.Length(); i++) {
+				status = cached.SetTo(block + i);
+				if (status != B_OK)
+					return status;
+
+				runs = (block_run*)cached.Block();
+				for (free = 0; free < numberOfRuns; free++)
+					if (runs[free].IsZero())
+						break;
+
+				if (free < numberOfRuns)
+					break;
+			}
+			if (i == dataStream->indirect.Length())
+				runs = NULL;
+		}
+
+		if (runs != NULL) {
+			// try to insert the run to the last one - note that this
+			// doesn't take block borders into account, so it could be
+			// further optimized
+			cached.MakeWritable(transaction);
+
+			int32 last = free - 1;
+			if (free > 0 && runs[last].MergeableWith(run)) {
+				runs[last].length = HOST_ENDIAN_TO_BFS_INT16(
+					runs[last].Length() + run.Length());
+			} else
+				runs[free] = run;
+
+			dataStream->max_indirect_range = HOST_ENDIAN_TO_BFS_INT64(
+				dataStream->MaxIndirectRange()
+				+ (run.Length() << fVolume->BlockShift()));
+			dataStream->size = cutSize ? HOST_ENDIAN_TO_BFS_INT64(targetSize)
+				: dataStream->max_indirect_range;
+			return B_OK;
+		}
+	}
+
+	// Double indirect block range
+
+	if (dataStream->Size() <= dataStream->MaxDoubleIndirectRange()
+		|| !dataStream->max_double_indirect_range) {
+		// We make sure here that we have this minimum allocated, so if
+		// the allocation succeeds, we don't run into an endless loop.
+		uint16 doubleIndirectBlockLength;
+		if (!dataStream->max_double_indirect_range)
+			doubleIndirectBlockLength = _DoubleIndirectBlockLength();
+		else
+			doubleIndirectBlockLength = dataStream->double_indirect.Length();
+
+		if ((run.Length() % doubleIndirectBlockLength) != 0) {
+			// The number of allocated blocks isn't a multiple of
+			// 'doubleIndirectBlockLength', so we return and let the caller
+			// change this. This can happen the first time the stream grows
+			// into the double indirect range.
+			if (rest) {
+				*rest = run.Length() % doubleIndirectBlockLength;
+				return B_OK;
+			}
+
+			// the caller didn't expect rest
+			return B_BAD_VALUE;
+		}
+
+		// if there is no double indirect block yet, create one
+		if (dataStream->double_indirect.IsZero()) {
+			status = _AllocateBlockArray(transaction,
+				dataStream->double_indirect, _DoubleIndirectBlockLength(),
+				false);
+			if (status != B_OK)
+				return status;
+
+			dataStream->max_double_indirect_range =
+				dataStream->max_indirect_range;
+		}
+
+		// calculate the index where to insert the new blocks
+
+		int32 runsPerBlock;
+		int32 directSize;
+		int32 indirectSize;
+		get_double_indirect_sizes(dataStream->double_indirect.Length(),
+			fVolume->BlockSize(), runsPerBlock, directSize, indirectSize);
+		if (directSize <= 0 || indirectSize <= 0)
+			return B_BAD_DATA;
+
+		off_t start = dataStream->MaxDoubleIndirectRange()
+			- dataStream->MaxIndirectRange();
+		int32 indirectIndex = start / indirectSize;
+		int32 index = (start % indirectSize) / directSize;
+		int32 runsPerArray = runsPerBlock * doubleIndirectBlockLength;
+
+		// distribute the blocks to the array and allocate
+		// new array blocks when needed
+
+		CachedBlock cached(fVolume);
+		CachedBlock cachedDirect(fVolume);
+		block_run* array = NULL;
+		uint32 runLength = run.Length();
+
+		while (run.length != 0) {
+			// get the indirect array block
+			if (array == NULL) {
+				uint32 block = indirectIndex / runsPerBlock;
+				if (block >= doubleIndirectBlockLength)
+					return EFBIG;
+
+				status = cached.SetTo(fVolume->ToBlock(
+					dataStream->double_indirect) + block);
+				if (status != B_OK)
+					return status;
+
+				array = (block_run*)cached.Block();
+			}
+
+			do {
+				// do we need a new array block?
+				if (array[indirectIndex % runsPerBlock].IsZero()) {
+					cached.MakeWritable(transaction);
+
+					status = _AllocateBlockArray(transaction,
+						array[indirectIndex % runsPerBlock],
+						dataStream->double_indirect.Length(), false);
+					if (status != B_OK)
+						return status;
+				}
+
+				status = cachedDirect.SetToWritable(transaction,
+					fVolume->ToBlock(array[indirectIndex
+						% runsPerBlock]) + index / runsPerBlock);
+				if (status != B_OK)
+					return status;
+
+				block_run* runs = (block_run*)cachedDirect.Block();
+
+				do {
+					// insert the block_run into the array
+					runs[index % runsPerBlock] = run;
+					runs[index % runsPerBlock].length
+						= HOST_ENDIAN_TO_BFS_INT16(doubleIndirectBlockLength);
+
+					// alter the remaining block_run
+					run.start = HOST_ENDIAN_TO_BFS_INT16(run.Start()
+						+ doubleIndirectBlockLength);
+					run.length = HOST_ENDIAN_TO_BFS_INT16(run.Length()
+						- doubleIndirectBlockLength);
+				} while ((++index % runsPerBlock) != 0 && run.length);
+			} while ((index % runsPerArray) != 0 && run.length);
+
+			if (index == runsPerArray)
+				index = 0;
+			if (++indirectIndex % runsPerBlock == 0) {
+				array = NULL;
+				index = 0;
+			}
+		}
+
+		dataStream->max_double_indirect_range = HOST_ENDIAN_TO_BFS_INT64(
+			dataStream->MaxDoubleIndirectRange()
+			+ (runLength << fVolume->BlockShift()));
+		dataStream->size = cutSize ? HOST_ENDIAN_TO_BFS_INT64(targetSize)
+			: dataStream->max_double_indirect_range;
+
+		return B_OK;
+	}
+
+	RETURN_ERROR(EFBIG);
 }
 
 
@@ -1803,6 +2223,12 @@ Inode::_GrowStream(Transaction& transaction, off_t size)
 		// the requested blocks do not need to be returned with a
 		// single allocation, so we need to iterate until we have
 		// enough blocks allocated
+
+		// If data has a double_indirect block, we're adding block_run:s to
+		// the double indirect range.
+		if (!data->double_indirect.IsZero())
+			minimum = data->double_indirect.Length();
+
 		if (minimum > 1) {
 			// make sure that "blocks" is a multiple of minimum
 			blocksRequested = round_up(blocksRequested, minimum);
@@ -1821,239 +2247,34 @@ Inode::_GrowStream(Transaction& transaction, off_t size)
 		// don't preallocate if the first allocation was already too small
 		blocksRequested = blocksNeeded;
 
-		// Direct block range
+		int32 rest;
+		status = _AddBlockRun(transaction, data, run, size, &rest);
+		if (status != B_OK)
+			return status;
 
-		if (data->Size() <= data->MaxDirectRange()) {
-			// let's try to put them into the direct block range
-			int32 free = 0;
-			for (; free < NUM_DIRECT_BLOCKS; free++) {
-				if (data->direct[free].IsZero())
-					break;
-			}
+		if (rest != 0) {
+			// We've entered the double indirect range, and the number of
+			// allocated blocks isn't a multiple of 'doubleIndirectBlockLength'
 
-			if (free < NUM_DIRECT_BLOCKS) {
-				// can we merge the last allocated run with the new one?
-				int32 last = free - 1;
-				if (free > 0 && data->direct[last].MergeableWith(run)) {
-					data->direct[last].length = HOST_ENDIAN_TO_BFS_INT16(
-						data->direct[last].Length() + run.Length());
-				} else
-					data->direct[free] = run;
+			minimum = _DoubleIndirectBlockLength();
 
-				data->max_direct_range = HOST_ENDIAN_TO_BFS_INT64(
-					data->MaxDirectRange()
-					+ run.Length() * fVolume->BlockSize());
-				data->size = HOST_ENDIAN_TO_BFS_INT64(blocksNeeded > 0
-					? data->max_direct_range : size);
+			// Free the remaining blocks that don't fit into this multiple.
+			run.length = HOST_ENDIAN_TO_BFS_INT16(run.Length() - rest);
+
+			status = fVolume->Free(transaction,
+				block_run::Run(run.AllocationGroup(),
+				run.Start() + run.Length(), rest));
+			if (status != B_OK)
+				return status;
+
+			blocksNeeded += rest;
+			blocksRequested = round_up(blocksNeeded, minimum);
+
+			// Are there any blocks left in the run? If not, allocate
+			// a new one
+			if (run.length == 0)
 				continue;
-			}
 		}
-
-		// Indirect block range
-
-		if (data->Size() <= data->MaxIndirectRange()
-			|| !data->MaxIndirectRange()) {
-			CachedBlock cached(fVolume);
-			block_run* runs = NULL;
-			uint32 free = 0;
-			off_t block;
-
-			// if there is no indirect block yet, create one
-			if (data->indirect.IsZero()) {
-				status = _AllocateBlockArray(transaction, data->indirect,
-					NUM_ARRAY_BLOCKS, true);
-				if (status != B_OK)
-					return status;
-
-				data->max_indirect_range = HOST_ENDIAN_TO_BFS_INT64(
-					data->MaxDirectRange());
-				// insert the block_run in the first block
-				status = cached.SetTo(data->indirect);
-				if (status != B_OK)
-					return status;
-
-				runs = (block_run*)cached.Block();
-			} else {
-				uint32 numberOfRuns = fVolume->BlockSize() / sizeof(block_run);
-				block = fVolume->ToBlock(data->indirect);
-
-				// search first empty entry
-				int32 i = 0;
-				for (; i < data->indirect.Length(); i++) {
-					status = cached.SetTo(block + i);
-					if (status != B_OK)
-						return status;
-
-					runs = (block_run*)cached.Block();
-					for (free = 0; free < numberOfRuns; free++)
-						if (runs[free].IsZero())
-							break;
-
-					if (free < numberOfRuns)
-						break;
-				}
-				if (i == data->indirect.Length())
-					runs = NULL;
-			}
-
-			if (runs != NULL) {
-				// try to insert the run to the last one - note that this
-				// doesn't take block borders into account, so it could be
-				// further optimized
-				cached.MakeWritable(transaction);
-
-				int32 last = free - 1;
-				if (free > 0 && runs[last].MergeableWith(run)) {
-					runs[last].length = HOST_ENDIAN_TO_BFS_INT16(
-						runs[last].Length() + run.Length());
-				} else
-					runs[free] = run;
-
-				data->max_indirect_range = HOST_ENDIAN_TO_BFS_INT64(
-					data->MaxIndirectRange()
-					+ ((uint32)run.Length() << fVolume->BlockShift()));
-				data->size = HOST_ENDIAN_TO_BFS_INT64(blocksNeeded > 0
-					? data->MaxIndirectRange() : size);
-				continue;
-			}
-		}
-
-		// Double indirect block range
-
-		if (data->Size() <= data->MaxDoubleIndirectRange()
-			|| !data->max_double_indirect_range) {
-			// We make sure here that we have this minimum allocated, so if
-			// the allocation succeeds, we don't run into an endless loop.
-			if (!data->max_double_indirect_range)
-				minimum = _DoubleIndirectBlockLength();
-			else
-				minimum = data->double_indirect.Length();
-
-			if ((run.Length() % minimum) != 0) {
-				// The number of allocated blocks isn't a multiple of 'minimum',
-				// so we have to change this. This can happen the first time the
-				// stream grows into the double indirect range.
-				// First, free the remaining blocks that don't fit into this
-				// multiple.
-				int32 rest = run.Length() % minimum;
-				run.length = HOST_ENDIAN_TO_BFS_INT16(run.Length() - rest);
-
-				status = fVolume->Free(transaction,
-					block_run::Run(run.AllocationGroup(),
-					run.Start() + run.Length(), rest));
-				if (status != B_OK)
-					return status;
-
-				blocksNeeded += rest;
-				blocksRequested = round_up(blocksNeeded, minimum);
-
-				// Are there any blocks left in the run? If not, allocate
-				// a new one
-				if (run.length == 0)
-					continue;
-			}
-
-			// if there is no double indirect block yet, create one
-			if (data->double_indirect.IsZero()) {
-				status = _AllocateBlockArray(transaction,
-					data->double_indirect, _DoubleIndirectBlockLength());
-				if (status != B_OK)
-					return status;
-
-				data->max_double_indirect_range = data->max_indirect_range;
-			}
-
-			// calculate the index where to insert the new blocks
-
-			int32 runsPerBlock;
-			int32 directSize;
-			int32 indirectSize;
-			get_double_indirect_sizes(data->double_indirect.Length(),
-				fVolume->BlockSize(), runsPerBlock, directSize, indirectSize);
-			if (directSize <= 0 || indirectSize <= 0)
-				return B_BAD_DATA;
-
-			off_t start = data->MaxDoubleIndirectRange()
-				- data->MaxIndirectRange();
-			int32 indirectIndex = start / indirectSize;
-			int32 index = (start % indirectSize) / directSize;
-			int32 runsPerArray = runsPerBlock * minimum;
-
-			// distribute the blocks to the array and allocate
-			// new array blocks when needed
-
-			CachedBlock cached(fVolume);
-			CachedBlock cachedDirect(fVolume);
-			block_run* array = NULL;
-			uint32 runLength = run.Length();
-
-			while (run.length != 0) {
-				// get the indirect array block
-				if (array == NULL) {
-					uint32 block = indirectIndex / runsPerBlock;
-					if (block >= minimum)
-						return EFBIG;
-
-					status = cached.SetTo(fVolume->ToBlock(
-						data->double_indirect) + block);
-					if (status != B_OK)
-						return status;
-
-					array = (block_run*)cached.Block();
-				}
-
-				do {
-					// do we need a new array block?
-					if (array[indirectIndex % runsPerBlock].IsZero()) {
-						cached.MakeWritable(transaction);
-
-						status = _AllocateBlockArray(transaction,
-							array[indirectIndex % runsPerBlock],
-							data->double_indirect.Length());
-						if (status != B_OK)
-							return status;
-					}
-
-					status = cachedDirect.SetToWritable(transaction,
-						fVolume->ToBlock(array[indirectIndex
-							% runsPerBlock]) + index / runsPerBlock);
-					if (status != B_OK)
-						return status;
-
-					block_run* runs = (block_run*)cachedDirect.Block();
-
-					do {
-						// insert the block_run into the array
-						runs[index % runsPerBlock] = run;
-						runs[index % runsPerBlock].length
-							= HOST_ENDIAN_TO_BFS_INT16(minimum);
-
-						// alter the remaining block_run
-						run.start = HOST_ENDIAN_TO_BFS_INT16(run.Start()
-							+ minimum);
-						run.length = HOST_ENDIAN_TO_BFS_INT16(run.Length()
-							- minimum);
-					} while ((++index % runsPerBlock) != 0 && run.length);
-				} while ((index % runsPerArray) != 0 && run.length);
-
-				if (index == runsPerArray)
-					index = 0;
-				if (++indirectIndex % runsPerBlock == 0) {
-					array = NULL;
-					index = 0;
-				}
-			}
-
-			data->max_double_indirect_range = HOST_ENDIAN_TO_BFS_INT64(
-				data->MaxDoubleIndirectRange()
-				+ (runLength << fVolume->BlockShift()));
-			data->size = blocksNeeded > 0 ? HOST_ENDIAN_TO_BFS_INT64(
-				data->max_double_indirect_range) : size;
-
-			continue;
-		}
-
-		RETURN_ERROR(EFBIG);
 	}
 	// update the size of the data stream
 	data->size = HOST_ENDIAN_TO_BFS_INT64(size);
@@ -2209,13 +2430,15 @@ Inode::_ShrinkStream(Transaction& transaction, off_t size)
 	status_t status;
 
 	if (data->MaxDoubleIndirectRange() > size) {
-		off_t* maxDoubleIndirect = &data->max_double_indirect_range;
+		off_t maxDoubleIndirect = data->max_double_indirect_range;
 			// gcc 4 work-around: "error: cannot bind packed field
 			// 'data->data_stream::max_double_indirect_range' to 'off_t&'"
 		status = _FreeStaticStreamArray(transaction, 0, data->double_indirect,
-			size, data->MaxIndirectRange(), *maxDoubleIndirect);
+			size, data->MaxIndirectRange(), maxDoubleIndirect);
 		if (status != B_OK)
 			return status;
+
+		data->max_double_indirect_range = maxDoubleIndirect;
 
 		if (size <= data->MaxIndirectRange()) {
 			fVolume->Free(transaction, data->double_indirect);
@@ -2236,12 +2459,12 @@ Inode::_ShrinkStream(Transaction& transaction, off_t size)
 
 			block_run* array = (block_run*)cached.WritableBlock();
 
-			off_t* maxIndirect = &data->max_indirect_range;
-				// gcc 4 work-around: "error: cannot bind packed field
-				// 'data->data_stream::max_indirect_range' to 'off_t&'"
+			off_t maxIndirect = data->max_indirect_range;
 			if (_FreeStreamArray(transaction, array, fVolume->BlockSize()
-					/ sizeof(block_run), size, offset, *maxIndirect) != B_OK)
+					/ sizeof(block_run), size, offset, maxIndirect) != B_OK)
 				return B_IO_ERROR;
+
+			data->max_indirect_range = maxIndirect;
 		}
 		if (data->max_direct_range == data->max_indirect_range) {
 			fVolume->Free(transaction, data->indirect);
@@ -2252,13 +2475,13 @@ Inode::_ShrinkStream(Transaction& transaction, off_t size)
 
 	if (data->MaxDirectRange() > size) {
 		off_t offset = 0;
-		off_t *maxDirect = &data->max_direct_range;
-			// gcc 4 work-around: "error: cannot bind packed field
-			// 'data->data_stream::max_direct_range' to 'off_t&'"
+		off_t maxDirect = data->max_direct_range;
 		status = _FreeStreamArray(transaction, data->direct, NUM_DIRECT_BLOCKS,
-			size, offset, *maxDirect);
+			size, offset, maxDirect);
 		if (status != B_OK)
 			return status;
+
+		data->max_direct_range = maxDirect;
 	}
 
 	data->size = HOST_ENDIAN_TO_BFS_INT64(size);
@@ -2484,6 +2707,377 @@ Inode::Sync()
 }
 
 
+/*! Write the block runs in \a buffer to \a dataStream.
+	If \a flush is set, we always empty the buffer even if it means
+	allocating a block run which is larger than the available blocks.
+*/
+status_t
+Inode::_WriteBufferedRuns(Transaction& transaction, BlockRunBuffer& buffer,
+	data_stream* dataStream, off_t targetSize, bool flush)
+{
+	// TODO: Apply allocation policies!
+	status_t status;
+	off_t doubleIndirectBlockLength = _DoubleIndirectBlockLength();
+	uint32 blockShift = fVolume->BlockShift();
+
+
+	bool inDoubleIndirect = dataStream->MaxIndirectRange() != 0
+		&& dataStream->Size() > dataStream->MaxIndirectRange();
+		// we might be about to add a block_run to the double indirect range
+		// even if this is false, we'll discover that case when we try
+
+	while (buffer.NumBlocks() > 0) {
+		block_run run;
+		off_t blocksToWrite;
+
+		// allocate a block_run
+		if (inDoubleIndirect) {
+			// stop if we can't fill a double indirect file-data block_run,
+			// unless we're flushing out all of the buffer
+			if (buffer.NumBlocks() < doubleIndirectBlockLength
+				&& flush == false) {
+				break;
+			}
+
+			status = fVolume->Allocator().AllocateBlocks(transaction, 0, 0,
+					buffer.NumBlocks(), doubleIndirectBlockLength, run);
+			if (status != B_OK)
+				return status;
+
+			// if we're flushing the buffer while writing to the double
+			// indirect section, the amount of blocks to write can be smaller
+			// than the allocated run
+			if (buffer.NumBlocks() < run.Length())
+				blocksToWrite = buffer.NumBlocks();
+			else
+				blocksToWrite = run.Length();
+		} else {
+			status = fVolume->Allocator().AllocateBlocks(transaction, 0, 0,
+				buffer.NumBlocks(), 1, run);
+			if (status != B_OK)
+				return status;
+
+			blocksToWrite = run.Length();
+		}
+
+		// add the run to the data stream
+		int32 rest;
+		status = _AddBlockRun(transaction, dataStream, run, targetSize, &rest);
+		if (status != B_OK)
+			return status;
+
+		if (rest != 0) {
+			// oh no, we tried to add a misshaped block_run to the double
+			// indirect range, free it and try again.
+			ASSERT(inDoubleIndirect == false);
+			inDoubleIndirect = true;
+
+			status = fVolume->Free(transaction, run);
+			if (status != B_OK)
+				return status;
+
+			continue;
+		}
+
+		// copy the stream data to our run
+		for (off_t blocksWritten = 0; blocksWritten < blocksToWrite; ) {
+			off_t blocksRead;
+
+			const uint8* sourceData
+				= buffer.GetBlocks(blocksToWrite - blocksWritten, blocksRead);
+			if (sourceData == NULL)
+				return B_IO_ERROR;
+
+			// Don't use the journal to copy file data. These blocks are
+			// currently not referenced by the file system in any way, so
+			// we'll be in a valid state even if the transaction fails.
+			off_t targetBlock = fVolume->ToBlock(run) + blocksWritten;
+
+			ssize_t written = write_pos(fVolume->Device(),
+				targetBlock << blockShift, sourceData,
+				blocksRead << blockShift);
+
+			if (written != blocksRead << blockShift)
+				return B_IO_ERROR;
+
+			blocksWritten += blocksRead;
+		}
+	}
+	return B_OK;
+}
+
+
+status_t
+Inode::_FreeIndirectBlocks(Transaction& transaction, data_stream *dataStream)
+{
+	if (dataStream->indirect.IsZero())
+		return B_OK;
+
+	// free single indirect run
+	status_t status = fVolume->Free(transaction, dataStream->indirect);
+	if (status != B_OK)
+		return status;
+
+	if (dataStream->double_indirect.IsZero())
+		return B_OK;
+
+	int32 runsPerBlock = fVolume->BlockSize() / sizeof(block_run);
+	bool endOfStream = false;
+	CachedBlock cached(fVolume);
+
+	for (uint16 blockIndex = 0;
+			blockIndex < dataStream->double_indirect.Length(); blockIndex++) {
+		// get the double indirect array runs in this block
+		off_t block = fVolume->ToBlock(dataStream->double_indirect)
+			+ blockIndex;
+		status = cached.SetTo(block);
+		// FIXME error handling missing
+		const block_run* runArray = (const block_run*)cached.Block();
+
+		for (int32 i = 0; i < runsPerBlock; i++) {
+			if (runArray[i].IsZero()) {
+				endOfStream = true;
+				break;
+			}
+
+			// free double indirect array run
+			status = fVolume->Free(transaction, runArray[i]);
+			if (status != B_OK)
+				return status;
+		}
+
+		if (endOfStream)
+			break;
+	}
+
+	// free double indirect run
+	return fVolume->Free(transaction, dataStream->double_indirect);
+}
+
+
+/*! Get the block run that covers the file position \a position.
+	\a position is updated to point at the first position covered by
+	the following run.
+*/
+status_t
+Inode::_GetNextBlockRun(off_t& position, block_run& run) const
+{
+	if (position >= Size())
+		return B_ENTRY_NOT_FOUND;
+
+	off_t offset;
+	status_t status = FindBlockRun(position, run, offset);
+	if (status != B_OK)
+		return status;
+
+	position = offset + (run.Length() << fVolume->BlockShift());
+	return B_OK;
+}
+
+
+/*! Move the file stream to lie completely in the allocation range specified
+	in the block allocator.
+*/
+status_t
+Inode::MoveStream()
+{
+	// We move the stream by rebuilding it from scratch. block_runs which
+	// can be reused are simply added to the result stream (newStream) as
+	// they are. Runs which can't, are added to a buffer, and the stream
+	// data is copied to newly allocated block_runs when necessary.
+	//
+	// This is complicated by the fact that the length of block_runs in the
+	// double indirect range needs to be a multiple of a certain length.
+	// Two problems result from this:
+	//
+	//   1. We can't reuse a block_run from the original stream if it has
+	//      the wrong length, even though it's inside the allowed range.
+	//
+	//   2. The number of blocks in the BlockRunBuffer might not be a
+	//      multiple of this base length. When that happens, we can't write
+	//      all the blocks to disk, so we can't reuse the block_run from
+	//      the original stream even if it has a valid size and location.
+	//
+	// Note that this only applies when we're adding block_runs to the
+	// double indirect range of newStream.
+
+	status_t status;
+	data_stream newStream = {};
+
+	BlockRunBuffer buffer(fVolume, IsDirectory());
+	status = buffer.AllocateBuffers();
+	if (status != B_OK)
+		return status;
+
+	BlockAllocator& allocator = fVolume->Allocator();
+
+	Stack<block_run> runsToFree;
+		// no particular reason for using a stack, we just need something to
+		// store block_run's in
+
+	Transaction transaction(fVolume, 0);
+	WriteLockInTransaction(transaction);
+
+	off_t position = 0;
+	while (true) {
+		block_run run;
+
+		status = _GetNextBlockRun(position, run);
+		if (status == B_ENTRY_NOT_FOUND)
+			break;
+
+		if (status != B_OK)
+			return status;
+
+		if (allocator.IsCompletelyInsideAllowedRange(run)) {
+			status = _WriteBufferedRuns(transaction, buffer, &newStream,
+				Size(), false);
+			if (status != B_OK)
+				return status;
+
+			// If we're writing to the double indirect range, we might not have
+			// cleared the buffer. Before we add this block_run to the stream,
+			// make sure that this is not the case.
+			if (buffer.IsEmpty()) {
+				int32 rest;
+				status = _AddBlockRun(transaction, &newStream, run, Size(),
+					&rest);
+				if (status != B_OK)
+					return status;
+
+				// if there's no rest, we've managed to add this run to the
+				// output stream, and can move on to the next
+				if (rest == 0)
+					continue;
+
+				// we failed to add the block_run as it doesn't fulfill the
+				// constraints in the double indirect section.
+			}
+		}
+
+		// We can't reuse this block_run, add it to the block_run buffer.
+		if (buffer.IsFull()) {
+			status = _WriteBufferedRuns(transaction, buffer, &newStream,
+				Size(), false);
+			if (status != B_OK)
+				return status;
+		}
+		buffer.PutRun(run);
+
+		if (allocator.IsCompletelyOutsideAllowedRange(run)) {
+			// The block run was outside of the allowed range, which means
+			// that we can free it now without running the risk of
+			// reallocating it and overwriting its content.
+			status = fVolume->Free(transaction, run);
+			if (status != B_OK)
+				return status;
+		} else {
+			// free the run later
+			status = runsToFree.Push(run);
+			if (status != B_OK)
+				return status;
+		}
+	}
+
+	// write all blocks remaining in the buffer to disk
+	status = _WriteBufferedRuns(transaction, buffer, &newStream, Size(), true);
+	if (status != B_OK)
+		return status;
+
+	ASSERT(newStream.Size() == Size());
+
+	// free the blocks we didn't end up reusing
+	block_run toFree;
+	while (runsToFree.Pop(&toFree)) {
+		status = fVolume->Free(transaction, toFree);
+		if (status != B_OK)
+			return status;
+	}
+
+	_FreeIndirectBlocks(transaction, &fNode.data);
+
+	fNode.data = newStream;
+	status = WriteBack(transaction);
+	if (status != B_OK)
+		return status;
+
+	return transaction.Done();
+}
+
+
+/*! Check if the file stream is in the allocation range specified in the
+	block allocator.
+*/
+status_t
+Inode::StreamCompletelyInsideAllowedRange(bool& inRange) const
+{
+	inRange = false;
+		// now we can simply return if we find a run which is not in the range
+
+	BlockAllocator& allocator = fVolume->Allocator();
+
+	// check that the indirection blocks are in the allowed range
+	const data_stream* data = &fNode.data;
+
+	if (!data->indirect.IsZero()
+		&& !allocator.IsCompletelyInsideAllowedRange(data->indirect)) {
+		return B_OK;
+	}
+
+	if (!data->double_indirect.IsZero()) {
+		if (!allocator.IsCompletelyInsideAllowedRange(data->double_indirect))
+			return B_OK;
+
+		int32 runsPerBlock = fVolume->BlockSize() / sizeof(block_run);
+		bool endOfStream = false;
+		CachedBlock cached(fVolume);
+
+		for (uint16 blockIndex = 0; blockIndex < data->double_indirect.Length(); blockIndex++) {
+			// get the double indirect array runs in this block
+			off_t block = fVolume->ToBlock(data->double_indirect) + blockIndex;
+			status_t status = cached.SetTo(block);
+			if (status != B_OK)
+				return status;
+
+			const block_run* runArray = (const block_run*)cached.Block();
+
+			for (int32 i = 0; i < runsPerBlock; i++) {
+				if (runArray[i].IsZero()) {
+					endOfStream = true;
+					break;
+				}
+
+				if (!allocator.IsCompletelyInsideAllowedRange(runArray[i]))
+					return B_OK;
+			}
+
+			if (endOfStream)
+				break;
+		}
+	}
+
+	// check that the block_run's with file data are in the range
+	off_t position = 0;
+	while (true) {
+		block_run run;
+		status_t status = _GetNextBlockRun(position, run);
+		if (status == B_ENTRY_NOT_FOUND)
+			break;
+
+		if (status != B_OK)
+			return status;
+
+		if (!allocator.IsCompletelyInsideAllowedRange(run))
+			return B_OK;
+	}
+
+	// all stream blocks were in the range
+
+	inRange = true;
+	return B_OK;
+}
+
+
 //	#pragma mark - TransactionListener implementation
 
 
@@ -2509,7 +3103,7 @@ Inode::RemovedFromTransaction()
 
 	rw_lock_write_unlock(&Lock());
 
-	if (!fVolume->IsInitializing())
+	if (!fVolume->IsInitializing() && this != fVolume->IndicesNode())
 		put_vnode(fVolume->FSVolume(), ID());
 }
 
@@ -2833,6 +3427,37 @@ Inode::Create(Transaction& transaction, Inode* parent, const char* name,
 	// if either _id or _inode is passed, we will keep the inode locked
 	if (_id == NULL && _inode == NULL)
 		put_vnode(volume->FSVolume(), inode->ID());
+
+	return B_OK;
+}
+
+
+status_t
+Inode::CopyBlockTo(Transaction& transaction, off_t targetBlock)
+{
+	CachedBlock target(fVolume);
+	status_t status = target.SetToWritable(transaction, targetBlock, true);
+	if (status != B_OK)
+		RETURN_ERROR(status);
+
+	CachedBlock source(fVolume);
+	status = source.SetTo(fID);
+	if (status != B_OK)
+		return status;
+
+	uint8* targetData = (uint8*)target.WritableBlock();
+	const uint8* sourceData = source.Block();
+	memcpy(targetData, sourceData, fVolume->BlockSize());
+
+	// update inode ID in target block
+	bfs_inode* targetNode = (bfs_inode*)target.Block();
+	block_run targetRun = fVolume->ToBlockRun(targetBlock);
+	targetNode->inode_num = targetRun;
+
+	// also update parent reference in the rare case of us being our
+	// own parent
+	if (Parent() == BlockRun())
+		targetNode->parent = targetRun;
 
 	return B_OK;
 }

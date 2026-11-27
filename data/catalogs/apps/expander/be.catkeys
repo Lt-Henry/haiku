@@ -1,9 +1,8 @@
-1	belarusian	x-vnd.Haiku-Expander	784190701
+1	belarusian	x-vnd.Haiku-Expander	3880537932
 Destination	ExpanderWindow		Прызначэнне
 Other	ExpanderPreferences		Іншы
 Automatically show contents listing	ExpanderPreferences		Аўтаматычна паказваць змесціва
 Expander	System name		Распакоўшчык
-Expander: Choose destination	DirectoryFilePanel		Распакоўшчык: Абраць прызначэнне
 Set source…	ExpanderMenu		Задаць крыніцу…
 The destination is not a folder.	ExpanderWindow		Прызначэнне не з´яўляецца каталёгам.
 Close window when done expanding	ExpanderPreferences		Закрыць вакно пасля распакоўкі
@@ -16,10 +15,9 @@ Open destination folder after extraction	ExpanderPreferences		Паказаць �
 Same directory as source (archive) file	ExpanderPreferences		Папка ў якой знаходзіцца зыходны архіў
 Stop	ExpanderWindow		Спыніць
 Cancel	ExpanderWindow		Скасаваць
-Expander settings	ExpanderPreferences		Наладкі Распакоўшчыка
 Error when expanding archive	ExpanderWindow		Памылка падчас распакоўкі архіву
-Expand	ExpanderMenu		Распакаваць
 Failed to create the destination folder.	ExpanderWindow		Не ўдалося стварыць мэтавую папку.
+Expand	ExpanderMenu		Распакаваць
 Settings…	ExpanderMenu		Налады…
 Select current	DirectoryFilePanel		Пазначыць бягучы
 OK	ExpanderPreferences		ОК
@@ -35,7 +33,6 @@ Continue	ExpanderWindow		Працягваць
 Cancel	ExpanderPreferences		Адмена
 Use:	ExpanderPreferences		Выкарыстаць:
 Destination folder	ExpanderPreferences		Тэчка прызначэння
-Expander: Open	ExpanderWindow		Распакоўшчык: Адкрыць
 Leave destination folder path empty	ExpanderPreferences		Пакінуць пуць да пакі прызначэння пустым
 Destination folder doesn't exist. Would you like to create it?	ExpanderWindow		Мэтавая папка не існуе. Ці хочаце стварыць яе?
 The file doesn't exist	ExpanderWindow		Гэты файл не існуе

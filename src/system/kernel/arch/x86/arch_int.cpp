@@ -12,7 +12,7 @@
 
 
 #include <cpu.h>
-#include <int.h>
+#include <interrupts.h>
 #include <kscheduler.h>
 #include <team.h>
 #include <thread.h>
@@ -22,12 +22,14 @@
 
 #include <arch/cpu.h>
 #include <arch/int.h>
+#include <arch/debug.h>
 
 #include <arch/x86/apic.h>
 #include <arch/x86/descriptors.h>
 #include <arch/x86/msi.h>
 #include <arch/x86/msi_priv.h>
 
+#include <fenv.h>
 #include <stdio.h>
 
 // interrupt controllers
@@ -131,8 +133,9 @@ x86_unexpected_exception(iframe* frame)
 
 		case 5:		// BOUND Range Exceeded Exception (#BR)
 			type = B_BOUNDS_CHECK_EXCEPTION;
-			signalNumber = SIGTRAP;
-			signalCode = SI_USER;
+			signalNumber = SIGFPE;
+			signalCode = FPE_FLTSUB;
+			signalAddress = frame->ip;
 			break;
 
 		case 6:		// Invalid Opcode Exception (#UD)
@@ -151,19 +154,45 @@ x86_unexpected_exception(iframe* frame)
 
 		case 13: 	// General Protection Exception (#GP)
 			type = B_GENERAL_PROTECTION_FAULT;
-			signalNumber = SIGILL;
-			signalCode = ILL_PRVOPC;	// or ILL_PRVREG
+			signalNumber = SIGBUS;
+			signalCode = BUS_OBJERR;
 			signalAddress = frame->ip;
 			break;
 
 		case 16: 	// x87 FPU Floating-Point Error (#MF)
+		case 19: 	// SIMD Floating-Point Exception (#XF)
+		{
 			type = B_FLOATING_POINT_EXCEPTION;
 			signalNumber = SIGFPE;
-			signalCode = FPE_FLTDIV;
-				// TODO: Determine the correct cause via the FPU status
-				// register!
+			signalCode = FPE_FLTINV;
 			signalAddress = frame->ip;
+
+			uint32 status = 0;
+			if (frame->vector == 19) {
+				// MXCSR is only available on SSE, however exception 19 should only
+				// ever occur if the processor has SSE anyway and OSXMMEXCPT is set.
+				__stmxcsr(&status);
+			} else {
+				uint16 fsw = 0;
+				__fnstsw(&fsw);
+				status = fsw;
+			}
+
+			// Determine the real cause of the exception, if possible.
+			if ((status & FE_INVALID) != 0)
+				signalCode = FPE_FLTINV;
+			else if ((status & FE_DENORMAL) != 0)
+				signalCode = FPE_FLTUND;
+			else if ((status & FE_DIVBYZERO) != 0)
+				signalCode = FPE_FLTDIV;
+			else if ((status & FE_OVERFLOW) != 0)
+				signalCode = FPE_FLTOVF;
+			else if ((status & FE_UNDERFLOW) != 0)
+				signalCode = FPE_FLTUND;
+			else if ((status & FE_INEXACT) != 0)
+				signalCode = FPE_FLTRES;
 			break;
+		}
 
 		case 17: 	// Alignment Check Exception (#AC)
 			type = B_ALIGNMENT_EXCEPTION;
@@ -172,14 +201,6 @@ x86_unexpected_exception(iframe* frame)
 			// TODO: Also get the address (from where?). Since we don't enable
 			// alignment checking this exception should never happen, though.
 			signalError = EFAULT;
-			break;
-
-		case 19: 	// SIMD Floating-Point Exception (#XF)
-			type = B_FLOATING_POINT_EXCEPTION;
-			signalNumber = SIGFPE;
-			signalCode = FPE_FLTDIV;
-				// TODO: Determine the correct cause via the MXCSR register!
-			signalAddress = frame->ip;
 			break;
 
 		default:
@@ -218,7 +239,7 @@ void
 x86_hardware_interrupt(struct iframe* frame)
 {
 	int32 vector = frame->vector - ARCH_INTERRUPT_BASE;
-	bool levelTriggered = false;
+	interrupt_trigger_mode interruptType = B_EDGE_TRIGGERED;
 	Thread* thread = thread_get_current_thread();
 
 	if (sCurrentPIC->is_spurious_interrupt(vector)) {
@@ -226,18 +247,18 @@ x86_hardware_interrupt(struct iframe* frame)
 		return;
 	}
 
-	levelTriggered = sCurrentPIC->is_level_triggered_interrupt(vector);
+	interruptType = sCurrentPIC->get_interrupt_trigger_type(vector);
 
-	if (!levelTriggered) {
+	if (interruptType != B_LEVEL_TRIGGERED) {
 		// if it's not handled by the current pic then it's an apic generated
 		// interrupt like local interrupts, msi or ipi.
 		if (!sCurrentPIC->end_of_interrupt(vector))
 			apic_end_of_interrupt();
 	}
 
-	int_io_interrupt_handler(vector, levelTriggered);
+	io_interrupt_handler(vector, interruptType);
 
-	if (levelTriggered) {
+	if (interruptType == B_LEVEL_TRIGGERED) {
 		if (!sCurrentPIC->end_of_interrupt(vector))
 			apic_end_of_interrupt();
 	}
@@ -386,9 +407,10 @@ arch_int_disable_io_interrupt(int32 irq)
 
 
 void
-arch_int_configure_io_interrupt(int32 irq, uint32 config)
+arch_int_configure_io_interrupt(int32 irq, interrupt_trigger_mode config,
+	interrupt_trigger_polarity polarity)
 {
-	sCurrentPIC->configure_io_interrupt(irq, config);
+	sCurrentPIC->configure_io_interrupt(irq, config, polarity);
 }
 
 
@@ -469,7 +491,8 @@ status_t
 arch_int_init_io(kernel_args* args)
 {
 	msi_init(args);
-	ioapic_preinit(args);
+	ioapic_init(args);
+	x86_debug_install_interrupt_handler();
 	return B_OK;
 }
 

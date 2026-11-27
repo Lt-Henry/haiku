@@ -1,4 +1,4 @@
-1	ukrainian	x-vnd.Haiku-MediaPlayer	390961765
+1	ukrainian	x-vnd.Haiku-MediaPlayer	3337408711
 Remove Entry into Trash	MediaPlayer-RemovePLItemsCmd		Видалити запис до смітника
 Close	MediaPlayer-PlaylistWindow		Закрити
 Volume of background clips	MediaPlayer-SettingsWindow		Гучність фонових кліпів
@@ -18,24 +18,24 @@ raw audio	MediaPlayer-InfoWin		необроблене аудіо
 Select all	MediaPlayer-PlaylistWindow		Вибрати все
 Move Entries	MediaPlayer-MovePLItemsCmd		Перемістити записи
 OK	MediaPlayer-Main		ОК
-Remove	MediaPlayer-PlaylistWindow		Вилучити
+Remove	MediaPlayer-PlaylistWindow		Прибрати
 <unknown>	MediaPlayer-InfoWin		<невідомий>
 Resume:	MediaPlayer-SettingsWindow		Грати після запуску:
 Duration	MediaPlayer-InfoWin		Тривалість
 Import Entries	MediaPlayer-ImportPLItemsCmd		Імпортувати записи
 Open network stream	MediaPlayer-Main		Відкрити мережевий потік
-Move file to Trash	MediaPlayer-PlaylistWindow		Перемістити до смітника
+%appname% settings	MediaPlayer-SettingsWindow		Налаштування %appname%
 Open file…	MediaPlayer-Main		Відкрити файл…
 Scale controls in full screen mode	MediaPlayer-SettingsWindow		Масштаб кнопок управління у повноекранному режимі
 View options	MediaPlayer-SettingsWindow		Параметри перегляду
 %d kHz	MediaPlayer-InfoWin		%d кГц
 Full volume	MediaPlayer-SettingsWindow		Повна гучність
-<untitled>	PlaylistItem-title		<без імені>
+<untitled>	PlaylistItem-title		<без назви>
 Start media server	MediaPlayer-Main		Запустити Медіасервер
 It appears the media server is not running.\nWould you like to start it ?	MediaPlayer-Main		Схоже, медіасервер не працює.\nБажаєте запустити його?
 Location	MediaPlayer-InfoWin		Шлях
 %lu × %lu	MediaPlayer-InfoWin	The '×' is the Unicode multiplication sign U+00D7	%lu × %lu
-Opening '%s'.	MediaPlayer-Main		Відкриття «%s».
+Opening '%s'.	MediaPlayer-Main		Відкривається «%s».
 Medium	MediaPlayer-SettingsWindow		Середній
 Play mode	MediaPlayer-SettingsWindow		Режим відтворення
 Playlist	MediaPlayer-PlaylistWindow		Плейлист
@@ -45,8 +45,8 @@ Close	MediaPlayer-Main		Закрити
 Save error	MediaPlayer-PlaylistWindow		Помилка збереження
 Attributes	MediaPlayer-Main		Атрибути
 Bottom of screen	MediaPlayer-SettingsWindow		Нижня частина екрана
-MediaPlayer settings	MediaPlayer-SettingsWindow		Налаштування Медіаплеєра
 Copyright	MediaPlayer-InfoWin		Авторське право
+%appname%: %title%	MediaPlayer-Main		%appname%: %title%
 Invalid URL inserted!	MediaPlayer-NetworkStream		Помилка введення URL!
 Aspect ratio	MediaPlayer-Main		Співідношення сторін
 Eject device	MediaPlayer-Main		Вийняти пристрій
@@ -58,6 +58,7 @@ Video track	MediaPlayer-Main		Відеодоріжка
 Playlist…	MediaPlayer-Main		Список відтворення…
 <unnamed media>	MediaPlayer-InfoWin		<неназване медіа>
 Save	MediaPlayer-PlaylistWindow		Зберегти
+25% scale	MediaPlayer-Main		Масштаб 25%
 Randomize Entries	MediaPlayer-RandomizePLItemsCmd		Випадкові записи
 Cancel	MediaPlayer-NetworkStream		Скасувати
 Nothing to Play	MediaPlayer-Main		Нічого відтворювати
@@ -89,7 +90,7 @@ Move into trash error	MediaPlayer-RemovePLItemsCmd		Помилка перемі�
 Drop files to play	MediaPlayer-Main		Перетягніть файли для відтворення
 Copy Entry	MediaPlayer-CopyPLItemsCmd		Копіювати запис
 Close window after playing audio	MediaPlayer-SettingsWindow		Закрити вікно після відтворення аудіо
-Edit	MediaPlayer-PlaylistWindow		Редагувати
+Edit	MediaPlayer-PlaylistWindow		Коректив
 Copy Entries	MediaPlayer-CopyPLItemsCmd		Копіювати записи
 Always on top	MediaPlayer-Main		Завжди зверху
 Open	MediaPlayer-PlaylistWindow		Відкрити

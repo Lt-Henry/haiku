@@ -149,7 +149,7 @@ VMUserAddressSpace::FindClosestArea(addr_t address, bool less) const
 {
 	VMUserArea* area = fAreas.FindClosest(address, less);
 	while (area != NULL && area->id == RESERVED_AREA_ID)
-		area = fAreas.Next(area);
+		area = less ? fAreas.Previous(area) : fAreas.Next(area);
 	return area;
 }
 
@@ -164,6 +164,8 @@ VMUserAddressSpace::InsertArea(VMArea* _area, size_t size,
 	const virtual_address_restrictions* addressRestrictions,
 	uint32 allocationFlags, void** _address)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
 	VMUserArea* area = static_cast<VMUserArea*>(_area);
 
 	addr_t searchBase, searchEnd;
@@ -210,6 +212,8 @@ VMUserAddressSpace::InsertArea(VMArea* _area, size_t size,
 void
 VMUserAddressSpace::RemoveArea(VMArea* _area, uint32 allocationFlags)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
 	VMUserArea* area = static_cast<VMUserArea*>(_area);
 
 	fAreas.Remove(area);
@@ -218,31 +222,36 @@ VMUserAddressSpace::RemoveArea(VMArea* _area, uint32 allocationFlags)
 		IncrementChangeCount();
 		fFreeSpace += area->Size();
 	}
+
+	if ((area->Base() + area->Size()) == fNextInsertHint)
+		fNextInsertHint -= area->Size();
 }
 
 
 bool
 VMUserAddressSpace::CanResizeArea(VMArea* area, size_t newSize)
 {
-	VMUserArea* next = fAreas.Next(static_cast<VMUserArea*>(area));
-	addr_t newEnd = area->Base() + (newSize - 1);
-
+	const addr_t newEnd = area->Base() + (newSize - 1);
 	if (newEnd < area->Base())
 		return false;
 
-	if (next == NULL)
-		return fEndAddress >= newEnd;
+	VMUserArea* next = fAreas.Next(static_cast<VMUserArea*>(area));
+	while (next != NULL) {
+		if (next->Base() > newEnd)
+			return true;
 
-	if (next->Base() > newEnd)
-		return true;
+		// If the next area is a reservation, then we can resize into it.
+		if (next->id != RESERVED_AREA_ID)
+			return false;
+		if ((next->Base() + (next->Size() - 1)) >= newEnd)
+			return true;
 
-	// If the area was created inside a reserved area, it can
-	// also be resized in that area
-	// TODO: if there is free space after the reserved area, it could
-	// be used as well...
-	return next->id == RESERVED_AREA_ID
-		&& (uint64)next->cache_offset <= (uint64)area->Base()
-		&& next->Base() + (next->Size() - 1) >= newEnd;
+		// This "next" area is a reservation, but it's not large enough.
+		// See if we can resize past it as well.
+		next = fAreas.Next(next);
+	}
+
+	return fEndAddress >= newEnd;
 }
 
 
@@ -250,30 +259,52 @@ status_t
 VMUserAddressSpace::ResizeArea(VMArea* _area, size_t newSize,
 	uint32 allocationFlags)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
 	VMUserArea* area = static_cast<VMUserArea*>(_area);
 
-	addr_t newEnd = area->Base() + (newSize - 1);
-	VMUserArea* next = fAreas.Next(area);
-	if (next != NULL && next->Base() <= newEnd) {
-		if (next->id != RESERVED_AREA_ID
-			|| (uint64)next->cache_offset > (uint64)area->Base()
-			|| next->Base() + (next->Size() - 1) < newEnd) {
-			panic("resize situation for area %p has changed although we "
-				"should have the address space lock", area);
-			return B_ERROR;
-		}
+	const addr_t oldEnd = area->Base() + (area->Size() - 1);
+	const addr_t newEnd = area->Base() + (newSize - 1);
 
-		// resize reserved area
-		addr_t offset = area->Base() + newSize - next->Base();
-		if (next->Size() <= offset) {
-			RemoveArea(next, allocationFlags);
-			next->~VMUserArea();
-			free_etc(next, allocationFlags);
-		} else {
-			status_t error = ShrinkAreaHead(next, next->Size() - offset,
-				allocationFlags);
-			if (error != B_OK)
-				return error;
+	VMUserArea* next = fAreas.Next(area);
+	if (oldEnd < newEnd) {
+		while (next != NULL) {
+			if (next->Base() > newEnd)
+				break;
+
+			if (next->id != RESERVED_AREA_ID && next->Base() < newEnd) {
+				panic("resize situation for area %p has changed although we "
+					"should have the address space lock", area);
+				return B_ERROR;
+			}
+
+			// shrink reserved area
+			addr_t offset = (area->Base() + newSize) - next->Base();
+			if (next->Size() <= offset) {
+				VMUserArea* nextNext = fAreas.Next(next);
+				RemoveArea(next, allocationFlags);
+				next->~VMUserArea();
+				free_etc(next, allocationFlags);
+				next = nextNext;
+			} else {
+				status_t error = ShrinkAreaHead(next, next->Size() - offset,
+					allocationFlags);
+				if (error != B_OK)
+					return error;
+				break;
+			}
+		}
+	} else {
+		if (next != NULL && next->id == RESERVED_AREA_ID
+				&& next->Base() == (oldEnd + 1)) {
+			// expand reserved area (at most to its original size)
+			const addr_t oldNextBase = next->Base();
+			addr_t newNextBase = oldNextBase - (oldEnd - newEnd);
+			if (newNextBase < (addr_t)next->cache_offset)
+				newNextBase = next->cache_offset;
+
+			next->SetBase(newNextBase);
+			next->SetSize(next->Size() + (oldNextBase - newNextBase));
 		}
 	}
 
@@ -286,6 +317,8 @@ status_t
 VMUserAddressSpace::ShrinkAreaHead(VMArea* area, size_t size,
 	uint32 allocationFlags)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
 	size_t oldSize = area->Size();
 	if (size == oldSize)
 		return B_OK;
@@ -301,6 +334,8 @@ status_t
 VMUserAddressSpace::ShrinkAreaTail(VMArea* area, size_t size,
 	uint32 allocationFlags)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
 	size_t oldSize = area->Size();
 	if (size == oldSize)
 		return B_OK;
@@ -316,6 +351,8 @@ VMUserAddressSpace::ReserveAddressRange(size_t size,
 	const virtual_address_restrictions* addressRestrictions,
 	uint32 flags, uint32 allocationFlags, void** _address)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
 	// check to see if this address space has entered DELETE state
 	if (fDeleting) {
 		// okay, someone is trying to delete this address space now, so we
@@ -338,7 +375,6 @@ VMUserAddressSpace::ReserveAddressRange(size_t size,
 	area->cache_offset = area->Base();
 		// we cache the original base address here
 
-	Get();
 	return B_OK;
 }
 
@@ -347,6 +383,8 @@ status_t
 VMUserAddressSpace::UnreserveAddressRange(addr_t address, size_t size,
 	uint32 allocationFlags)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
 	// check to see if this address space has entered DELETE state
 	if (fDeleting) {
 		// okay, someone is trying to delete this address space now, so we can't
@@ -367,7 +405,6 @@ VMUserAddressSpace::UnreserveAddressRange(addr_t address, size_t size,
 		if (area->id == RESERVED_AREA_ID) {
 			// remove reserved range
 			RemoveArea(area, allocationFlags);
-			Put();
 			area->~VMUserArea();
 			free_etc(area, allocationFlags);
 		}
@@ -380,11 +417,12 @@ VMUserAddressSpace::UnreserveAddressRange(addr_t address, size_t size,
 void
 VMUserAddressSpace::UnreserveAllAddressRanges(uint32 allocationFlags)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
 	for (VMUserAreaTree::Iterator it = fAreas.GetIterator();
 			VMUserArea* area = it.Next();) {
 		if (area->id == RESERVED_AREA_ID) {
 			RemoveArea(area, allocationFlags);
-			Put();
 			area->~VMUserArea();
 			free_etc(area, allocationFlags);
 		}
@@ -473,8 +511,7 @@ VMUserAddressSpace::_InsertAreaIntoReservedRegion(addr_t start, size_t size,
 
 		if (size == reserved->Size()) {
 			// the new area fully covers the reserved range
-			fAreas.Remove(reserved);
-			Put();
+			RemoveArea(reserved, allocationFlags);
 			reserved->~VMUserArea();
 			free_etc(reserved, allocationFlags);
 		} else {
@@ -493,8 +530,6 @@ VMUserAddressSpace::_InsertAreaIntoReservedRegion(addr_t start, size_t size,
 			reserved->protection, allocationFlags);
 		if (newReserved == NULL)
 			return B_NO_MEMORY;
-
-		Get();
 
 		// resize regions
 		newReserved->SetBase(start + size);
@@ -553,15 +588,16 @@ VMUserAddressSpace::_InsertAreaSlot(addr_t start, addr_t size, addr_t end,
 
 	start = align_address(start, alignment);
 
-	bool useHint
-		= addressSpec != B_EXACT_ADDRESS && !is_base_address_spec(addressSpec);
+	bool useHint = addressSpec != B_EXACT_ADDRESS
+		&& !is_base_address_spec(addressSpec)
+		&& fFreeSpace > (Size() / 2);
 
 	addr_t originalStart = 0;
 	if (fRandomizingEnabled && addressSpec == B_RANDOMIZED_BASE_ADDRESS) {
 		originalStart = start;
 		start = _RandomizeAddress(start, end - size + 1, alignment, true);
 	} else if (useHint
-		&& start <= fNextInsertHint && fNextInsertHint <= end - size + 1) {
+			&& start <= fNextInsertHint && fNextInsertHint <= (end - size + 1)) {
 		originalStart = start;
 		start = fNextInsertHint;
 	}
@@ -570,7 +606,7 @@ VMUserAddressSpace::_InsertAreaSlot(addr_t start, addr_t size, addr_t end,
 second_chance:
 	VMUserArea* next = fAreas.FindClosest(start + size, false);
 	VMUserArea* last = next != NULL
-			? fAreas.Previous(next) : fAreas.FindClosest(start + size, true);
+		? fAreas.Previous(next) : fAreas.FindClosest(start + size, true);
 
 	// find the right spot depending on the address specification - the area
 	// will be inserted directly after "last" ("next" is not referenced anymore)
@@ -687,8 +723,7 @@ second_chance:
 					if (next->Base() == alignedBase && next->Size() == size) {
 						// The reserved area is entirely covered, and thus,
 						// removed
-						fAreas.Remove(next);
-
+						RemoveArea(next, allocationFlags);
 						foundSpot = true;
 						area->SetBase(alignedBase);
 						next->~VMUserArea();
@@ -728,7 +763,10 @@ second_chance:
 								alignment);
 
 							addr_t startRange = next->Base() + next->Size();
-							startRange -= size + kMaxRandomize;
+							if (startRange > (size + kMaxRandomize))
+								startRange -= size + kMaxRandomize;
+							else
+								startRange = 0;
 							startRange = ROUNDDOWN(startRange, alignment);
 							startRange = std::max(startRange, alignedNextBase);
 

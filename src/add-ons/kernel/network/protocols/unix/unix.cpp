@@ -60,6 +60,21 @@ destroy_scm_rights_descriptors(const ancillary_data_header* header,
 }
 
 
+void
+clone_scm_rights_descriptors(const ancillary_data_header* header, void* data)
+{
+	int count = header->len / sizeof(file_descriptor*);
+	file_descriptor** descriptors = (file_descriptor**)data;
+
+	for (int i = 0; i < count; i++) {
+		if (descriptors[i] != NULL) {
+			inc_fd_ref_count(descriptors[i]);
+			inc_fd_open_count(descriptors[i]);
+		}
+	}
+}
+
+
 // #pragma mark -
 
 
@@ -275,7 +290,7 @@ unix_deliver_data(net_protocol *_protocol, net_buffer *buffer)
 
 
 status_t
-unix_error_received(net_error error, net_buffer *data)
+unix_error_received(net_error error, net_error_data* errorData, net_buffer *data)
 {
 	return B_ERROR;
 }
@@ -334,7 +349,7 @@ unix_add_ancillary_data(net_protocol *self, ancillary_data_container *container,
 			"container\n", find_thread(NULL), count);
 
 		error = gStackModule->add_ancillary_data(container, &header,
-			descriptors, destroy_scm_rights_descriptors, NULL);
+			descriptors, destroy_scm_rights_descriptors, clone_scm_rights_descriptors, NULL);
 	}
 
 	// cleanup on error
@@ -354,7 +369,7 @@ unix_add_ancillary_data(net_protocol *self, ancillary_data_container *container,
 ssize_t
 unix_process_ancillary_data(net_protocol *self,
 	const ancillary_data_container *container, void *buffer,
-	size_t bufferSize)
+	size_t bufferSize, int flags, int *msg_flags)
 {
 	TRACE("[%" B_PRId32 "] unix_process_ancillary_data(%p, %p, %p, %p, %lu)\n",
 		find_thread(NULL), self, container, buffer, bufferSize);
@@ -372,15 +387,19 @@ unix_process_ancillary_data(net_protocol *self,
 	}
 
 	// check if there's enough space in the buffer
-	size_t neededBufferSpace = CMSG_SPACE(sizeof(int) * totalCount);
-	if (bufferSize < neededBufferSpace)
-		return B_BAD_VALUE;
+
+	int bufferCount = (bufferSize - CMSG_SPACE(0)) / sizeof(int);
+	if (bufferCount < totalCount)
+		*msg_flags |= MSG_CTRUNC;
+	else
+		bufferCount = totalCount;
+	size_t neededBufferSpace = CMSG_SPACE(sizeof(int) * bufferCount);
 
 	// init header
 	cmsghdr* messageHeader = (cmsghdr*)buffer;
 	messageHeader->cmsg_level = SOL_SOCKET;
 	messageHeader->cmsg_type = SCM_RIGHTS;
-	messageHeader->cmsg_len = CMSG_LEN(sizeof(int) * totalCount);
+	messageHeader->cmsg_len = CMSG_LEN(sizeof(int) * bufferCount);
 
 	// create FDs for the current process
 	int* fds = (int*)CMSG_DATA(messageHeader);
@@ -393,28 +412,39 @@ unix_process_ancillary_data(net_protocol *self,
 		int count = header.len / sizeof(file_descriptor*);
 		file_descriptor** descriptors = (file_descriptor**)data;
 
-		for (int k = 0; k < count; k++, i++) {
+		for (int k = 0; k < count && i < bufferCount; k++, i++) {
 			// Get an additional reference which will go to the FD table index. The
 			// reference and open reference acquired in unix_add_ancillary_data()
 			// will be released when the container is destroyed.
 			inc_fd_ref_count(descriptors[k]);
-			fds[i] = new_fd(ioContext, descriptors[k]);
+			WriteLocker contextLocker(ioContext->lock);
+			int fd = new_fd(ioContext, descriptors[k]);
 
-			if (fds[i] < 0) {
-				error = fds[i];
+			if (fd < 0) {
+				error = fd;
 				put_fd(descriptors[k]);
-
-				// close FD indices
-				for (int j = i - 1; j >= 0; j--)
-					close_fd_index(ioContext, fds[j]);
 				break;
 			}
+			fds[i] = fd;
+
+			if ((flags & MSG_CMSG_CLOEXEC) != 0)
+				fd_set_close_on_exec(ioContext, fds[i], true);
+			if ((flags & MSG_CMSG_CLOFORK) != 0)
+				fd_set_close_on_fork(ioContext, fds[i], true);
 		}
-		if (error != B_OK)
+		if (error != B_OK || i >= bufferCount)
 			break;
 	}
 
-	return error == B_OK ? neededBufferSpace : error;
+	if (error != B_OK) {
+		// couldn't create all fds, adjust the lengths
+		*msg_flags |= MSG_CTRUNC;
+		if (i == 0)
+			return 0;
+		neededBufferSpace = CMSG_SPACE(sizeof(int) * i);
+		messageHeader->cmsg_len = CMSG_LEN(sizeof(int) * i);
+	}
+	return neededBufferSpace;
 }
 
 
@@ -453,6 +483,10 @@ init_unix()
 		"network/protocols/unix/v1", NULL);
 	if (error == B_OK) {
 		error = gStackModule->register_domain_protocols(AF_UNIX, SOCK_DGRAM, 0,
+			"network/protocols/unix/v1", NULL);
+	}
+	if (error == B_OK) {
+		error = gStackModule->register_domain_protocols(AF_UNIX, SOCK_SEQPACKET, 0,
 			"network/protocols/unix/v1", NULL);
 	}
 

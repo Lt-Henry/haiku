@@ -24,21 +24,11 @@ int	 timingsafe_bcmp(const void *, const void *, size_t);
 
 static __inline int imax(int a, int b) { return (a > b ? a : b); }
 static __inline int imin(int a, int b) { return (a < b ? a : b); }
+static __inline long lmax(long a, long b) { return (a > b ? a : b); }
+static __inline long lmin(long a, long b) { return (a < b ? a : b); }
 
 extern int abs(int a);
 
-
-static __inline __pure2 int
-ffsl(long mask)
-{
-	return (__builtin_ffsl((u_long)mask));
-}
-
-static __inline __pure2 int
-ffsll(long long mask)
-{
-	return (__builtin_ffsll((unsigned long long)mask));
-}
 
 static __inline __pure2 int
 fls(int mask)

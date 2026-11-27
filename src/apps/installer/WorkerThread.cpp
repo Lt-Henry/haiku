@@ -81,6 +81,18 @@ private:
 };
 
 
+class EFIVisitor : public BDiskDeviceVisitor {
+public:
+	EFIVisitor(BMenu* menu, partition_id bootId);
+	virtual bool Visit(BDiskDevice* device);
+	virtual bool Visit(BPartition* partition, int32 level);
+
+private:
+	BMenu* fMenu;
+	partition_id fBootId;
+};
+
+
 // #pragma mark - WorkerThread
 
 
@@ -101,6 +113,12 @@ public:
 			fIgnorePaths.insert("system/var/shared_memory");
 			fIgnorePaths.insert("system/var/log/syslog");
 			fIgnorePaths.insert("system/var/log/syslog.old");
+			fIgnorePaths.insert("system/settings/ssh/ssh_host_ecdsa_key");
+			fIgnorePaths.insert("system/settings/ssh/ssh_host_ecdsa_key.pub");
+			fIgnorePaths.insert("system/settings/ssh/ssh_host_ed25519_key");
+			fIgnorePaths.insert("system/settings/ssh/ssh_host_ed25519_key.pub");
+			fIgnorePaths.insert("system/settings/ssh/ssh_host_rsa_key");
+			fIgnorePaths.insert("system/settings/ssh/ssh_host_rsa_key.pub");
 
 			fPackageFSRootPaths.insert("system");
 			fPackageFSRootPaths.insert("home/config");
@@ -228,10 +246,107 @@ WorkerThread::MessageReceived(BMessage* message)
 }
 
 
+static BString
+arch_efi_default_prefix()
+{
+#if defined(__i386__)
+	return BString("BOOTIA32");
+#elif defined(__x86_64__)
+	return BString("BOOTX64");
+#elif defined(__arm__) || defined(__ARM__)
+	return BString("BOOTARM");
+#elif defined(__aarch64__) || defined(__arm64__)
+	return BString("BOOTAA64");
+#elif defined(__riscv) && __riscv_xlen == 32
+	return BString("BOOTRISCV32");
+#elif defined(__riscv) && __riscv_xlen == 64
+	return BString("BOOTRISCV64");
+#elif defined(__powerpc__)
+	return BString("BOOTPPC");
+#else
+	#error "Error: Unknown EFI Architecture!"
+#endif
+}
 
 
 void
-WorkerThread::ScanDisksPartitions(BMenu *srcMenu, BMenu *targetMenu)
+WorkerThread::InstallEFILoader(partition_id id, bool rename)
+{
+	// Executed in window thread.
+	BDiskDevice device;
+	BPartition* partition;
+	BDirectory destDir;
+	BPath loaderPath;
+	BFile loaderToCopy;
+	BFile loaderDest;
+	BPath destPath;
+	BEntry existingEntry;
+	off_t size;
+	BString errText;
+	status_t err = B_OK;
+
+	BString archLoader = arch_efi_default_prefix();
+	archLoader.Append(".EFI");
+	BString archLoaderBackup = arch_efi_default_prefix();
+	archLoaderBackup.Append("_old.EFI");
+
+	if (find_directory(B_SYSTEM_DIRECTORY, &loaderPath) != B_OK
+		|| loaderPath.Append("haiku_loader.efi") != B_OK
+		|| loaderToCopy.SetTo(loaderPath.Path(), B_READ_ONLY) != B_OK
+		|| loaderToCopy.InitCheck() != B_OK
+		|| loaderToCopy.GetSize(&size) != B_OK)
+		errText.SetTo(B_TRANSLATE("Failed to find EFI loader file!"));
+
+	char* buffer = new char[size];
+	if (errText.IsEmpty() && loaderToCopy.Read(buffer, size) != size)
+		errText.SetTo(B_TRANSLATE("Failed to read EFI loader file!"));
+
+	if (errText.IsEmpty()
+		&& (fDDRoster.GetPartitionWithID(id, &device, &partition) != B_OK
+		|| (!partition->IsMounted() && partition->Mount() != B_OK)
+		|| partition->GetMountPoint(&destPath) != B_OK))
+		errText.SetTo(B_TRANSLATE("Failed to access installation destination!"));
+
+	if (errText.IsEmpty()
+		&& (destPath.Append("EFI/BOOT") != B_OK
+		|| create_directory(destPath.Path(), 0755) != B_OK
+		|| destDir.SetTo(destPath.Path()) != B_OK
+		|| destDir.InitCheck() != B_OK))
+		errText.SetTo(B_TRANSLATE("Failed to create EFI loader directory!"));
+
+	if (errText.IsEmpty() && rename
+		&& (destDir.FindEntry(archLoader, &existingEntry) != B_OK
+		|| existingEntry.Rename(archLoaderBackup, true) != B_OK))
+		errText.SetTo(B_TRANSLATE("Failed to rename existing loader!"));
+
+	if (errText.IsEmpty()
+		&& (err = destDir.CreateFile(archLoader, &loaderDest, true)) == B_FILE_EXISTS) {
+		BAlert* confirmAlert = new BAlert("", B_TRANSLATE("An EFI loader is already installed "
+			"on the selected partition! Would you like to rename it?"),
+			B_TRANSLATE("Rename"), B_TRANSLATE("Cancel"));
+		confirmAlert->SetFlags(confirmAlert->Flags() | B_CLOSE_ON_ESCAPE);
+		if (confirmAlert->Go() == 0)
+			InstallEFILoader(id, true);
+		delete[] buffer;
+		return;
+	} else if (errText.IsEmpty() && (err != B_OK || loaderDest.Write(buffer, size) != size))
+		errText.SetTo(B_TRANSLATE("Failed to copy EFI loader to selected partition!"));
+
+	delete[] buffer;
+	BAlert* alert = new BAlert("", B_TRANSLATE("EFI loader successfully installed!"),
+		B_TRANSLATE("OK"));
+	alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+	alert->SetType(B_INFO_ALERT);
+	if (!errText.IsEmpty()) {
+		alert->SetType(B_STOP_ALERT);
+		alert->SetText(errText);
+	}
+	alert->Go();
+}
+
+
+void
+WorkerThread::ScanDisksPartitions(BMenu *srcMenu, BMenu *targetMenu, BMenu* EFIMenu)
 {
 	// NOTE: This is actually executed in the window thread.
 	BDiskDevice device;
@@ -242,6 +357,16 @@ WorkerThread::ScanDisksPartitions(BMenu *srcMenu, BMenu *targetMenu)
 
 	TargetVisitor targetVisitor(targetMenu);
 	fDDRoster.VisitEachPartition(&targetVisitor, &device, &partition);
+
+	BDiskDevice bootDevice;
+	BPartition* bootPartition;
+	partition_id bootId = -1;
+	if (fDDRoster.FindPartitionByMountPoint(BOOT_PATH, &bootDevice, &bootPartition) == B_OK
+		&& bootPartition->Parent() != NULL)
+		bootId = bootPartition->Parent()->ID();
+
+	EFIVisitor EFIVisitor(EFIMenu, bootId);
+	fDDRoster.VisitEachPartition(&EFIVisitor, &device, &partition);
 }
 
 
@@ -428,9 +553,11 @@ WorkerThread::_PerformInstall(partition_id sourcePartitionID,
 
 	// check not installing on boot volume
 	if (strncmp(BOOT_PATH, targetDirectory.Path(), strlen(BOOT_PATH)) == 0) {
-		BAlert* alert = new BAlert("", B_TRANSLATE("Are you sure you want to "
-			"install onto the current boot disk? The Installer will have to "
-			"reboot your machine if you proceed."), B_TRANSLATE("OK"),
+		BString text(B_TRANSLATE("Are you sure you want to "
+		"install onto the current boot disk? The %appname% will have to "
+		"reboot your machine if you proceed."));
+		text.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("Installer"));
+		BAlert* alert = new BAlert("", text, B_TRANSLATE("OK"),
 			B_TRANSLATE("Cancel"), 0, B_WIDTH_AS_USUAL, B_STOP_ALERT);
 		alert->SetShortcut(1, B_ESCAPE);
 		if (alert->Go() != 0) {
@@ -793,7 +920,7 @@ WorkerThread::_SetStatusMessage(const char *status)
 
 static void
 make_partition_label(BPartition* partition, char* label, char* menuLabel,
-	bool showContentType)
+	bool showContentType, bool markBootDisk)
 {
 	char size[20];
 	string_for_size(partition->Size(), size, sizeof(size));
@@ -801,19 +928,24 @@ make_partition_label(BPartition* partition, char* label, char* menuLabel,
 	BPath path;
 	partition->GetPath(&path);
 
+	BString bootMark("");
+	if (markBootDisk)
+		bootMark.SetTo(B_TRANSLATE_COMMENT(" (boot disk)",
+			"Marks EFI partitions on boot disk - preserve leading space"));
+
 	if (showContentType) {
 		const char* type = partition->ContentType();
 		if (type == NULL)
-			type = B_TRANSLATE_COMMENT("Unknown Type", "Partition content type");
+			type = B_TRANSLATE_COMMENT("Unknown type", "Partition content type");
 
-		sprintf(label, "%s - %s [%s] (%s)", partition->ContentName().String(), size,
-			path.Path(), type);
+		sprintf(label, "%s%s - %s [%s] (%s)", partition->ContentName().String(), bootMark.String(),
+			size, path.Path(), type);
 	} else {
-		sprintf(label, "%s - %s [%s]", partition->ContentName().String(), size,
-			path.Path());
+		sprintf(label, "%s%s - %s [%s]", partition->ContentName().String(), bootMark.String(),
+			size, path.Path());
 	}
 
-	sprintf(menuLabel, "%s - %s", partition->ContentName().String(), size);
+	sprintf(menuLabel, "%s%s - %s", partition->ContentName().String(), bootMark.String(), size);
 }
 
 
@@ -862,7 +994,7 @@ SourceVisitor::Visit(BPartition *partition, int32 level)
 
 	char label[255];
 	char menuLabel[255];
-	make_partition_label(partition, label, menuLabel, false);
+	make_partition_label(partition, label, menuLabel, false, false);
 	PartitionMenuItem* item = new PartitionMenuItem(partition->ContentName(),
 		label, menuLabel, new BMessage(SOURCE_PARTITION), partition->ID());
 	item->SetMarked(isBootPartition);
@@ -924,7 +1056,7 @@ TargetVisitor::Visit(BPartition *partition, int32 level)
 
 	char label[255];
 	char menuLabel[255];
-	make_partition_label(partition, label, menuLabel, !isValidTarget);
+	make_partition_label(partition, label, menuLabel, !isValidTarget, false);
 	PartitionMenuItem* item = new PartitionMenuItem(partition->ContentName(),
 		label, menuLabel, new BMessage(TARGET_PARTITION), partition->ID());
 
@@ -935,3 +1067,49 @@ TargetVisitor::Visit(BPartition *partition, int32 level)
 	return false;
 }
 
+
+// #pragma mark - EFIVisitor
+
+
+EFIVisitor::EFIVisitor(BMenu *menu, partition_id bootId)
+	:
+	fMenu(menu),
+	fBootId(bootId)
+{
+}
+
+
+bool
+EFIVisitor::Visit(BDiskDevice *device)
+{
+	if (device->IsReadOnlyMedia())
+		return false;
+	return Visit(device, 0);
+}
+
+
+bool
+EFIVisitor::Visit(BPartition *partition, int32 level)
+{
+	// Makes sure this is a large enough writeable FAT32 non-extended EFI partition on a GUID disk
+	if (partition->IsReadOnly()
+		|| partition->ContentSize() < 1024 * 1024
+		|| partition->CountChildren() > 0
+		|| partition->Type() == NULL
+		|| strcmp(partition->Type(), "EFI system data") != 0
+		|| partition->ContentType() == NULL
+		|| strcmp(partition->ContentType(), kPartitionTypeFAT32) != 0
+		|| partition->Parent() == NULL
+		|| partition->Parent()->ContentType() == NULL
+		|| strcmp(partition->Parent()->ContentType(), kPartitionTypeEFI) != 0)
+		return false;
+
+	char label[255];
+	char menuLabel[255];
+	make_partition_label(partition, label, menuLabel, false, partition->Parent()->ID() == fBootId);
+	BMessage* message = new BMessage(EFI_PARTITION);
+	message->AddInt32("id", partition->ID());
+	BMenuItem* item = new BMenuItem(label, message);
+	fMenu->AddItem(item);
+	return false;
+}

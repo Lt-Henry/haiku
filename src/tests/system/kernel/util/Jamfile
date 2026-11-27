@@ -4,6 +4,7 @@ AddSubDirSupportedPlatforms libbe_test ;
 
 UsePrivateHeaders [ FDirName kernel util ] ;
 UsePrivateHeaders [ FDirName kernel ] ;
+UsePrivateHeaders [ FDirName util ] ;
 UseHeaders [ FDirName $(HAIKU_TOP) src tests kits app ] ;
 
 SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src system kernel util ] ;
@@ -11,7 +12,8 @@ SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src system kernel util ] ;
 UnitTestLib libkernelutilstest.so
 	: KernelUtilsTestAddon.cpp
 #	  AVLTreeMapTest.cpp
-	  BOpenHashTableTest.cpp
+	  ConvertUTFTest.cpp
+	  OpenHashTableTest.cpp
 	  BitmapTest.cpp
 	  SinglyLinkedListTest.cpp
 	  DoublyLinkedListTest.cpp
@@ -20,6 +22,7 @@ UnitTestLib libkernelutilstest.so
 	  VectorTest.cpp
 
 	  Bitmap.cpp
+	  convertutf.cpp
 	: [ TargetLibstdc++ ] be
 ;
 

@@ -6,6 +6,7 @@
  *		Axel Dörfler, axeld@pinc-software.de
  *		Erik Jaesler, erik@cgsoftware.com
  *		John Scipione, jscipione@gmail.com
+ *		Ron Ben Aroya, sed4906birdie@gmail.com
  */
 
 
@@ -18,6 +19,7 @@
 
 #include <stdio.h>
 
+#include <Beep.h>
 #include <Bitmap.h>
 #include <Button.h>
 #include <ControlLook.h>
@@ -25,6 +27,7 @@
 #include <FindDirectory.h>
 #include <IconUtils.h>
 #include <LayoutBuilder.h>
+#include <MediaSounds.h>
 #include <MenuField.h>
 #include <MessageFilter.h>
 #include <Path.h>
@@ -42,6 +45,12 @@
 #else
 #	define FTRACE(x) ;
 #endif
+
+
+using namespace BPrivate;
+
+
+namespace BPrivate {
 
 
 class TAlertView : public BView {
@@ -77,6 +86,9 @@ public:
 private:
 			BAlert*				fAlert;
 };
+
+
+}	// namespace BPrivate
 
 
 static const unsigned int kAlertButtonMsg = 'ALTB';
@@ -279,6 +291,7 @@ BAlert::Go()
 
 	_Prepare();
 	Show();
+	_PlaySound();
 
 	if (window != NULL) {
 		status_t status;
@@ -316,6 +329,7 @@ BAlert::Go(BInvoker* invoker)
 	fInvoker = invoker;
 	_Prepare();
 	Show();
+	_PlaySound();
 	return B_OK;
 }
 
@@ -651,6 +665,26 @@ BAlert::_Prepare()
 
 	MoveTo(static_cast<BWindow*>(this)->AlertPosition(frame));
 		// Hidden by BAlert::AlertPosition()
+}
+
+
+void
+BAlert::_PlaySound()
+{
+	switch (Type()) {
+		case B_INFO_ALERT:
+			system_beep(MEDIA_SOUNDS_INFORMATION_ALERT);
+			break;
+		case B_WARNING_ALERT:
+			system_beep(MEDIA_SOUNDS_IMPORTANT_ALERT);
+			break;
+		case B_STOP_ALERT:
+			system_beep(MEDIA_SOUNDS_ERROR_ALERT);
+			break;
+
+		default:
+			break;
+	}
 }
 
 

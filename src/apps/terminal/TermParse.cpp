@@ -50,10 +50,10 @@ extern int gIgnoreTable[];			/* ignore table */
 extern int gIesTable[];				/* ignore ESC table */
 extern int gEscIgnoreTable[];		/* ESC ignore table */
 
-extern const char* gLineDrawGraphSet[]; /* may be used for G0, G1, G2, G3 */
+extern const char* gLineDrawCharacterSet[]; /* may be used for G0, G1, G2, G3 */
 
 #define DEFAULT -1
-#define NPARAM 10		// Max parameters
+#define NPARAM 16 // Max parameters is 16 as per DEC STD-070 page 2-7.
 
 
 //! Get char from pty reader buffer.
@@ -77,6 +77,10 @@ TermParse::_NextParseChar()
 
 TermParse::TermParse(int fd)
 	:
+	fCurrentGL(0),
+	fCurrentGR(0),
+	fSavedGL(0),
+	fSavedGR(0),
 	fFd(fd),
 	fParseThread(-1),
 	fReaderThread(-1),
@@ -89,6 +93,10 @@ TermParse::TermParse(int fd)
 	fBuffer(NULL),
 	fQuitting(true)
 {
+	for (int i = 0; i < 4; i++) {
+		fCharacterSets[i] = NULL;
+		fSavedCharacterSets[i] = NULL;
+	}
 	memset(fReadBuffer, 0, READ_BUF_SIZE);
 	memset(fParserBuffer, 0, ESC_PARSER_BUFFER_SIZE);
 }
@@ -383,11 +391,6 @@ TermParse::EscParse()
 	int *groundtable = gUTF8GroundTable;
 	int *parsestate = gUTF8GroundTable;
 
-	// handle alternative character sets G0 - G4
-	const char** graphSets[4] = { NULL, NULL, NULL, NULL };
-	int curGL = 0;
-	int curGR = 0;
-
 	BAutolock locker(fBuffer);
 
 	while (!fQuitting) {
@@ -411,13 +414,12 @@ TermParse::EscParse()
 			switch (parsestate[c]) {
 				case CASE_PRINT:
 				{
-					int curGS = c < 128 ? curGL : curGR;
-					const char** curGraphSet = graphSets[curGS];
-					if (curGraphSet != NULL) {
+					int curGS = c < 128 ? fCurrentGL : fCurrentGR;
+					const char** curCharacterSet = fCharacterSets[curGS];
+					if (curCharacterSet != NULL) {
 						int offset = c - (c < 128 ? 0x20 : 0xA0);
-						if (offset >= 0 && offset < 96
-							&& curGraphSet[offset] != 0) {
-							fBuffer->InsertChar(curGraphSet[offset]);
+						if (offset >= 0 && offset < 96 && curCharacterSet[offset] != 0) {
+							fBuffer->InsertChar(curCharacterSet[offset]);
 							break;
 						}
 					}
@@ -557,10 +559,10 @@ TermParse::EscParse()
 						char page = _NextParseChar();
 						switch (page) {
 							case '0':
-								graphSets[set] = gLineDrawGraphSet;
+								fCharacterSets[set] = gLineDrawCharacterSet;
 								break;
 							default:
-								graphSets[set] = NULL;
+								fCharacterSets[set] = NULL;
 								break;
 						}
 					}
@@ -607,13 +609,13 @@ TermParse::EscParse()
 
 				case CASE_LS1:
 					/* select G1 into GL */
-					curGL = 1;
+					fCurrentGL = 1;
 					parsestate = groundtable;
 					break;
 
 				case CASE_LS0:
 					/* select G0 into GL */
-					curGL = 0;
+					fCurrentGL = 0;
 					parsestate = groundtable;
 					break;
 
@@ -644,6 +646,19 @@ TermParse::EscParse()
 					// part of change cursor style DECSCUSR
 					if (nparam < NPARAM)
 						param[nparam++] = ' ';
+					break;
+
+				case CASE_CSI_EXCL: // ESC [N p
+					// part of soft reset DECSTR
+					if (nparam < NPARAM)
+						param[nparam++] = '!';
+					break;
+
+				case CASE_CSI_DOL: // ESC [N p
+				case CASE_DEC_DOL: // ESC [? N p
+					// part of change cursor style DECRQM
+					if (nparam < NPARAM)
+						param[nparam++] = '$';
 					break;
 
 				case CASE_DEC_STATE:
@@ -770,15 +785,27 @@ TermParse::EscParse()
 
 				case CASE_SET:
 					/* SET */
-					if (param[0] == 4)
-						fBuffer->SetInsertMode(MODE_INSERT);
+					switch (param[0]) {
+						case 4:
+							fBuffer->SetInsertMode(MODE_INSERT);
+							break;
+						case 20:
+							fBuffer->SetMode(MODE_LINEFEED_NEWLINE);
+							break;
+					}
 					parsestate = groundtable;
 					break;
 
 				case CASE_RST:
 					/* RST */
-					if (param[0] == 4)
-						fBuffer->SetInsertMode(MODE_OVER);
+					switch (param[0]) {
+						case 4:
+							fBuffer->SetInsertMode(MODE_OVER);
+							break;
+						case 20:
+							fBuffer->ResetMode(MODE_LINEFEED_NEWLINE);
+							break;
+					}
 					parsestate = groundtable;
 					break;
 
@@ -794,7 +821,6 @@ TermParse::EscParse()
 								break;
 
 							case 1: /* Bold     */
-							case 5:
 								attributes |= BOLD;
 								break;
 
@@ -828,8 +854,15 @@ TermParse::EscParse()
 									attributes.SetUnder(SINGLE_UNDERLINE);
 								break;
 
+							case 5: /* Blink: not yet supported */
+								break;
+
 							case 7:	/* Inverse	*/
 								attributes |= INVERSE;
+								break;
+
+							case 8:	/* Hidden	*/
+								attributes |= HIDDEN;
 								break;
 
 							case 21:	/* Double Underline	*/
@@ -844,19 +877,25 @@ TermParse::EscParse()
 								attributes.UnsetUnder();
 								break;
 
+							case 25: /* Not Blink: not yet supported */
+								break;
+
 							case 27:	/* Not Inverse	*/
 								attributes &= ~INVERSE;
 								break;
 
-							case 90:
-							case 91:
-							case 92:
-							case 93:
-							case 94:
-							case 95:
-							case 96:
-							case 97:
-								param[row] -= 60;
+							case 28:	/* Not Hidden	*/
+								attributes &= ~HIDDEN;
+								break;
+
+							case 53:	/* Overline	*/
+								attributes |= OVERLINE;
+								break;
+
+							case 55:	/* Not Overline	*/
+								attributes &= ~OVERLINE;
+								break;
+
 							case 30:
 							case 31:
 							case 32:
@@ -865,6 +904,7 @@ TermParse::EscParse()
 							case 35:
 							case 36:
 							case 37:
+								// Use the normal ANSI colors (indexed 0-7) for foreground.
 								attributes.SetIndexedForeground(param[row] - 30);
 								break;
 
@@ -887,15 +927,6 @@ TermParse::EscParse()
 								attributes.UnsetForeground();
 								break;
 
-							case 100:
-							case 101:
-							case 102:
-							case 103:
-							case 104:
-							case 105:
-							case 106:
-							case 107:
-								param[row] -= 60;
 							case 40:
 							case 41:
 							case 42:
@@ -904,6 +935,7 @@ TermParse::EscParse()
 							case 45:
 							case 46:
 							case 47:
+								// Use the normal ANSI colors (indexed 0-7) for background.
 								attributes.SetIndexedBackground(param[row] - 40);
 								break;
 
@@ -943,6 +975,30 @@ TermParse::EscParse()
 
 							case 59:
 								attributes.UnsetUnderline();
+								break;
+
+							case 90:
+							case 91:
+							case 92:
+							case 93:
+							case 94:
+							case 95:
+							case 96:
+							case 97:
+								// Use the bright ANSI colors (indexed 8-15) for foreground.
+								attributes.SetIndexedForeground(param[row] - 90 + 8);
+								break;
+
+							case 100:
+							case 101:
+							case 102:
+							case 103:
+							case 104:
+							case 105:
+							case 106:
+							case 107:
+								// Use the bright ANSI colors (indexed 8-15) for background.
+								attributes.SetIndexedBackground(param[row] - 100 + 8);
 								break;
 						}
 					}
@@ -1009,8 +1065,13 @@ TermParse::EscParse()
 								break;
 						}
 
-						if (style != -1)
-							fBuffer->SetCursorStyle(style, blinking);
+						if (style != -1) {
+							fBuffer->SetCursorStyle(style);
+							if (blinking)
+								fBuffer->SetMode(MODE_CURSOR_BLINKING);
+							else
+								fBuffer->ResetMode(MODE_CURSOR_BLINKING);
+						}
 					}
 					parsestate = groundtable;
 					break;
@@ -1051,13 +1112,13 @@ TermParse::EscParse()
 
 				case CASE_DECSC:
 					/* DECSC */
-					fBuffer->SaveCursor();
+					_SaveCursor();
 					parsestate = groundtable;
 					break;
 
 				case CASE_DECRC:
 					/* DECRC */
-					fBuffer->RestoreCursor();
+					_RestoreCursor();
 					parsestate = groundtable;
 					break;
 
@@ -1153,35 +1214,41 @@ TermParse::EscParse()
 					}
 
 				case CASE_RIS:		// ESC c ... Reset terminal.
+					_DecSoftTerminalReset();
+
+					// Additional things reset that are not changed by soft terminal reset.
+					fBuffer->Clear(true);
+					fBuffer->SetDefaultTabStops(TAB_WIDTH);
+					parsestate = groundtable;
 					break;
 
 				case CASE_LS2:
 					/* select G2 into GL */
-					curGL = 2;
+					fCurrentGL = 2;
 					parsestate = groundtable;
 					break;
 
 				case CASE_LS3:
 					/* select G3 into GL */
-					curGL = 3;
+					fCurrentGL = 3;
 					parsestate = groundtable;
 					break;
 
 				case CASE_LS3R:
 					/* select G3 into GR */
-					curGR = 3;
+					fCurrentGR = 3;
 					parsestate = groundtable;
 					break;
 
 				case CASE_LS2R:
 					/* select G2 into GR */
-					curGR = 2;
+					fCurrentGR = 2;
 					parsestate = groundtable;
 					break;
 
 				case CASE_LS1R:
 					/* select G1 into GR */
-					curGR = 1;
+					fCurrentGR = 1;
 					parsestate = groundtable;
 					break;
 
@@ -1235,7 +1302,7 @@ TermParse::EscParse()
 					break;
 
 				case CASE_CFT:	// cursor forward tab
-					if ((column= param[0]) < 1)
+					if ((column = param[0]) < 1)
 						column = 1;
 					for (int32 i = 0; i < column; ++i)
 						fBuffer->InsertTab();
@@ -1243,7 +1310,7 @@ TermParse::EscParse()
 					break;
 
 				case CASE_CNL:	// cursor next line
-					if ((row= param[0]) < 1)
+					if ((row = param[0]) < 1)
 						row = 1;
 					fBuffer->SetCursorX(0);
 					fBuffer->MoveCursorDown(row);
@@ -1251,7 +1318,7 @@ TermParse::EscParse()
 					break;
 
 				case CASE_CPL:	// cursor previous line
-					if ((row= param[0]) < 1)
+					if ((row = param[0]) < 1)
 						row = 1;
 					fBuffer->SetCursorX(0);
 					fBuffer->MoveCursorUp(row);
@@ -1261,6 +1328,8 @@ TermParse::EscParse()
 				case CASE_REP:		// ESC [...b repeat last graphic char
 				{
 					int repetitions = param[0];
+					if (repetitions < 1)
+						repetitions = 1;
 					int maxRepetitions = fBuffer->Width() * fBuffer->Height();
 					if (repetitions > maxRepetitions)
 						repetitions = maxRepetitions;
@@ -1269,6 +1338,26 @@ TermParse::EscParse()
 					parsestate = groundtable;
 					break;
 				}
+
+				case CASE_DECRQM:	// DECRQM - request mode to terminal
+					if (nparam == 2 && param[1] == '$') {
+						_DecPrivateModeRequest(param[0]);
+					}
+					parsestate = groundtable;
+					break;
+
+				case CASE_DECSTR:
+					if (nparam == 2 && param[1] == '!') {
+						// DECSTR - soft terminal reset
+						_DecSoftTerminalReset();
+					}
+					if (nparam == 2 && param[1] == '$') {
+						// DECRQM - request ANSI mode
+						_AnsiModeRequest(param[0]);
+					}
+					parsestate = groundtable;
+					break;
+
 				default:
 					break;
 			}
@@ -1278,6 +1367,40 @@ TermParse::EscParse()
 	}
 
 	return B_OK;
+}
+
+
+void
+TermParse::_DecSoftTerminalReset()
+{
+	// DEC STD 070 04 page 31 describes DECSTR. It behaves differently than RIS.
+	// At this level of VT102 conformance it does not: reset tab stops, clear
+	// the display, change screen mode (normal/reverse), scrolling mode
+	// (jump/slow), or 80/132 column selection.
+	Attributes attributes;
+	fBuffer->SetAttributes(attributes);
+	fBuffer->SaveAttributes();
+	fBuffer->SetCursor(0, 0);
+	fBuffer->SaveCursor();
+	fBuffer->SetOriginMode(false);
+	fBuffer->SaveOriginMode();
+	fBuffer->SetInsertMode(MODE_OVER);
+	fBuffer->UseAlternateScreenBuffer(false);
+	fBuffer->SetScrollRegion(0, fBuffer->Height() - 1);
+	fBuffer->ResetMode(MODE_CURSOR_HIDDEN);
+	fBuffer->ResetMode(MODE_APPLICATION_CURSOR_KEYS);
+	fCharacterSets[0] = NULL;
+	fCharacterSets[1] = NULL;
+	fCharacterSets[2] = NULL;
+	fCharacterSets[3] = NULL;
+	fSavedCharacterSets[0] = NULL;
+	fSavedCharacterSets[1] = NULL;
+	fSavedCharacterSets[2] = NULL;
+	fSavedCharacterSets[3] = NULL;
+	fCurrentGL = 0;
+	fCurrentGR = 0;
+	fSavedGL = 0;
+	fSavedGR = 0;
 }
 
 
@@ -1352,6 +1475,45 @@ TermParse::_ReadParserBuffer()
 
 
 void
+TermParse::_SaveCursor()
+{
+	fBuffer->SaveCursor();
+	fBuffer->SaveAttributes();
+	fBuffer->SaveOriginMode();
+	fSavedCharacterSets[0] = fCharacterSets[0];
+	fSavedCharacterSets[1] = fCharacterSets[1];
+	fSavedCharacterSets[2] = fCharacterSets[2];
+	fSavedCharacterSets[3] = fCharacterSets[3];
+	fSavedGL = fCurrentGL;
+	fSavedGR = fCurrentGR;
+}
+
+
+void
+TermParse::_RestoreCursor()
+{
+	fBuffer->RestoreCursor();
+	fBuffer->RestoreAttributes();
+	fBuffer->RestoreOriginMode();
+	fCharacterSets[0] = fSavedCharacterSets[0];
+	fCharacterSets[1] = fSavedCharacterSets[1];
+	fCharacterSets[2] = fSavedCharacterSets[2];
+	fCharacterSets[3] = fSavedCharacterSets[3];
+	fCurrentGL = fSavedGL;
+	fCurrentGR = fSavedGR;
+
+	// STD 070 -05 page 5-190 describes how origin mode restore works with the
+	// scrolling region.
+	if (fBuffer->IsOriginMode()) {
+		if (fBuffer->Cursor().y < fBuffer->GetScrollRegionTop())
+			fBuffer->SetCursorY(fBuffer->GetScrollRegionTop());
+		if (fBuffer->Cursor().y > fBuffer->GetScrollRegionBottom())
+			fBuffer->SetCursorY(fBuffer->GetScrollRegionBottom());
+	}
+}
+
+
+void
 TermParse::_DeviceStatusReport(int n)
 {
 	char sbuf[16] ;
@@ -1368,9 +1530,9 @@ TermParse::_DeviceStatusReport(int n)
 			}
 		case 6:
 			// Cursor position report requested
-			len = snprintf(sbuf, sizeof(sbuf),
-				"\033[%" B_PRId32 ";%" B_PRId32 "R",
-				fBuffer->Cursor().y + 1,
+			len = snprintf(sbuf, sizeof(sbuf), "\033[%" B_PRId32 ";%" B_PRId32 "R",
+				fBuffer->Cursor().y - (fBuffer->IsOriginMode() ? fBuffer->GetScrollRegionTop() : 0)
+					+ 1,
 				fBuffer->Cursor().x + 1);
 			write(fFd, sbuf, len);
 			break ;
@@ -1409,30 +1571,40 @@ TermParse::_DecPrivateModeSet(int value)
 {
 	switch (value) {
 		case 1:
-			// Application Cursor Keys (whatever that means).
-			// Not supported yet.
+			// Select Application Cursor Keys.
+			fBuffer->SetMode(MODE_APPLICATION_CURSOR_KEYS);
+			break;
+		case 3:
+			// Select 132 Column mode.
+			// We don't support the actual mode change, but the side effects should be honored:
+			// clear screen, reset scrolling region, home cursor.
+			fBuffer->EraseAll();
+			fBuffer->SetCursor(0, 0);
+			fBuffer->SetScrollRegion(0, fBuffer->Height() - 1);
 			break;
 		case 5:
-			// Reverse Video (inverses colors for the complete screen
-			// -- when followed by normal video, that's shortly flashes the
-			// screen).
-			// Not supported yet.
+			// Set Screen Reverse Video Mode.
+			fBuffer->SetScreenReverseVideoMode(true);
 			break;
 		case 6:
 			// Set Origin Mode.
 			fBuffer->SetOriginMode(true);
 			break;
+		case 7:
+			// Set Auto Wrap Mode.
+			fBuffer->SetAutoWrapMode(true);
+			break;
 		case 9:
 			// Set Mouse X and Y on button press.
-			fBuffer->ReportX10MouseEvent(true);
+			fBuffer->SetMouseMode(MOUSE_MODE_X10);
 			break;
 		case 12:
 			// Start Blinking Cursor.
-			fBuffer->SetCursorBlinking(true);
+			fBuffer->SetMode(MODE_CURSOR_BLINKING);
 			break;
 		case 25:
 			// Show Cursor.
-			fBuffer->SetCursorHidden(false);
+			fBuffer->ResetMode(MODE_CURSOR_HIDDEN);
 			break;
 		case 47:
 			// Use Alternate Screen Buffer.
@@ -1440,28 +1612,36 @@ TermParse::_DecPrivateModeSet(int value)
 			break;
 		case 1000:
 			// Send Mouse X & Y on button press and release.
-			fBuffer->ReportNormalMouseEvent(true);
+			fBuffer->SetMouseMode(MOUSE_MODE_NORMAL);
 			break;
 		case 1002:
 			// Send Mouse X and Y on button press and release, and on motion
 			// when the mouse enter a new cell
-			fBuffer->ReportButtonMouseEvent(true);
+			fBuffer->SetMouseMode(MOUSE_MODE_BUTTON_EVENT);
 			break;
 		case 1003:
 			// Use All Motion Mouse Tracking
-			fBuffer->ReportAnyMouseEvent(true);
+			fBuffer->SetMouseMode(MOUSE_MODE_ANY_EVENT);
+			break;
+		case 1005:
+			// Enable extended mouse coordinates with UTF-8 scheme
+			fBuffer->SetMouseProtocol(MOUSE_PROTOCOL_UTF8);
 			break;
 		case 1006:
 			// Enable extended mouse coordinates with SGR scheme
-			fBuffer->EnableExtendedMouseCoordinates(true);
+			fBuffer->SetMouseProtocol(MOUSE_PROTOCOL_SGR);
+			break;
+		case 1007:
+			// Enable alternate scroll
+			fBuffer->SetMode(MODE_ALTERNATE_SCROLL);
 			break;
 		case 1034:
 			// Interpret "meta" key, sets eighth bit.
-			fBuffer->EnableInterpretMetaKey(true);
+			fBuffer->SetMode(MODE_INTERPRET_META_KEY);
 			break;
 		case 1036:
 			// Send ESC when Meta modifies a key
-			fBuffer->EnableMetaKeySendsEscape(true);
+			fBuffer->SetMode(MODE_META_KEY_SENDS_ESCAPE);
 			break;
 		case 1039:
 			// TODO: Send ESC when Alt modifies a key
@@ -1475,7 +1655,7 @@ TermParse::_DecPrivateModeSet(int value)
 			break;
 		case 2004:
 			// Enable bracketed paste mode
-			fBuffer->EnableBracketedPasteMode(true);
+			fBuffer->SetMode(MODE_BRACKETED_PASTE);
 			break;
 	}
 }
@@ -1486,36 +1666,44 @@ TermParse::_DecPrivateModeReset(int value)
 {
 	switch (value) {
 		case 1:
-			// Normal Cursor Keys (whatever that means).
-			// Not supported yet.
+			// Select ANSI Cursor Keys.
+			fBuffer->ResetMode(MODE_APPLICATION_CURSOR_KEYS);
 			break;
 		case 3:
-			// 80 Column Mode.
-			// Not supported yet.
+			// Select 80 Column mode.
+			// We don't support the actual mode change, but the side effects should be honored:
+			// clear screen, reset scrolling region, home cursor.
+			fBuffer->EraseAll();
+			fBuffer->SetCursor(0, 0);
+			fBuffer->SetScrollRegion(0, fBuffer->Height() - 1);
 			break;
 		case 4:
 			// Jump (Fast) Scroll.
 			// Not supported yet.
 			break;
 		case 5:
-			// Normal Video (Leaves Reverse Video, cf. there).
-			// Not supported yet.
+			// Reset Screen Reverse Video Mode.
+			fBuffer->SetScreenReverseVideoMode(false);
 			break;
 		case 6:
 			// Reset Origin Mode.
 			fBuffer->SetOriginMode(false);
 			break;
+		case 7:
+			// Reset Auto Wrap Mode.
+			fBuffer->SetAutoWrapMode(false);
+			break;
 		case 9:
 			// Disable Mouse X and Y on button press.
-			fBuffer->ReportX10MouseEvent(false);
+			fBuffer->SetMouseMode(MOUSE_MODE_OFF);
 			break;
 		case 12:
 			// Stop Blinking Cursor.
-			fBuffer->SetCursorBlinking(false);
+			fBuffer->ResetMode(MODE_CURSOR_BLINKING);
 			break;
 		case 25:
 			// Hide Cursor
-			fBuffer->SetCursorHidden(true);
+			fBuffer->SetMode(MODE_CURSOR_HIDDEN);
 			break;
 		case 47:
 			// Use Normal Screen Buffer.
@@ -1523,28 +1711,38 @@ TermParse::_DecPrivateModeReset(int value)
 			break;
 		case 1000:
 			// Don't send Mouse X & Y on button press and release.
-			fBuffer->ReportNormalMouseEvent(false);
+			fBuffer->SetMouseMode(MOUSE_MODE_OFF);
 			break;
 		case 1002:
 			// Don't send Mouse X and Y on button press and release, and on motion
 			// when the mouse enter a new cell
-			fBuffer->ReportButtonMouseEvent(false);
+			fBuffer->SetMouseMode(MOUSE_MODE_OFF);
 			break;
 		case 1003:
 			// Disable All Motion Mouse Tracking.
-			fBuffer->ReportAnyMouseEvent(false);
+			fBuffer->SetMouseMode(MOUSE_MODE_OFF);
+			break;
+		case 1005:
+			// Disable extended mouse coordinates with UTF8 scheme
+			if (fBuffer->IsMouseProtocol(MOUSE_PROTOCOL_UTF8))
+				fBuffer->SetMouseProtocol(MOUSE_PROTOCOL_X10);
 			break;
 		case 1006:
 			// Disable extended mouse coordinates with SGR scheme
-			fBuffer->EnableExtendedMouseCoordinates(false);
+			if (fBuffer->IsMouseProtocol(MOUSE_PROTOCOL_SGR))
+				fBuffer->SetMouseProtocol(MOUSE_PROTOCOL_X10);
+			break;
+		case 1007:
+			// Disable alternate scroll
+			fBuffer->ResetMode(MODE_ALTERNATE_SCROLL);
 			break;
 		case 1034:
 			// Don't interpret "meta" key.
-			fBuffer->EnableInterpretMetaKey(false);
+			fBuffer->ResetMode(MODE_INTERPRET_META_KEY);
 			break;
 		case 1036:
 			// Don't send ESC when Meta modifies a key
-			fBuffer->EnableMetaKeySendsEscape(false);
+			fBuffer->ResetMode(MODE_META_KEY_SENDS_ESCAPE);
 			break;
 		case 1039:
 			// TODO: Don't send ESC when Alt modifies a key
@@ -1557,9 +1755,131 @@ TermParse::_DecPrivateModeReset(int value)
 			break;
 		case 2004:
 			// Disable bracketed paste mode
-			fBuffer->EnableBracketedPasteMode(false);
+			fBuffer->ResetMode(MODE_BRACKETED_PASTE);
 			break;
 	}
+}
+
+
+void
+TermParse::_DecPrivateModeRequest(int value)
+{
+	BString reply;
+	switch (value) {
+		case 1:
+			// Request Application Cursor Keys mode
+			reply.SetToFormat("\033[?1;%u$y",
+				fBuffer->IsMode(MODE_APPLICATION_CURSOR_KEYS) ? 1 : 2);
+			break;
+		case 2:
+			// ANSI Compatibility mode. Report this as permanently set: currently we do not support
+			// VT52 sub-mode.
+			reply.SetTo("\033[?2;3$y");
+			break;
+		case 3:
+			// 80/132 Columns mode. Report this as permanently reset: currently we do not support
+			// switching to 132 column mode.
+			reply.SetTo("\033[?3;4$y");
+			break;
+		case 5:
+			// Request Screen Reverse Video mode
+			reply.SetToFormat("\033[?5;%u$y", fBuffer->IsScreenReverseVideoMode() ? 1 : 2);
+			break;
+		case 6:
+			// Request Origin mode
+			reply.SetToFormat("\033[?6;%u$y", fBuffer->IsOriginMode() ? 1 : 2);
+			break;
+		case 7:
+			// Request Auto Wrap mode
+			reply.SetToFormat("\033[?7;%u$y", fBuffer->IsAutoWrapMode() ? 1 : 2);
+			break;
+		case 9:
+			// Request X10 mouse mode
+			reply.SetToFormat("\033[?9;%u$y", fBuffer->IsMouseMode(MOUSE_MODE_X10) ? 1 : 2);
+			break;
+		case 12:
+			// Request cursor blinking mode
+			reply.SetToFormat("\033[?12;%u$y", fBuffer->IsMode(MODE_CURSOR_BLINKING) ? 1 : 2);
+			break;
+		case 25:
+			// Request hidden cursor mode
+			reply.SetToFormat("\033[?25;%u$y", fBuffer->IsMode(MODE_CURSOR_HIDDEN) ? 1 : 2);
+			break;
+		case 1000:
+			// Request normal tracking mouse mode
+			reply.SetToFormat("\033[?1000;%u$y", fBuffer->IsMouseMode(MOUSE_MODE_NORMAL) ? 1 : 2);
+			break;
+		case 1002:
+			// Request button-event mouse mode
+			reply.SetToFormat("\033[?1002;%u$y",
+				fBuffer->IsMouseMode(MOUSE_MODE_BUTTON_EVENT) ? 1 : 2);
+			break;
+		case 1003:
+			// Request any-event mouse mode
+			reply.SetToFormat("\033[?1003;%u$y",
+				fBuffer->IsMouseMode(MOUSE_MODE_ANY_EVENT) ? 1 : 2);
+			break;
+		case 1005:
+			// Request extended mouse coordinates with UTF8 scheme
+			reply.SetToFormat("\033[?1005;%u$y",
+				fBuffer->IsMouseProtocol(MOUSE_PROTOCOL_UTF8) ? 1 : 2);
+			break;
+		case 1006:
+			// Request extended mouse coordinates with SGR scheme
+			reply.SetToFormat("\033[?1006;%u$y",
+				fBuffer->IsMouseProtocol(MOUSE_PROTOCOL_SGR) ? 1 : 2);
+			break;
+		case 1007:
+			// Request alternate scroll mode
+			reply.SetToFormat("\033[?1007;%u$y", fBuffer->IsMode(MODE_ALTERNATE_SCROLL) ? 1 : 2);
+			break;
+		case 1034:
+			// Request interpret meta key
+			reply.SetToFormat("\033[?1034;%u$y", fBuffer->IsMode(MODE_INTERPRET_META_KEY) ? 1 : 2);
+			break;
+		case 1036:
+			// Request meta sends escape
+			reply.SetToFormat("\033[?1036;%u$y",
+				fBuffer->IsMode(MODE_META_KEY_SENDS_ESCAPE) ? 1 : 2);
+			break;
+		case 1049:
+			// Request alt screen buffer
+			reply.SetToFormat("\033[?1049;%u$y", fBuffer->IsAlternateScreenActive() ? 1 : 2);
+			break;
+		case 2004:
+			// Request bracketed paste mode
+			reply.SetToFormat("\033[?2004;%u$y", fBuffer->IsMode(MODE_BRACKETED_PASTE) ? 1 : 2);
+			break;
+		default:
+			// Unsupported option
+			reply.SetToFormat("\033[?%u;0$y", value);
+			break;
+	}
+	_WriteReply(reply);
+}
+
+
+void
+TermParse::_AnsiModeRequest(int value)
+{
+	BString reply;
+	switch (value) {
+		case 4:
+			reply.SetToFormat("\033[4;%u$y", fBuffer->IsMode(MODE_INSERT) ? 1 : 2);
+			break;
+		case 12:
+			// Reply with permanently set: we do not support half-duplex / local echo.
+			reply.SetTo("\033[12;3$y");
+			break;
+		case 20:
+			reply.SetToFormat("\033[20;%u$y", fBuffer->IsMode(MODE_LINEFEED_NEWLINE) ? 1 : 2);
+			break;
+		default:
+			// Unsupported option, report as permanently reset (like xterm)
+			reply.SetToFormat("\033[%u;4$y", value);
+			break;
+	}
+	_WriteReply(reply);
 }
 
 
@@ -1654,8 +1974,43 @@ TermParse::_ProcessOperatingSystemControls(uchar* params)
 				fBuffer->ResetColors(indexes, 1, true);
 			}
 			break;
+		// handle hyperlinks
+		case 8:
+		{
+			char* id = NULL;
+			char* start = (char*)params;
+			char* end = strpbrk(start, ";:");
+			for (; end != NULL; start = end + 1) {
+				end = strpbrk(start, ";:");
+				if (end == NULL)
+					break;
+				if (end - start > 3 && strncmp(start, "id=", 3) == 0)
+					id = strndup(start + 3, end - start + 3);
+				if (*end == ';')
+					break;
+			}
+			if (end == NULL)
+				break;
+			BString uri(end + 1);
+			Attributes attributes = fBuffer->GetAttributes();
+			if (uri.IsEmpty()) {
+				attributes.SetHyperlink(0);
+			} else {
+				attributes.SetHyperlink(fBuffer->PutHyperLink(id, uri));
+			}
+			free(id);
+			fBuffer->SetAttributes(attributes);
+			break;
+		}
 		default:
 		//	printf("%d -> %s\n", mode, params);
 			break;
 	}
+}
+
+
+void
+TermParse::_WriteReply(BString &reply)
+{
+	write(fFd, reply.String(), reply.Length());
 }

@@ -172,6 +172,16 @@ m_get(int how, short type)
 struct mbuf *
 m_get2(int size, int how, short type, int flags)
 {
+	if (size > MJUMPAGESIZE)
+		return NULL;
+
+	return m_get3(size, how, type, flags);
+}
+
+
+struct mbuf *
+m_get3(int size, int how, short type, int flags)
+{
 	if (size <= MHLEN || (size <= MLEN && (flags & M_PKTHDR) == 0)) {
 		return _m_get(how, type, flags);
 	} else if (size <= MCLBYTES) {
@@ -299,8 +309,9 @@ m_free(struct mbuf* memoryBuffer)
 {
 	struct mbuf* next = memoryBuffer->m_next;
 
-	if ((memoryBuffer->m_flags & (M_PKTHDR|M_NOFREE)) == (M_PKTHDR|M_NOFREE))
+	if ((memoryBuffer->m_flags & M_PKTHDR) != 0)
 		m_tag_delete_chain(memoryBuffer, NULL);
+
 	if (memoryBuffer->m_flags & M_EXT)
 		mb_free_ext(memoryBuffer);
 	else if ((memoryBuffer->m_flags & M_NOFREE) == 0)

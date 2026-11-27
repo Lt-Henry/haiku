@@ -1,4 +1,4 @@
-1	indonesian	x-vnd.Haiku-MediaPlayer	100393349
+1	indonesian	x-vnd.Haiku-MediaPlayer	1255288322
 Remove Entry into Trash	MediaPlayer-RemovePLItemsCmd		Hapus Entri ke Sampah
 Close	MediaPlayer-PlaylistWindow		Tutup
 Volume of background clips	MediaPlayer-SettingsWindow		Volume dari klip latar
@@ -24,7 +24,6 @@ Resume:	MediaPlayer-SettingsWindow		Lanjut:
 Duration	MediaPlayer-InfoWin		Durasi
 Import Entries	MediaPlayer-ImportPLItemsCmd		Impor Entri
 Open network stream	MediaPlayer-Main		Buka aliran-data jaringan
-Move file to Trash	MediaPlayer-PlaylistWindow		Pindahkan berkas ke Sampah
 Open file…	MediaPlayer-Main		Buka berkas…
 Scale controls in full screen mode	MediaPlayer-SettingsWindow		Skalakan kontrol dalam mode layar penuh
 View options	MediaPlayer-SettingsWindow		Opsi tampilan
@@ -44,7 +43,6 @@ Close	MediaPlayer-Main		Tutup
 Save error	MediaPlayer-PlaylistWindow		Simpan galat
 Attributes	MediaPlayer-Main		Atribut
 Bottom of screen	MediaPlayer-SettingsWindow		Sisi bawah layar
-MediaPlayer settings	MediaPlayer-SettingsWindow		Pengaturan MediaPlayer
 Copyright	MediaPlayer-InfoWin		Hak cipta
 Invalid URL inserted!	MediaPlayer-NetworkStream		URL yang dimasukkan tidak valid!
 Aspect ratio	MediaPlayer-Main		Rasio aspek

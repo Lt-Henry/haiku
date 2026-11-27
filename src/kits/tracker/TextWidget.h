@@ -49,7 +49,6 @@ class BColumn;
 
 struct MouseUpParams {
 	BPose* 		pose;
-	BRect 		bounds;
 	BPoseView* 	poseView;
 };
 
@@ -59,15 +58,14 @@ public:
 	BTextWidget(Model*, BColumn*, BPoseView*);
 	virtual ~BTextWidget();
 
-	void Draw(BRect widgetRect, BRect widgetTextRect, float width, BPoseView*,
-		bool selected, uint32 clipboardMode);
-	void Draw(BRect widgetRect, BRect widgetTextRect, float width, BPoseView*,
-		BView* drawView, bool selected, uint32 clipboardMode, BPoint offset,
-		bool direct);
+	void Draw(BRect widgetRect, BRect widgetTextRect, BPoseView*, bool selected,
+		uint32 clipboardMode);
+	void Draw(BRect widgetRect, BRect widgetTextRect, BPoseView*, BView* drawView, bool selected,
+		uint32 clipboardMode, BPoint offset);
 		// second call is used for offscreen drawing, where PoseView
 		// and current drawing view are different
 
-	void MouseUp(BRect bounds, BPoseView*, BPose*, BPoint mouseLoc);
+	void DoMouseUp(BPoseView*, BPose*);
 
 	BRect CalcRect(BPoint poseLoc, const BColumn*, const BPoseView*);
 		// returns the rect derived from the formatted string width
@@ -82,9 +80,8 @@ public:
 		// after an update call this to determine the old rect so that
 		// we can invalidate properly
 
-	void StartEdit(BRect bounds, BPoseView*, BPose*);
-	void StopEdit(bool saveChanges, BPoint loc, BPoseView*, BPose*,
-		int32 index);
+	void StartEdit(BPoseView*, BPose*, BColumn*);
+	void StopEdit(bool saveChanges, BPoint loc, BPoseView*, BPose*, int32 index);
 
 	void SelectAll(BPoseView* view);
 	void CheckAndUpdate(BPoint, const BColumn*, BPoseView*, bool visible);
@@ -181,12 +178,12 @@ BTextWidget::SetActive(bool on)
 
 
 inline void
-BTextWidget::Draw(BRect widgetRect, BRect widgetTextRect, float width,
-	BPoseView* view, bool selected, uint32 clipboardMode)
+BTextWidget::Draw(BRect widgetRect, BRect widgetTextRect, BPoseView* view, bool selected,
+	uint32 clipboardMode)
 {
-	Draw(widgetRect, widgetTextRect, width, view, (BView*)view, selected,
-		clipboardMode, B_ORIGIN, true);
+	Draw(widgetRect, widgetTextRect, view, (BView*)view, selected, clipboardMode, B_ORIGIN);
 }
+
 
 } // namespace BPrivate
 

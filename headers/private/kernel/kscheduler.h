@@ -9,7 +9,7 @@
 
 
 #include <cpu.h>
-#include <int.h>
+#include <interrupts.h>
 #include <smp.h>
 #include <thread_types.h>
 
@@ -43,6 +43,11 @@ void scheduler_reschedule(int32 next_state);
 	The thread may be running or may be in the ready-to-run queue.
 */
 int32 scheduler_set_thread_priority(Thread* thread, int32 priority);
+
+/*!	Sets the given thread's CPU affinity.
+	The thread may be running or may be in the ready-to-run queue.
+*/
+void scheduler_set_thread_affinity(Thread* thread, const CPUSet& mask);
 
 /*!	Called when the Thread structure is first created.
 	Per-thread housekeeping resources can be allocated.
@@ -79,12 +84,13 @@ void scheduler_dump_thread_data(Thread* thread);
 
 void scheduler_new_thread_entry(Thread* thread);
 
-void scheduler_set_cpu_enabled(int32 cpu, bool enabled);
+status_t scheduler_set_cpu_enabled(int32 cpu, bool enabled);
 
 void scheduler_add_listener(struct SchedulerListener* listener);
 void scheduler_remove_listener(struct SchedulerListener* listener);
 
 void scheduler_init(void);
+status_t scheduler_loadavg_init();
 void scheduler_enable_scheduling(void);
 void scheduler_update_policy(void);
 
@@ -94,6 +100,9 @@ status_t _user_analyze_scheduling(bigtime_t from, bigtime_t until, void* buffer,
 
 status_t _user_set_scheduler_mode(int32 mode);
 int32 _user_get_scheduler_mode(void);
+
+status_t _user_get_loadavg(struct loadavg* info, size_t size);
+
 
 #ifdef __cplusplus
 }

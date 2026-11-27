@@ -18,7 +18,7 @@
 #include <arch/cpu.h>
 #include <condition_variable.h>
 #include <heap.h>
-#include <int.h>
+#include <interrupts.h>
 #include <kernel.h>
 #include <slab/Slab.h>
 #include <smp.h>
@@ -148,7 +148,7 @@ class SetMinimalCommitment : public VMCacheTraceEntry {
 		SetMinimalCommitment(VMCache* cache, off_t commitment)
 			:
 			VMCacheTraceEntry(cache),
-			fOldCommitment(cache->committed_size),
+			fOldCommitment(cache->Commitment()),
 			fCommitment(commitment)
 		{
 			Initialized();
@@ -638,7 +638,6 @@ VMCache::Init(const char* name, uint32 cacheType, uint32 allocationFlags)
 	source = NULL;
 	virtual_base = 0;
 	virtual_end = 0;
-	committed_size = 0;
 	temporary = 0;
 	page_count = 0;
 	fWiredPagesCount = 0;
@@ -679,6 +678,8 @@ VMCache::Delete()
 		panic("cache %p to be deleted still has areas", this);
 	if (!consumers.IsEmpty())
 		panic("cache %p to be deleted still has consumers", this);
+	if (!fRemovedBusyPages.IsEmpty())
+		panic("cache %p to be deleted still has removed busy pages", this);
 
 	T(Delete(this));
 
@@ -690,6 +691,14 @@ VMCache::Delete()
 				"@!page %p; cache %p", page, this, page, this);
 		}
 
+		DEBUG_PAGE_ACCESS_START(page);
+
+		if (page->State() == PAGE_STATE_MODIFIED) {
+			// pages can't be freed in MODIFIED state
+			page->modified = false;
+			vm_page_set_state(page, PAGE_STATE_CACHED);
+		}
+
 		// remove it
 		pages.Remove(page);
 		page->SetCacheRef(NULL);
@@ -697,7 +706,6 @@ VMCache::Delete()
 
 		TRACE(("vm_cache_release_ref: freeing page 0x%lx\n",
 			page->physical_page_number));
-		DEBUG_PAGE_ACCESS_START(page);
 		vm_page_free_etc(this, page, &reservation);
 	}
 	vm_page_unreserve_pages(&reservation);
@@ -819,6 +827,19 @@ VMCache::InsertPage(vm_page* page, off_t offset)
 }
 
 
+/*!	Frees a page that was removed by _FreePageRange(), but which was busy
+	and couldn't be freed then.
+*/
+void
+VMCache::FreeRemovedPage(vm_page* page)
+{
+	AssertLocked();
+
+	fRemovedBusyPages.Remove(page);
+	vm_page_free(this, page);
+}
+
+
 /*!	Removes the vm_page from this cache. Of course, the page must
 	really be in this cache or evil things will happen.
 	The cache lock must be held.
@@ -835,6 +856,13 @@ VMCache::RemovePage(vm_page* page)
 	}
 
 	T2(RemovePage(this, page));
+
+	if (page->State() == PAGE_STATE_MODIFIED) {
+		// pages can't be in MODIFIED state unless inside a cache
+		// (assume callers don't care about remaining data)
+		page->modified = false;
+		vm_page_set_state(page, PAGE_STATE_CACHED);
+	}
 
 	pages.Remove(page);
 	page_count--;
@@ -952,7 +980,7 @@ VMCache::WaitForPageEvents(vm_page* page, uint32 events, bool relock)
 }
 
 
-/*!	Makes this case the source of the \a consumer cache,
+/*!	Makes this cache the source of the \a consumer cache,
 	and adds the \a consumer to its list.
 	This also grabs a reference to the source cache.
 	Assumes you have the cache and the consumer's lock held.
@@ -978,23 +1006,20 @@ VMCache::AddConsumer(VMCache* consumer)
 /*!	Adds the \a area to this cache.
 	Assumes you have the locked the cache.
 */
-status_t
+void
 VMCache::InsertAreaLocked(VMArea* area)
 {
 	TRACE(("VMCache::InsertAreaLocked(cache %p, area %p)\n", this, area));
 	T(InsertArea(this, area));
-
 	AssertLocked();
 
 	areas.Insert(area, false);
 
 	AcquireStoreRef();
-
-	return B_OK;
 }
 
 
-status_t
+void
 VMCache::RemoveArea(VMArea* area)
 {
 	TRACE(("VMCache::RemoveArea(cache %p, area %p)\n", this, area));
@@ -1010,16 +1035,14 @@ VMCache::RemoveArea(VMArea* area)
 	AutoLocker<VMCache> locker(this);
 
 	areas.Remove(area);
-
-	return B_OK;
 }
 
 
-/*!	Transfers the areas from \a fromCache to this cache. This cache must not
+/*!	Takes the areas from \a fromCache to this cache. This cache must not
 	have areas yet. Both caches must be locked.
 */
 void
-VMCache::TransferAreas(VMCache* fromCache)
+VMCache::TakeAreasFrom(VMCache* fromCache)
 {
 	AssertLocked();
 	fromCache->AssertLocked();
@@ -1085,7 +1108,7 @@ VMCache::SetMinimalCommitment(off_t commitment, int priority)
 
 	// If we don't have enough committed space to cover through to the new end
 	// of the area...
-	if (committed_size < commitment) {
+	if (Commitment() < commitment) {
 #if KDEBUG
 		const off_t size = PAGE_ALIGN(virtual_end - virtual_base);
 		ASSERT_PRINT(commitment <= size, "cache %p, commitment %" B_PRIdOFF ", size %" B_PRIdOFF,
@@ -1109,33 +1132,42 @@ VMCache::_FreePageRange(VMCachePagesTree::Iterator it,
 		page = it.Next()) {
 
 		if (page->busy) {
-			if (page->busy_writing) {
-				// We cannot wait for the page to become available
-				// as we might cause a deadlock this way
-				page->busy_writing = false;
-					// this will notify the writer to free the page
-				if (freedPages != NULL)
-					(*freedPages)++;
-				continue;
+			if (!page->busy_io) {
+				// wait for page to become unbusy
+				WaitForPageEvents(page, PAGE_EVENT_NOT_BUSY, true);
+				return true;
 			}
 
-			// wait for page to become unbusy
-			WaitForPageEvents(page, PAGE_EVENT_NOT_BUSY, true);
-			return true;
+			// We cannot wait for the page to become available
+			// as we might cause a deadlock that way
+			page->busy_io = false;
+				// this will notify the reader/writer to free the page
 		}
 
-		// remove the page and put it into the free queue
-		DEBUG_PAGE_ACCESS_START(page);
-		vm_remove_all_page_mappings(page);
 		ASSERT(page->WiredCount() == 0);
 			// TODO: Find a real solution! If the page is wired
 			// temporarily (e.g. by lock_memory()), we actually must not
 			// unmap it!
+
+		// remove the page and put it into the free queue
+		DEBUG_PAGE_ACCESS_START(page);
+		vm_remove_all_page_mappings(page);
+
 		RemovePage(page);
 			// Note: When iterating through a IteratableSplayTree
 			// removing the current node is safe.
 
-		vm_page_free(this, page);
+		if (page->busy) {
+			// As the page has been "removed" from this cache,
+			// we can wake up anyone waiting on it.
+			NotifyPageEvents(page, PAGE_EVENT_NOT_BUSY);
+
+			fRemovedBusyPages.Add(page);
+			DEBUG_PAGE_ACCESS_END(page);
+		} else {
+			vm_page_free(this, page);
+		}
+
 		if (freedPages != NULL)
 			(*freedPages)++;
 	}
@@ -1171,6 +1203,17 @@ VMCache::Resize(off_t newSize, int priority)
 		// Remove all pages in the cache outside of the new virtual size.
 		while (_FreePageRange(pages.GetIterator(newPageCount, true, true)))
 			;
+	}
+	if (newSize < virtual_end && newPageCount > 0) {
+		// We may have a partial page at the end of the cache that must be cleared.
+		uint32 partialBytes = newSize % B_PAGE_SIZE;
+		if (partialBytes != 0) {
+			vm_page* page = LookupPage(newSize - partialBytes);
+			if (page != NULL) {
+				vm_memset_physical(page->physical_page_number * B_PAGE_SIZE
+					+ partialBytes, 0, B_PAGE_SIZE - partialBytes);
+			}
+		}
 	}
 
 	if (priority >= 0) {
@@ -1301,6 +1344,13 @@ VMCache::FlushAndRemoveAllPages()
 }
 
 
+off_t
+VMCache::Commitment() const
+{
+	return 0;
+}
+
+
 bool
 VMCache::CanOvercommit()
 {
@@ -1313,6 +1363,13 @@ VMCache::Commit(off_t size, int priority)
 {
 	ASSERT_UNREACHABLE();
 	return B_NOT_SUPPORTED;
+}
+
+
+void
+VMCache::TakeCommitmentFrom(VMCache* from, off_t commitment)
+{
+	ASSERT_UNREACHABLE();
 }
 
 
@@ -1374,6 +1431,13 @@ bool
 VMCache::CanWritePage(off_t offset)
 {
 	return false;
+}
+
+
+ModifiedPageQueue*
+VMCache::ModifiedQueue()
+{
+	return NULL;
 }
 
 
@@ -1638,7 +1702,8 @@ VMCacheFactory::CreateAnonymousCache(VMCache*& _cache, bool canOvercommit,
 
 
 /*static*/ status_t
-VMCacheFactory::CreateVnodeCache(VMCache*& _cache, struct vnode* vnode)
+VMCacheFactory::CreateVnodeCache(VMCache*& _cache, struct vnode* vnode,
+	ModifiedPageQueue* modifiedQueue)
 {
 	const uint32 allocationFlags = HEAP_DONT_WAIT_FOR_MEMORY
 		| HEAP_DONT_LOCK_KERNEL_SPACE;
@@ -1649,7 +1714,7 @@ VMCacheFactory::CreateVnodeCache(VMCache*& _cache, struct vnode* vnode)
 	if (cache == NULL)
 		return B_NO_MEMORY;
 
-	status_t error = cache->Init(vnode, allocationFlags);
+	status_t error = cache->Init(vnode, modifiedQueue, allocationFlags);
 	if (error != B_OK) {
 		cache->Delete();
 		return error;

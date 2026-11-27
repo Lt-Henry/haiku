@@ -1,6 +1,6 @@
 /*
  * Copyright 2014, Stephan Aßmus <superstippi@gmx.de>.
- * Copyright 2016-2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2016-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 #ifndef WEB_APP_INTERFACE_H
@@ -10,6 +10,7 @@
 #include <Application.h>
 #include <JsonWriter.h>
 #include <Locker.h>
+#include <Referenceable.h>
 #include <String.h>
 #include <package/PackageVersion.h>
 
@@ -43,12 +44,12 @@ using BPackageKit::BPackageVersion;
 #define RATING_NONE -1
 
 
-class WebAppInterface {
+class WebAppInterface : public BReferenceable
+{
 public:
-								WebAppInterface();
+								WebAppInterface(const UserCredentials& value);
 	virtual						~WebAppInterface();
 
-			void				SetCredentials(const UserCredentials& value);
 			const BString&		Nickname();
 
 			status_t			GetChangelog(
@@ -146,6 +147,8 @@ public:
 			status_t			RetrievePasswordRequirements(
 									PasswordRequirements& passwordRequirements);
 
+			status_t			GetRuntimeInformation(BMessage& message);
+
 	static	int32				ErrorCodeFromResponse(
 									BMessage& responseEnvelopeMessage);
 
@@ -157,6 +160,7 @@ public:
 									BMessage& responseEnvelopeMessage,
 									AccessToken& accessToken);
 private:
+			void				_SetCredentials(const UserCredentials& value);
 			UserCredentials		_Credentials();
 
 			AccessToken			_ObtainValidAccessToken();
@@ -197,6 +201,9 @@ private:
 			AccessToken			fAccessToken;
 			BLocker				fLock;
 };
+
+
+typedef BReference<WebAppInterface> WebAppInterfaceRef;
 
 
 #endif // WEB_APP_INTERFACE_H

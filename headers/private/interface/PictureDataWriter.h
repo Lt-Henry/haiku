@@ -42,8 +42,10 @@ public:
 									const join_mode& join,
 									const float& miterLimit);
 			status_t			WriteSetFillRule(int32 fillRule);
+			status_t			WriteSetBlendingMode(source_alpha srcAlpha,
+									alpha_function alphaFunc);
 			status_t			WriteSetScale(const float& scale);
-			status_t			WriteSetTransform(BAffineTransform transform);
+			status_t			WriteSetTransform(const BAffineTransform& transform);
 			status_t			WriteTranslateBy(double x, double y);
 			status_t			WriteScaleBy(double x, double y);
 			status_t			WriteRotateBy(double angleRadians);
@@ -111,6 +113,8 @@ public:
 			status_t			WriteDrawShapeGradient(const int32& opCount,
 									const void* opList, const int32& ptCount,
 									const void* ptList, const BGradient& gradient, const bool& fill);
+			status_t			WriteStrokeLineGradient(const BPoint& start, const BPoint& end,
+									const BGradient& gradient);
 			status_t			WriteDrawBitmap(const BRect& srcRect,
 									const BRect& dstRect, const int32& width,
 									const int32& height,

@@ -33,6 +33,7 @@
 #include <Message.h>
 #include <MessageFilter.h>
 #include <Path.h>
+#include <PthreadMutexLocker.h>
 #include <Region.h>
 #include <Roster.h>
 
@@ -511,6 +512,7 @@ Desktop::Init()
 	}
 
 	status_t status = fVirtualScreen.SetConfiguration(*this,
+		fWorkspaces[0].StoredScreenConfiguration(),
 		fWorkspaces[0].CurrentScreenConfiguration());
 	if (status != B_OK) {
 		debug_printf("app_server: Failed to initialize virtual screen configuration: %s\n",
@@ -521,6 +523,21 @@ Desktop::Init()
 	if (fVirtualScreen.HWInterface() == NULL) {
 		debug_printf("Could not initialize graphics output. Exiting.\n");
 		return B_ERROR;
+	}
+
+	HWInterface()->SetDPMSMode(B_DPMS_ON);
+
+	// Restore brightness
+	{
+		Screen* screen = fVirtualScreen.ScreenAt(0);
+		monitor_info info;
+		bool hasInfo = (screen->GetMonitorInfo(info) == B_OK);
+
+		screen_configuration* stored = fWorkspaces[0]
+			.StoredScreenConfiguration().BestFit(screen->ID(),
+				hasInfo ? &info : NULL);
+		if (stored != NULL && stored->brightness > 0)
+			HWInterface()->SetBrightness(stored->brightness);
 	}
 
 	// now that the mode is set, see if we should increase the default font size
@@ -547,11 +564,18 @@ Desktop::Init()
 		const_cast<menu_info&>(fSettings->MenuInfo()).font_size = fontSize;
 	}
 
-	HWInterface()->SetDPMSMode(B_DPMS_ON);
+#if 1
+	// Migrate old default UI control color to the new one.
+	// TODO: Drop this after R1/beta6 is released!
+	if (fSettings->UIColor(B_CONTROL_BACKGROUND_COLOR) == make_color(245, 245, 245)
+			&& fSettings->ControlLook().IsEmpty()) {
+		rgb_color newControlBackground = make_color(222, 222, 222);
+		fSettings->SetUIColor(B_CONTROL_BACKGROUND_COLOR, newControlBackground);
+		fSettings->SetUIColor(B_SCROLL_BAR_THUMB_COLOR, newControlBackground);
+	}
+#endif
 
-	float brightness = fWorkspaces[0].StoredScreenConfiguration().Brightness(0);
-	if (brightness > 0)
-		HWInterface()->SetBrightness(brightness);
+	fCursorManager.InitializeCursors(fSettings->DefaultBoldFont().Size() / 12.0f);
 
 	fVirtualScreen.HWInterface()->MoveCursorTo(
 		fVirtualScreen.Frame().Width() / 2,
@@ -602,9 +626,8 @@ Desktop::BroadcastToAllApps(int32 code)
 {
 	BAutolock locker(fApplicationsLock);
 
-	for (int32 i = fApplications.CountItems(); i-- > 0;) {
+	for (int32 i = fApplications.CountItems(); i-- > 0;)
 		fApplications.ItemAt(i)->PostMessage(code);
-	}
 }
 
 
@@ -619,6 +642,17 @@ Desktop::BroadcastToAllWindows(int32 code)
 			window = window->NextWindow(kAllWindowList)) {
 		window->ServerWindow()->PostMessage(code);
 	}
+}
+
+
+/*!	\brief Send a message to all client applications.
+*/
+void
+Desktop::BroadcastToAllClients(BMessage* message)
+{
+	BAutolock appListLock(fApplicationsLock);
+	for (int32 i = fApplications.CountItems(); i-- > 0;)
+		fApplications.ItemAt(i)->SendMessageToClient(message);
 }
 
 
@@ -680,6 +714,8 @@ Desktop::KeyEvent(uint32 what, int32 key, int32 modifiers)
 void
 Desktop::SetCursor(ServerCursor* newCursor)
 {
+	AutoWriteLocker _(fWindowLock);
+
 	if (newCursor == NULL)
 		newCursor = fCursorManager.GetCursor(B_CURSOR_ID_SYSTEM_DEFAULT);
 
@@ -703,6 +739,8 @@ Desktop::Cursor() const
 void
 Desktop::SetManagementCursor(ServerCursor* newCursor)
 {
+	AutoWriteLocker _(fWindowLock);
+
 	if (newCursor == fManagementCursor)
 		return;
 
@@ -781,7 +819,7 @@ Desktop::SetScreenMode(int32 workspace, int32 id, const display_mode& mode,
 	} else {
 		// retrieve from settings
 		screen_configuration* configuration
-			= fWorkspaces[workspace].CurrentScreenConfiguration().CurrentByID(
+			= fWorkspaces[workspace].CurrentScreenConfiguration().GetByID(
 				screen->ID());
 		if (configuration != NULL
 			&& !memcmp(&configuration->mode, &mode, sizeof(display_mode)))
@@ -820,9 +858,10 @@ Desktop::GetScreenMode(int32 workspace, int32 id, display_mode& mode)
 	if (workspace < 0 || workspace >= kMaxWorkspaces)
 		return B_BAD_VALUE;
 
+	Screen* screen = fVirtualScreen.ScreenByID(id);
+
 	if (workspace == fCurrentWorkspace) {
 		// retrieve from current screen
-		Screen* screen = fVirtualScreen.ScreenByID(id);
 		if (screen == NULL)
 			return B_NAME_NOT_FOUND;
 
@@ -832,7 +871,14 @@ Desktop::GetScreenMode(int32 workspace, int32 id, display_mode& mode)
 
 	// retrieve from settings
 	screen_configuration* configuration
-		= fWorkspaces[workspace].CurrentScreenConfiguration().CurrentByID(id);
+		= fWorkspaces[workspace].CurrentScreenConfiguration().GetByID(id);
+	if (configuration == NULL && screen != NULL) {
+		monitor_info info;
+		bool hasInfo = (screen->GetMonitorInfo(info) == B_OK);
+		configuration = fWorkspaces[workspace]
+			.StoredScreenConfiguration().BestFit(screen->ID(),
+				hasInfo ? &info : NULL);
+	}
 	if (configuration == NULL)
 		return B_NAME_NOT_FOUND;
 
@@ -852,9 +898,10 @@ Desktop::GetScreenFrame(int32 workspace, int32 id, BRect& frame)
 	if (workspace < 0 || workspace >= kMaxWorkspaces)
 		return B_BAD_VALUE;
 
+	Screen* screen = fVirtualScreen.ScreenByID(id);
+
 	if (workspace == fCurrentWorkspace) {
 		// retrieve from current screen
-		Screen* screen = fVirtualScreen.ScreenByID(id);
 		if (screen == NULL)
 			return B_NAME_NOT_FOUND;
 
@@ -864,7 +911,14 @@ Desktop::GetScreenFrame(int32 workspace, int32 id, BRect& frame)
 
 	// retrieve from settings
 	screen_configuration* configuration
-		= fWorkspaces[workspace].CurrentScreenConfiguration().CurrentByID(id);
+		= fWorkspaces[workspace].CurrentScreenConfiguration().GetByID(id);
+	if (configuration == NULL && screen != NULL) {
+		monitor_info info;
+		bool hasInfo = (screen->GetMonitorInfo(info) == B_OK);
+		configuration = fWorkspaces[workspace]
+			.StoredScreenConfiguration().BestFit(screen->ID(),
+				hasInfo ? &info : NULL);
+	}
 	if (configuration == NULL)
 		return B_NAME_NOT_FOUND;
 
@@ -892,12 +946,15 @@ Desktop::RevertScreenModes(uint32 workspaces)
 
 		for (int32 index = 0; index < fVirtualScreen.CountScreens(); index++) {
 			Screen* screen = fVirtualScreen.ScreenAt(index);
+			monitor_info info;
+			bool hasInfo = (screen->GetMonitorInfo(info) == B_OK);
 
 			// retrieve configurations
 			screen_configuration* stored = fWorkspaces[workspace]
-				.StoredScreenConfiguration().CurrentByID(screen->ID());
+				.StoredScreenConfiguration().BestFit(screen->ID(),
+					hasInfo ? &info : NULL);
 			screen_configuration* current = fWorkspaces[workspace]
-				.CurrentScreenConfiguration().CurrentByID(screen->ID());
+				.CurrentScreenConfiguration().GetByID(screen->ID());
 
 			if ((stored != NULL && current != NULL
 					&& !memcmp(&stored->mode, &current->mode,
@@ -927,17 +984,16 @@ Desktop::SetBrightness(int32 id, float brightness)
 	status_t result = HWInterface()->SetBrightness(brightness);
 
 	if (result == B_OK) {
-		if (fWorkspaces[0].StoredScreenConfiguration().CurrentByID(id) == NULL) {
-			// store the current configuration if empty
-			screen_configuration* current
-				= fWorkspaces[0].CurrentScreenConfiguration().CurrentByID(id);
+		screen_configuration* current = fWorkspaces[0].CurrentScreenConfiguration().GetByID(id);
+		if (current != NULL) {
+			HWInterface()->GetBrightness(&brightness);
+			current->brightness = brightness;
+
+			// Save brightness for next boot
 			fWorkspaces[0].StoredScreenConfiguration().Set(id,
-				current->has_info ? &current->info : NULL, current->frame, current->mode);
+				current->has_info ? &current->info : NULL, current->frame, current->mode, brightness);
+			StoreWorkspaceConfiguration(0);
 		}
-		fWorkspaces[0].StoredScreenConfiguration().SetBrightness(id,
-			brightness);
-		// Save brightness for next boot
-		StoreWorkspaceConfiguration(0);
 	}
 
 	return result;
@@ -1473,7 +1529,7 @@ Desktop::MoveWindowBy(Window* window, float x, float y, int32 workspace)
 					}
 
 					stackWindow->Anchor(workspace).position += BPoint(x, y);
-					stackWindow->SetCurrentWorkspace(workspace);
+					stackWindow->SetPriorWorkspace(workspace);
 					_WindowChanged(stackWindow);
 				}
 			}
@@ -1763,6 +1819,8 @@ Desktop::FontsChanged(Window* window)
 	window->FontsChanged(&dirty);
 
 	RebuildAndRedrawAfterWindowChange(window, dirty);
+
+	fCursorManager.InitializeCursors(fSettings->DefaultBoldFont().Size() / 12.0f);
 }
 
 
@@ -2389,7 +2447,7 @@ void
 Desktop::WriteWindowInfo(int32 serverToken, BPrivate::LinkSender& sender)
 {
 	AutoWriteLocker locker(fWindowLock);
-	BAutolock tokenLocker(BPrivate::gDefaultTokens);
+	PthreadMutexLocker tokenLocker(BPrivate::gDefaultTokens.GetLock());
 
 	::ServerWindow* window;
 	if (BPrivate::gDefaultTokens.GetToken(serverToken,
@@ -2951,10 +3009,7 @@ Desktop::_FlushPendingColors()
 	}
 
 	// Notify client applications
-	BAutolock appListLock(fApplicationsLock);
-	for (int32 index = 0; index < fApplications.CountItems(); ++index) {
-		fApplications.ItemAt(index)->SendMessageToClient(&clientMessage);
-	}
+	BroadcastToAllClients(&clientMessage);
 
 	fPendingColors.MakeEmpty();
 }
@@ -3190,9 +3245,9 @@ Desktop::_HideWindow(Window* window)
 
 
 /*!	Updates the workspaces of all subset windows with regard to the
-	specifed window.
+	specified window.
 	If newIndex is not -1, it will move all subset windows that belong to
-	the specifed window to the new workspace; this form is only called by
+	the specified window to the new workspace; this form is only called by
 	SetWorkspace().
 */
 void
@@ -3478,7 +3533,7 @@ Desktop::_TriggerWindowRedrawing(BRegion& dirtyRegion, BRegion& exposeRegion)
 void
 Desktop::_SetBackground(BRegion& background)
 {
-	// NOTE: the drawing operation is caried out
+	// NOTE: the drawing operation is carried out
 	// in the clipping region rebuild, but it is
 	// ok actually, because it also avoids trails on
 	// moving windows
@@ -3689,6 +3744,7 @@ Desktop::_SetCurrentWorkspaceConfiguration()
 
 	uint32 changedScreens;
 	fVirtualScreen.SetConfiguration(*this,
+		fWorkspaces[fCurrentWorkspace].StoredScreenConfiguration(),
 		fWorkspaces[fCurrentWorkspace].CurrentScreenConfiguration(),
 		&changedScreens);
 

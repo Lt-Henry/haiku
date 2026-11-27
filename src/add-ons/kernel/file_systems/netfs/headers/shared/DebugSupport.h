@@ -32,7 +32,7 @@
 #	define DEBUG_PRINT 0
 #endif
 #ifndef DEBUG_APP
-#	define DEBUG_APP	"packagefs"
+#	define DEBUG_APP	"unknown"
 #endif
 #ifndef DEBUG_PRINT_FILE
 #	define DEBUG_PRINT_FILE "/var/log/" DEBUG_APP ".log"
@@ -49,7 +49,6 @@
 #	endif
 #else
 #	include <KernelExport.h>
-#	include <null.h>
 #	if DEBUG_PRINT
 #		define __out dbg_printf
 #	else

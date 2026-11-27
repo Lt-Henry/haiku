@@ -614,6 +614,32 @@ vfs_init(stage2_args *args)
 }
 
 
+/**	Computes a check sum for the specified block.
+ *	The check sum is the sum of all data in that block interpreted as an
+ *	array of uint32 values.
+ *	Note, this must use the same method as the one used in kernel/fs/vfs_boot.cpp.
+ */
+static uint32
+compute_check_sum(Node* device, off_t offset)
+{
+	char buffer[512];
+	ssize_t bytesRead = device->ReadAt(NULL, offset, buffer, sizeof(buffer));
+	if (bytesRead < B_OK)
+		return 0;
+
+	if (bytesRead < (ssize_t)sizeof(buffer))
+		memset(buffer + bytesRead, 0, sizeof(buffer) - bytesRead);
+
+	uint32 *array = (uint32*)buffer;
+	uint32 sum = 0;
+
+	for (uint32 i = 0; i < (bytesRead + sizeof(uint32) - 1) / sizeof(uint32); i++)
+		sum += array[i];
+
+	return sum;
+}
+
+
 status_t
 register_boot_file_system(BootVolume& bootVolume)
 {
@@ -628,14 +654,14 @@ register_boot_file_system(BootVolume& bootVolume)
 		return status;
 	}
 
-	gBootVolume.SetInt64(BOOT_VOLUME_PARTITION_OFFSET,
+	gBootParams.SetInt64(BOOT_VOLUME_PARTITION_OFFSET,
 		partition->offset);
 
 	if (bootVolume.IsPackaged()) {
-		gBootVolume.SetBool(BOOT_VOLUME_PACKAGED, true);
+		gBootParams.SetBool(BOOT_VOLUME_PACKAGED, true);
 		PackageVolumeState* state = bootVolume.GetPackageVolumeState();
 		if (state->Name() != NULL)
-			gBootVolume.AddString(BOOT_VOLUME_PACKAGES_STATE, state->Name());
+			gBootParams.AddString(BOOT_VOLUME_PACKAGES_STATE, state->Name());
 	}
 
 	Node *device = get_node_from(partition->FD());
@@ -644,7 +670,25 @@ register_boot_file_system(BootVolume& bootVolume)
 		return B_ERROR;
 	}
 
-	return platform_register_boot_device(device);
+	disk_identifier defaultDiskID = {
+		.bus_type = UNKNOWN_BUS,
+		.device_type = UNKNOWN_DEVICE,
+	};
+	defaultDiskID.device.unknown.size = device->Size();
+	// Checksum the first four blocks, which will cover the
+	// whole MBR partition table and the disk GUID on GPT,
+	// plus one block suggested by the file system, which will cover 
+	// the BFS root inode.
+	for (uint32 i = 0; i < NUM_DISK_CHECK_SUMS; ++i) {
+		off_t offset = i * 512;
+		if (i == NUM_DISK_CHECK_SUMS - 1)
+			offset = partition->offset + partition->BlockForIdentifierChecksum();
+		defaultDiskID.device.unknown.check_sums[i].offset = offset;
+		defaultDiskID.device.unknown.check_sums[i].sum = compute_check_sum(device,
+			offset);
+	}
+
+	return platform_register_boot_device(device, &defaultDiskID);
 }
 
 
@@ -1027,13 +1071,16 @@ writev(int fd, const struct iovec* vecs, int count)
 int
 open(const char *name, int mode, ...)
 {
+	if (gRoot == NULL)
+		RETURN_AND_SET_ERRNO(B_NO_INIT);
+
 	mode_t permissions = 0;
 	if ((mode & O_CREAT) != 0) {
-        va_list args;
-        va_start(args, mode);
-        permissions = va_arg(args, int) /*& ~__gUmask*/;
-            // adapt the permissions as required by POSIX
-        va_end(args);
+		va_list args;
+		va_start(args, mode);
+		permissions = va_arg(args, int) /*& ~__gUmask*/;
+			// adapt the permissions as required by POSIX
+		va_end(args);
 	}
 
 	// we always start at the top (there is no notion of a current directory (yet?))

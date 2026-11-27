@@ -82,11 +82,17 @@ enum {
 };
 
 
-struct AddOnShortcut {
+struct AddOnInfo {
 	Model*	model;
+	BStringList supportedTypes;
+
+	// shortcut
 	char	key;
 	char	defaultKey;
 	uint32	modifiers;
+
+	// hooks
+	mutable status_t has_populate_menu;
 };
 
 
@@ -96,7 +102,7 @@ public:
 		window_look look = B_DOCUMENT_WINDOW_LOOK,
 		window_feel feel = B_NORMAL_WINDOW_FEEL,
 		uint32 windowFlags = B_WILL_ACCEPT_FIRST_CLICK | B_NO_WORKSPACE_ACTIVATION,
-		uint32 workspace = B_CURRENT_WORKSPACE, bool useLayout = true);
+		uint32 workspace = B_CURRENT_WORKSPACE, bool useLayout = true, bool runIt = true);
 
 	virtual ~BContainerWindow();
 
@@ -153,8 +159,6 @@ public:
 	bool SaveStateIsEnabled() const;
 	void SetSaveStateEnabled(bool);
 
-	void UpdateBackgroundImage();
-
 	static status_t GetLayoutState(BNode*, BMessage*);
 	static status_t SetLayoutState(BNode*, const BMessage*);
 		// calls for inheriting window size, attribute layout, etc.
@@ -193,12 +197,6 @@ public:
 	BMessage* AddOnMessage(int32);
 	BPopUpMenu* ContextMenu();
 
-	// drag&drop support
-	status_t DragStart(const BMessage*);
-	void DragStop();
-	bool Dragging() const;
-	BMessage* DragMessage() const;
-
 	void ShowSelectionWindow();
 
 	void ShowNavigator(bool);
@@ -230,6 +228,8 @@ protected:
 		// these two virtuals control setting up a new folder that
 		// does not have any state settings yet with the default
 
+	virtual void UpdateBackgroundImage();
+
 	virtual void AddMenus();
 	virtual void AddShortcuts();
 		// add equivalents of the menu shortcuts to the menuless
@@ -253,16 +253,15 @@ protected:
 	virtual void PopulateMoveCopyNavMenu(BNavMenu*, uint32,
 		const entry_ref*, bool);
 
-	virtual void SetupOpenWithMenu(BMenu*);
 	virtual void SetupOpenWithMenu(BMenu*, const entry_ref* ref);
 	virtual void SetupNewTemplatesMenu(BMenu*, MenuContext context);
-	virtual void SetupEditQueryItem(BMenu*);
 	virtual void SetupEditQueryItem(BMenu*, const entry_ref* ref);
 	virtual void SetupDiskMenu(BMenu*);
-	virtual void SetupMountMenu(BMenu*, MenuContext context);
 	virtual void SetupMountMenu(BMenu*, MenuContext context, const entry_ref* ref);
 	BMenuItem* DetachMountMenu();
 
+	virtual void BuildAddOnMenus(BMenuBar*);
+	virtual void RebuildAddOnMenus(BMenuBar*);
 	virtual void BuildAddOnsMenu(BMenu*);
 	void BuildMimeTypeList(BStringList& mimeTypes);
 
@@ -283,8 +282,8 @@ protected:
 		const char*);
 
 	void LoadAddOn(BMessage*);
-	void EachAddOn(void (*)(const Model*, const char*, uint32 shortcut,
-			uint32 modifiers, bool primary, void*, BContainerWindow*, BMenu*),
+	void EachAddOn(void (*)(void* context, const struct AddOnInfo*,
+			bool primary, BContainerWindow*, BMenu*),
 		void*, BStringList&, BMenu*);
 
 protected:
@@ -292,12 +291,17 @@ protected:
 	uint32 fOpenFlags;
 	bool fUsesLayout;
 
-	bool ShouldHaveNavigationMenu(const entry_ref* = NULL);
-	bool ShouldHaveOpenWithMenu(const entry_ref* = NULL);
-	bool ShouldHaveEditQueryItem(const entry_ref* = NULL);
-	bool ShouldHaveMoveCopyMenus(const entry_ref* = NULL);
-	bool ShouldHaveNewFolderItem();
+	virtual bool ShouldHaveNavigationMenu(const entry_ref* = NULL);
+	virtual bool ShouldHaveOpenWithMenu(const entry_ref* = NULL);
+	virtual bool ShouldHaveEditQueryItem(const entry_ref* = NULL);
+	virtual bool ShouldHaveMoveCopyMenus(const entry_ref* = NULL);
+	virtual bool ShouldHaveNewFolderItem();
+	virtual bool ShouldHaveAddOnMenus();
 
+public:
+	virtual bool ShouldHaveDraggableFolderIcon();
+
+protected:
 	BGroupLayout* fRootLayout;
 	BGroupView* fMenuContainer;
 	BGridView* fPoseContainer;
@@ -338,7 +342,7 @@ protected:
 
 	BackgroundImage* fBackgroundImage;
 
-	static LockingList<struct AddOnShortcut, true>* fAddOnsList;
+	static LockingList<struct AddOnInfo, true>* fAddOnsList;
 
 private:
 	BRect fSavedZoomRect;
@@ -346,9 +350,6 @@ private:
 
 	static BRect sNewWindRect;
 
-	BMessage* fDragMessage;
-	BStringList* fCachedTypesList;
-	bool fWaitingForRefs;
 	bool fSaveStateIsEnabled;
 	bool fIsWatchingPath;
 
@@ -441,20 +442,6 @@ inline BPopUpMenu*
 BContainerWindow::ContextMenu()
 {
 	return fContextMenu;
-}
-
-
-inline bool
-BContainerWindow::Dragging() const
-{
-	return fDragMessage && fCachedTypesList;
-}
-
-
-inline BMessage*
-BContainerWindow::DragMessage() const
-{
-	return fDragMessage;
 }
 
 

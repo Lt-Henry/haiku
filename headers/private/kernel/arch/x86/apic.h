@@ -68,9 +68,6 @@
 /* Local Vector Table defines */
 #define APIC_LVT_MASKED							(1 << 16)
 
-// timer defines
-#define APIC_LVT_TIMER_MASK						0xfffcef00
-
 // LINT0/1 defines
 #define APIC_LVT_LINT_MASK						0xfffe0800
 #define APIC_LVT_LINT_INPUT_POLARITY			(1 << 13)
@@ -131,6 +128,7 @@ uint32		apic_lvt_error();
 void		apic_set_lvt_error(uint32 config);
 uint32		apic_lvt_initial_timer_count();
 void		apic_set_lvt_initial_timer_count(uint32 config);
+uint32		apic_lvt_current_timer_count();
 uint32		apic_lvt_timer_divide_config();
 void		apic_set_lvt_timer_divide_config(uint32 config);
 

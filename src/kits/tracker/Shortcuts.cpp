@@ -496,8 +496,17 @@ TShortcuts::MoveToLabel()
 BMenuItem*
 TShortcuts::MoveToTrashItem()
 {
-	return new BMenuItem(MoveToTrashLabel(), new BMessage(kMoveSelectionToTrash), B_DELETE,
-		B_NO_COMMAND_KEY);
+	BMenuItem* item = new(std::nothrow) BMenuItem(MoveToTrashLabel(),
+		new BMessage(kMoveSelectionToTrash), B_DELETE, B_NO_COMMAND_KEY);
+	if (item == NULL)
+		return NULL;
+
+	// We have to set the target here because B_NO_COMMAND_KEY shortcut
+	// items don't get registered in MenusBeginning(). This wouldn't work
+	// if "Move to Trash" were created dynamically, luckily it is not.
+	UpdateMoveToTrashItem(item);
+
+	return item;
 }
 
 
@@ -691,7 +700,7 @@ TShortcuts::SelectLabel()
 BMenuItem*
 TShortcuts::SelectAllItem()
 {
-	return new BMenuItem(SelectAllLabel(), new BMessage(B_SELECT_ALL), 'A', B_SHIFT_KEY);
+	return new BMenuItem(SelectAllLabel(), new BMessage(B_SELECT_ALL), 'A');
 }
 
 
@@ -998,7 +1007,7 @@ TShortcuts::UpdateCreateLinkItem(BMenuItem* item)
 
 	if (fInWindow) {
 		item->SetEnabled(HasSelection());
-		item->SetTarget(PoseView());
+		item->SetTarget(fContainerWindow);
 	}
 }
 
@@ -1013,8 +1022,8 @@ TShortcuts::UpdateCreateLinkHereItem(BMenuItem* item)
 	item->Message()->what = CreateLinkHereCommand();
 
 	if (fInWindow) {
-		item->SetEnabled(HasSelection());
-		item->SetTarget(PoseView());
+		item->SetEnabled(TargetIsReadOnly() == false);
+		item->SetTarget(fContainerWindow);
 	}
 }
 
@@ -1093,7 +1102,7 @@ TShortcuts::UpdateEditQueryItem(BMenuItem* item)
 		return;
 
 	if (fInWindow) {
-		item->SetEnabled(HasSelection());
+		item->SetEnabled(IsQuery() || HasSelection());
 		item->SetTarget(PoseView());
 	}
 }
@@ -1106,7 +1115,9 @@ TShortcuts::UpdateEmptyTrashItem(BMenuItem* item)
 		return;
 
 	if (fInWindow) {
-		item->SetEnabled(static_cast<TTracker*>(be_app)->TrashFull());
+		TTracker* tracker = dynamic_cast<TTracker*>(be_app);
+		if (tracker != NULL)
+			item->SetEnabled(tracker->TrashFull());
 		item->SetTarget(PoseView());
 	}
 }
@@ -1188,7 +1199,7 @@ TShortcuts::UpdateMoveToItem(BMenuItem* item)
 
 	if (fInWindow) {
 		item->SetEnabled(HasSelection() && !SelectionIsReadOnly());
-		item->SetTarget(PoseView());
+		item->SetTarget(fContainerWindow);
 	}
 }
 
@@ -1294,7 +1305,8 @@ TShortcuts::UpdatePasteItem(BMenuItem* item)
 	item->SetShortcut(item->Shortcut(), B_COMMAND_KEY | (modifiers() & B_SHIFT_KEY));
 
 	if (fInWindow) {
-		bool isPastable = FSClipboardHasRefs() && !SelectionIsReadOnly() && !IsTrash();
+		bool isPastable = FSClipboardHasRefs() && TargetIsReadOnly() == false
+			&& !(IsPrintersDir() || IsRoot() || IsTrash() || InTrash() || IsVirtualDirectory());
 		item->SetEnabled(IsCurrentFocusOnTextView() || isPastable);
 
 		item->SetTarget(fContainerWindow);
@@ -1415,7 +1427,14 @@ TShortcuts::IsCurrentFocusOnTextView() const
 bool
 TShortcuts::IsDesktop() const
 {
-	return fInWindow && PoseView()->TargetModel()->IsDesktop();
+	return fInWindow && PoseView()->IsDesktopView();
+}
+
+
+bool
+TShortcuts::IsPrintersDir() const
+{
+	return fInWindow && PoseView()->TargetModel()->IsPrintersDir();
 }
 
 

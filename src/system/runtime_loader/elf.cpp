@@ -18,12 +18,14 @@
 
 #include <OS.h>
 
+#include <commpage_defs.h>
 #include <syscalls.h>
 #include <util/kernel_cpp.h>
 
 #include <locks.h>
 
 #include "add_ons.h"
+#include "commpage.h"
 #include "elf_load_image.h"
 #include "elf_symbol_lookup.h"
 #include "elf_tls.h"
@@ -651,18 +653,12 @@ load_library(char const *path, uint32 flags, bool addOn, void* caller,
 				path, image->id);
 			*_handle = image;
 			return image->id;
+		} else if ((flags & RTLD_NOLOAD) != 0) {
+			return B_NAME_NOT_FOUND;
 		}
 
 		// First of all, find the caller image.
-		image_t* callerImage = get_loaded_images().head;
-		for (; callerImage != NULL; callerImage = callerImage->next) {
-			elf_region_t& text = callerImage->regions[0];
-			if ((addr_t)caller >= text.vmstart
-				&& (addr_t)caller < text.vmstart + text.vmsize) {
-				// found the image
-				break;
-			}
-		}
+		image_t* callerImage = find_loaded_image_by_address((addr_t)caller);
 		if (callerImage != NULL) {
 			runpath = find_dt_runpath(callerImage);
 			if (runpath == NULL)
@@ -681,6 +677,8 @@ load_library(char const *path, uint32 flags, bool addOn, void* caller,
 	if (image->find_undefined_symbol == NULL) {
 		if (addOn)
 			image->find_undefined_symbol = find_undefined_symbol_add_on;
+		else if (flags & RTLD_GROUP)
+			image->find_undefined_symbol = find_undefined_symbol_dependencies_only;
 		else
 			image->find_undefined_symbol = find_undefined_symbol_global;
 	}
@@ -774,8 +772,10 @@ unload_library(void* handle, image_id imageID, bool addOn)
 			// call_atexit_hooks_for_range() only here, which happens only when
 			// libraries are unloaded dynamically.
 			if (gRuntimeLoader.call_atexit_hooks_for_range != NULL) {
-				gRuntimeLoader.call_atexit_hooks_for_range(
-					image->regions[0].vmstart, image->regions[0].vmsize);
+				for (uint32 i = 0; i < image->num_regions; i++) {
+					gRuntimeLoader.call_atexit_hooks_for_range(
+						image->regions[i].vmstart, image->regions[i].vmsize);
+				}
 			}
 
 			image_event(image, IMAGE_EVENT_UNINITIALIZING);
@@ -797,12 +797,13 @@ unload_library(void* handle, image_id imageID, bool addOn)
 
 
 status_t
-get_nth_symbol(image_id imageID, int32 num, char *nameBuffer,
-	int32 *_nameLength, int32 *_type, void **_location)
+get_nth_symbol(image_id imageID, int32 num, char* nameBuffer,
+	int32* _nameLength, int32* _type, void** _location)
 {
 	int32 count = 0, j;
 	uint32 i;
-	image_t *image;
+	image_t* image;
+	elf_sym* symbol;
 
 	RecursiveLocker _(sLock);
 
@@ -812,40 +813,56 @@ get_nth_symbol(image_id imageID, int32 num, char *nameBuffer,
 		return B_BAD_IMAGE_ID;
 
 	// iterate through all the hash buckets until we've found the one
-	for (i = 0; i < HASHTABSIZE(image); i++) {
-		for (j = HASHBUCKETS(image)[i]; j != STN_UNDEF; j = HASHCHAINS(image)[j]) {
-			elf_sym *symbol = &image->syms[j];
-
-			if (count == num) {
-				const char* symbolName = SYMNAME(image, symbol);
-				strlcpy(nameBuffer, symbolName, *_nameLength);
-				*_nameLength = strlen(symbolName);
-
-				void* location = (void*)(symbol->st_value
-					+ image->regions[0].delta);
-				int32 type;
-				if (symbol->Type() == STT_FUNC)
-					type = B_SYMBOL_TYPE_TEXT;
-				else if (symbol->Type() == STT_OBJECT)
-					type = B_SYMBOL_TYPE_DATA;
-				else
-					type = B_SYMBOL_TYPE_ANY;
-					// TODO: check with the return types of that BeOS function
-
-				patch_defined_symbol(image, symbolName, &location, &type);
-
-				if (_type != NULL)
-					*_type = type;
-				if (_location != NULL)
-					*_location = location;
-				goto out;
+	if (image->gnuhash.buckets != NULL) {
+		for (uint32 i = 0; i < image->gnuhash.bucket_count; i++) {
+			const uint32 bucket = image->gnuhash.buckets[i];
+			if (bucket == 0)
+				continue;
+			const uint32* chain0 = image->gnuhash.chain0;
+			const uint32* hashValue = &chain0[bucket];
+			do {
+				uint32 symIndex = hashValue - chain0;
+				symbol = &image->syms[symIndex];
+				if (count == num)
+					goto out;
+				count++;
+			} while ((*hashValue++ & 1) == 0);
+		}
+	} else {
+		for (i = 0; i < HASHTABSIZE(image); i++) {
+			for (j = HASHBUCKETS(image)[i]; j != STN_UNDEF; j = HASHCHAINS(image)[j]) {
+				symbol = &image->syms[j];
+				if (count == num)
+					goto out;
+				count++;
 			}
-			count++;
 		}
 	}
+
+	return B_BAD_INDEX;
+
 out:
-	if (num != count)
-		return B_BAD_INDEX;
+	const char* symbolName = SYMNAME(image, symbol);
+	strlcpy(nameBuffer, symbolName, *_nameLength);
+	*_nameLength = strlen(symbolName);
+
+	void* location = (void*)(symbol->st_value
+		+ image->regions[0].delta);
+	int32 type;
+	if (symbol->Type() == STT_FUNC)
+		type = B_SYMBOL_TYPE_TEXT;
+	else if (symbol->Type() == STT_OBJECT)
+		type = B_SYMBOL_TYPE_DATA;
+	else
+		type = B_SYMBOL_TYPE_ANY;
+		// TODO: check with the return types of that BeOS function
+
+	patch_defined_symbol(image, symbolName, &location, &type);
+
+	if (_type != NULL)
+		*_type = type;
+	if (_location != NULL)
+		*_location = location;
 
 	return B_OK;
 }
@@ -859,8 +876,18 @@ get_nearest_symbol_at_address(void* address, image_id* _imageID,
 	RecursiveLocker _(sLock);
 
 	image_t* image = find_loaded_image_by_address((addr_t)address);
-	if (image == NULL)
+	if (image == NULL) {
+		addr_t commpageBegin = (addr_t)__gCommPageAddress;
+		addr_t commpageEnd = (addr_t)commpageBegin + COMMPAGE_SIZE;
+
+		// The caller may be looking for a commpage symbol.
+		if ((addr_t)address >= commpageBegin && (addr_t)address < commpageEnd) {
+			return get_nearest_commpage_symbol_at_address_locked(address, _imageID, _imagePath,
+				_imageName, _symbolName, _type, _location, _exactMatch);
+		}
+
 		return B_BAD_VALUE;
+	}
 
 	if (_imageID != NULL)
 		*_imageID = image->id;
@@ -878,20 +905,46 @@ get_nearest_symbol_at_address(void* address, image_id* _imageID,
 	elf_sym* foundSymbol = NULL;
 	addr_t foundLocation = (addr_t)NULL;
 
-	for (uint32 i = 0; i < HASHTABSIZE(image) && !exactMatch; i++) {
-		for (int32 j = HASHBUCKETS(image)[i]; j != STN_UNDEF;
-				j = HASHCHAINS(image)[j]) {
-			elf_sym *symbol = &image->syms[j];
-			addr_t location = symbol->st_value + image->regions[0].delta;
+	if (image->gnuhash.buckets != NULL) {
+		for (uint32 i = 0; i < image->gnuhash.bucket_count && !exactMatch; i++) {
+			const uint32 bucket = image->gnuhash.buckets[i];
+			if (bucket == 0)
+				continue;
+			const uint32* chain0 = image->gnuhash.chain0;
+			const uint32* hashValue = &chain0[bucket];
+			do {
+				uint32 symIndex = hashValue - chain0;
+				elf_sym *symbol = &image->syms[symIndex];
+				addr_t location = symbol->st_value + image->regions[0].delta;
 
-			if (location <= (addr_t)address	&& location >= foundLocation) {
-				foundSymbol = symbol;
-				foundLocation = location;
+				if (location <= (addr_t)address	&& location >= foundLocation) {
+					foundSymbol = symbol;
+					foundLocation = location;
 
-				// jump out if we have an exact match
-				if (location + symbol->st_size > (addr_t)address) {
-					exactMatch = true;
-					break;
+					// jump out if we have an exact match
+					if (location + symbol->st_size > (addr_t)address) {
+						exactMatch = true;
+						break;
+					}
+				}
+			} while ((*hashValue++ & 1) == 0);
+		}
+	} else {
+		for (uint32 i = 0; i < HASHTABSIZE(image) && !exactMatch; i++) {
+			for (int32 j = HASHBUCKETS(image)[i]; j != STN_UNDEF;
+					j = HASHCHAINS(image)[j]) {
+				elf_sym* symbol = &image->syms[j];
+				addr_t location = symbol->st_value + image->regions[0].delta;
+
+				if (location <= (addr_t)address	&& location >= foundLocation) {
+					foundSymbol = symbol;
+					foundLocation = location;
+
+					// jump out if we have an exact match
+					if (location + symbol->st_size > (addr_t)address) {
+						exactMatch = true;
+						break;
+					}
 				}
 			}
 		}
@@ -1006,16 +1059,7 @@ get_library_symbol(void* handle, void* caller, const char* symbolName,
 		// calling image. Return the next after the caller symbol.
 
 		// First of all, find the caller image.
-		image_t* callerImage = get_loaded_images().head;
-		for (; callerImage != NULL; callerImage = callerImage->next) {
-			elf_region_t& text = callerImage->regions[0];
-			if ((addr_t)caller >= text.vmstart
-				&& (addr_t)caller < text.vmstart + text.vmsize) {
-				// found the image
-				break;
-			}
-		}
-
+		image_t* callerImage = find_loaded_image_by_address((addr_t)caller);
 		if (callerImage != NULL) {
 			// found the caller -- now search the global scope until we find
 			// the next symbol

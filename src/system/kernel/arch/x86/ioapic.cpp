@@ -5,16 +5,21 @@
 
 #include <arch/x86/ioapic.h>
 
-#include <int.h>
+#include <interrupts.h>
 #include <vm/vm.h>
 
 #include "acpi_irq_routing_table.h"
+
+#include <utility>
 
 #include <ACPI.h>
 #include <AutoDeleter.h>
 #include <safemode.h>
 #include <string.h>
 #include <stdio.h>
+#include <cpu.h>
+#include <util/AutoLock.h>
+#include <util/FixedSizeBitmap.h>
 
 #include <arch/x86/apic.h>
 #include <arch/x86/arch_int.h>
@@ -80,8 +85,12 @@
 #define IO_APIC_INTERRUPT_VECTOR_SHIFT		0
 #define IO_APIC_INTERRUPT_VECTOR_MASK		0xff
 
-#define MAX_SUPPORTED_REDIRECTION_ENTRIES	64
+// maximum entries BIOS may advertise (according to Intel docs)
+#define MAX_SUPPORTED_REDIRECTION_ENTRIES	120
 #define ISA_INTERRUPT_COUNT					16
+
+
+typedef FixedSizeBitmap<MAX_SUPPORTED_REDIRECTION_ENTRIES> APICMask;
 
 
 struct ioapic_registers {
@@ -98,9 +107,10 @@ struct ioapic {
 	uint8				max_redirection_entry;
 	uint8				global_interrupt_base;
 	uint8				global_interrupt_last;
-	uint64				level_triggered_mask;
-	uint64				nmi_mask;
+	APICMask			level_triggered_mask;
+	APICMask			nmi_mask;
 
+	spinlock			registers_lock;
 	area_id				register_area;
 	ioapic_registers*	registers;
 
@@ -191,21 +201,22 @@ ioapic_write_64(struct ioapic& ioapic, uint8 registerSelect, uint64 value,
 
 static void
 ioapic_configure_pin(struct ioapic& ioapic, uint8 pin, uint8 vector,
-	uint8 triggerPolarity, uint16 deliveryMode)
+	interrupt_trigger_mode triggerMode, interrupt_trigger_polarity triggerPolarity,
+	uint16 deliveryMode)
 {
 	uint64 entry = ioapic_read_64(ioapic, IO_APIC_REDIRECTION_TABLE + pin * 2);
 	entry &= ~(IO_APIC_TRIGGER_MODE_MASK | IO_APIC_PIN_POLARITY_MASK
 		| IO_APIC_INTERRUPT_VECTOR_MASK | IO_APIC_DELIVERY_MODE_MASK);
 
-	if (triggerPolarity & B_LEVEL_TRIGGERED) {
+	if (triggerMode == B_LEVEL_TRIGGERED) {
 		entry |= IO_APIC_TRIGGER_MODE_LEVEL;
-		ioapic.level_triggered_mask |= ((uint64)1 << pin);
+		ioapic.level_triggered_mask.SetBit(pin);
 	} else {
 		entry |= IO_APIC_TRIGGER_MODE_EDGE;
-		ioapic.level_triggered_mask &= ~((uint64)1 << pin);
+		ioapic.level_triggered_mask.ClearBit(pin);
 	}
 
-	if (triggerPolarity & B_LOW_ACTIVE_POLARITY)
+	if (triggerPolarity == B_LOW_ACTIVE_POLARITY)
 		entry |= IO_APIC_PIN_POLARITY_LOW_ACTIVE;
 	else
 		entry |= IO_APIC_PIN_POLARITY_HIGH_ACTIVE;
@@ -224,15 +235,18 @@ ioapic_is_spurious_interrupt(int32 gsi)
 }
 
 
-static bool
-ioapic_is_level_triggered_interrupt(int32 gsi)
+static interrupt_trigger_mode
+ioapic_get_interrupt_trigger(int32 gsi)
 {
 	struct ioapic* ioapic = find_ioapic(gsi);
 	if (ioapic == NULL)
-		return false;
+		return B_EDGE_TRIGGERED;
 
 	uint8 pin = gsi - ioapic->global_interrupt_base;
-	return (ioapic->level_triggered_mask & ((uint64)1 << pin)) != 0;
+	if (ioapic->level_triggered_mask.GetBit(pin))
+		return B_LEVEL_TRIGGERED;
+	else
+		return B_EDGE_TRIGGERED;
 }
 
 
@@ -253,6 +267,7 @@ ioapic_assign_interrupt_to_cpu(int32 gsi, int32 cpu)
 	struct ioapic* ioapic = find_ioapic(gsi);
 	if (ioapic == NULL)
 		return;
+	SpinLocker _(ioapic->registers_lock);
 
 	uint32 apicid = x86_get_cpu_apic_id(cpu);
 
@@ -281,6 +296,7 @@ ioapic_enable_io_interrupt(int32 gsi)
 	struct ioapic* ioapic = find_ioapic(gsi);
 	if (ioapic == NULL)
 		return;
+	SpinLocker _(ioapic->registers_lock);
 
 	x86_set_irq_source(gsi, IRQ_SOURCE_IOAPIC);
 
@@ -300,6 +316,7 @@ ioapic_disable_io_interrupt(int32 gsi)
 	struct ioapic* ioapic = find_ioapic(gsi);
 	if (ioapic == NULL)
 		return;
+	SpinLocker _(ioapic->registers_lock);
 
 	uint8 pin = gsi - ioapic->global_interrupt_base;
 	TRACE("ioapic_disable_io_interrupt: gsi %" B_PRId32
@@ -312,25 +329,26 @@ ioapic_disable_io_interrupt(int32 gsi)
 
 
 static void
-ioapic_configure_io_interrupt(int32 gsi, uint32 config)
+ioapic_configure_io_interrupt(int32 gsi, interrupt_trigger_mode mode,
+	interrupt_trigger_polarity polarity)
 {
 	struct ioapic* ioapic = find_ioapic(gsi);
 	if (ioapic == NULL)
 		return;
+	InterruptsSpinLocker _(ioapic->registers_lock);
 
 	uint8 pin = gsi - ioapic->global_interrupt_base;
-	TRACE("ioapic_configure_io_interrupt: gsi %" B_PRId32
-		" -> io-apic %u pin %u; config 0x%08" B_PRIx32 "\n", gsi,
-		ioapic->number, pin, config);
+	TRACE("ioapic_configure_io_interrupt: gsi %" B_PRId32 " -> io-apic %u pin %u; mode 0x%08"
+		B_PRIx32 "\n", gsi, ioapic->number, pin, mode);
 
-	ioapic_configure_pin(*ioapic, pin, gsi, config,
-		IO_APIC_DELIVERY_MODE_FIXED);
+	ioapic_configure_pin(*ioapic, pin, gsi, mode, polarity, IO_APIC_DELIVERY_MODE_FIXED);
 }
 
 
 static status_t
 ioapic_map_ioapic(struct ioapic& ioapic, phys_addr_t physicalAddress)
 {
+	ioapic.registers_lock = B_SPINLOCK_INITIALIZER;
 	ioapic.register_area = vm_map_physical_memory(B_SYSTEM_TEAM, "io-apic",
 		(void**)&ioapic.registers, ioapic.registers != NULL ? B_EXACT_ADDRESS
 		: B_ANY_KERNEL_ADDRESS, B_PAGE_SIZE, B_KERNEL_READ_AREA
@@ -357,15 +375,15 @@ ioapic_map_ioapic(struct ioapic& ioapic, phys_addr_t physicalAddress)
 			& IO_APIC_MAX_REDIRECTION_ENTRY_MASK);
 	if (ioapic.max_redirection_entry >= MAX_SUPPORTED_REDIRECTION_ENTRIES) {
 		dprintf("io-apic %u entry count %d exceeds max supported, only using the "
-			"first %u entries\n", ioapic.number, ioapic.max_redirection_entry,
-			(uint8)MAX_SUPPORTED_REDIRECTION_ENTRIES);
+			"first %u entries\n", ioapic.number, ioapic.max_redirection_entry + 1,
+			MAX_SUPPORTED_REDIRECTION_ENTRIES);
 		ioapic.max_redirection_entry = MAX_SUPPORTED_REDIRECTION_ENTRIES - 1;
 	}
 
 	ioapic.global_interrupt_last
 		= ioapic.global_interrupt_base + ioapic.max_redirection_entry;
 
-	ioapic.nmi_mask = 0;
+	ioapic.nmi_mask.ClearAll();
 
 	return B_OK;
 }
@@ -376,9 +394,8 @@ ioapic_initialize_ioapic(struct ioapic& ioapic, uint8 targetAPIC)
 {
 	// program the APIC ID
 	ioapic_write_32(ioapic, IO_APIC_ID, ioapic.apic_id << IO_APIC_ID_SHIFT);
-
 	// program the interrupt vectors of the io-apic
-	ioapic.level_triggered_mask = 0;
+	ioapic.level_triggered_mask.ClearAll();
 	uint8 gsi = ioapic.global_interrupt_base;
 	for (uint8 i = 0; i <= ioapic.max_redirection_entry; i++, gsi++) {
 		// initialize everything to deliver to the boot CPU in physical mode
@@ -402,7 +419,7 @@ ioapic_initialize_ioapic(struct ioapic& ioapic, uint8 targetAPIC)
 			entry |= IO_APIC_TRIGGER_MODE_LEVEL
 				| IO_APIC_PIN_POLARITY_LOW_ACTIVE
 				| IO_APIC_DELIVERY_MODE_FIXED;
-			ioapic.level_triggered_mask |= ((uint64)1 << i);
+			ioapic.level_triggered_mask.SetBit(i);
 		}
 
 		ioapic_write_64(ioapic, IO_APIC_REDIRECTION_TABLE + 2 * i, entry, true);
@@ -416,8 +433,8 @@ static int32
 ioapic_source_override_handler(void* data)
 {
 	int32 vector = (addr_t)data;
-	bool levelTriggered = ioapic_is_level_triggered_interrupt(vector);
-	return int_io_interrupt_handler(vector, levelTriggered);
+	interrupt_trigger_mode triggerMode = ioapic_get_interrupt_trigger(vector);
+	return io_interrupt_handler(vector, triggerMode);
 }
 
 
@@ -489,7 +506,7 @@ acpi_enumerate_ioapics(acpi_table_madt* madt)
 				}
 
 				uint8 pin = info->GlobalIrq - ioapic->global_interrupt_base;
-				ioapic->nmi_mask |= (uint64)1 << pin;
+				ioapic->nmi_mask.SetBit(pin);
 				break;
 			}
 		}
@@ -502,37 +519,38 @@ acpi_enumerate_ioapics(acpi_table_madt* madt)
 }
 
 
-static inline uint32
+static inline std::pair<interrupt_trigger_mode, interrupt_trigger_polarity>
 acpi_madt_convert_inti_flags(uint16 flags)
 {
-	uint32 config = 0;
+	interrupt_trigger_mode mode;
+	interrupt_trigger_polarity polarity;
 	switch (flags & ACPI_MADT_POLARITY_MASK) {
 		case ACPI_MADT_POLARITY_ACTIVE_LOW:
-			config = B_LOW_ACTIVE_POLARITY;
+			polarity = B_LOW_ACTIVE_POLARITY;
 			break;
 		default:
 			dprintf("invalid polarity in inti flags\n");
 			// fall through and assume active high
 		case ACPI_MADT_POLARITY_ACTIVE_HIGH:
 		case ACPI_MADT_POLARITY_CONFORMS:
-			config = B_HIGH_ACTIVE_POLARITY;
+			polarity = B_HIGH_ACTIVE_POLARITY;
 			break;
 	}
 
 	switch (flags & ACPI_MADT_TRIGGER_MASK) {
 		case ACPI_MADT_TRIGGER_LEVEL:
-			config |= B_LEVEL_TRIGGERED;
+			mode = B_LEVEL_TRIGGERED;
 			break;
 		default:
 			dprintf("invalid trigger mode in inti flags\n");
 			// fall through and assume edge triggered
 		case ACPI_MADT_TRIGGER_CONFORMS:
 		case ACPI_MADT_TRIGGER_EDGE:
-			config |= B_EDGE_TRIGGERED;
+			mode = B_EDGE_TRIGGERED;
 			break;
 	}
 
-	return config;
+	return { mode, polarity };
 }
 
 
@@ -568,8 +586,8 @@ acpi_configure_source_overrides(acpi_table_madt* madt)
 				}
 
 				// configure non-standard polarity/trigger modes
-				uint32 config = acpi_madt_convert_inti_flags(info->IntiFlags);
-				ioapic_configure_io_interrupt(info->GlobalIrq, config);
+				auto [mode, polarity] = acpi_madt_convert_inti_flags(info->IntiFlags);
+				ioapic_configure_io_interrupt(info->GlobalIrq, mode, polarity);
 				break;
 			}
 
@@ -586,23 +604,29 @@ acpi_configure_source_overrides(acpi_table_madt* madt)
 					break;
 
 				uint8 pin = info->GlobalIrq - ioapic->global_interrupt_base;
-				uint32 config = acpi_madt_convert_inti_flags(info->IntiFlags);
-				ioapic_configure_pin(*ioapic, pin, info->GlobalIrq, config,
+				auto [config, polarity] = acpi_madt_convert_inti_flags(info->IntiFlags);
+				ioapic_configure_pin(*ioapic, pin, info->GlobalIrq, config, polarity,
 					IO_APIC_DELIVERY_MODE_NMI);
 				break;
 			}
 
-#ifdef TRACE_IOAPIC
 			case ACPI_MADT_TYPE_LOCAL_APIC:
 			{
 				// purely informational
 				acpi_madt_local_apic* info = (acpi_madt_local_apic*)apicEntry;
-				dprintf("found local apic with id %u, processor id %u, "
+				TRACE("found local apic with id %u, processor id %u, "
 					"flags 0x%08" B_PRIx32 "\n", info->Id, info->ProcessorId,
 					(uint32)info->LapicFlags);
+				for (int32 i = 0; i < smp_get_num_cpus(); i++) {
+					if (x86_get_cpu_apic_id(i) == info->Id) {
+						gCPU[i].arch.acpi_processor_id = info->ProcessorId;
+						break;
+					}
+				}
 				break;
 			}
 
+#ifdef TRACE_IOAPIC
 			case ACPI_MADT_TYPE_LOCAL_APIC_NMI:
 			{
 				// TODO: take these into account, but at apic.cpp
@@ -666,21 +690,12 @@ ioapic_is_interrupt_available(int32 gsi)
 		return false;
 
 	uint8 pin = gsi - ioapic->global_interrupt_base;
-	return (ioapic->nmi_mask & ((uint64)1 << pin)) == 0;
+	return !ioapic->nmi_mask.GetBit(pin);
 }
 
 
 void
-ioapic_preinit(kernel_args* args)
-{
-	sIOAPICPhys = args->arch_args.ioapic_phys;
-
-	// The real IO-APIC initialization occurs after PCI initialization.
-}
-
-
-void
-ioapic_init()
+ioapic_init(kernel_args* args)
 {
 	static const interrupt_controller ioapicController = {
 		"82093AA IOAPIC",
@@ -688,7 +703,7 @@ ioapic_init()
 		&ioapic_disable_io_interrupt,
 		&ioapic_configure_io_interrupt,
 		&ioapic_is_spurious_interrupt,
-		&ioapic_is_level_triggered_interrupt,
+		&ioapic_get_interrupt_trigger,
 		&ioapic_end_of_interrupt,
 		&ioapic_assign_interrupt_to_cpu,
 	};
@@ -696,7 +711,7 @@ ioapic_init()
 	if (!apic_available())
 		return;
 
-	if (sIOAPICPhys == 0) {
+	if (args->arch_args.ioapic_phys == 0) {
 		dprintf("no io-apics available, not using io-apics for interrupt "
 			"routing\n");
 		return;
@@ -742,16 +757,6 @@ ioapic_init()
 		// aren't different routings based on it this is non-fatal
 	}
 
-	IRQRoutingTable table;
-	status = prepare_irq_routing(acpiModule, table,
-		&ioapic_is_interrupt_available);
-	if (status != B_OK) {
-		dprintf("IRQ routing preparation failed, not configuring io-apics\n");
-		acpi_set_interrupt_model(acpiModule, ACPI_INTERRUPT_MODEL_PIC);
-			// revert to PIC interrupt model just in case
-		return;
-	}
-
 	// use the boot CPU as the target for all interrupts
 	uint8 targetAPIC = x86_get_cpu_apic_id(0);
 
@@ -767,30 +772,8 @@ ioapic_init()
 		current = current->next;
 	}
 
-#ifdef TRACE_IOAPIC
-	dprintf("trying interrupt routing:\n");
-	print_irq_routing_table(table);
-#endif
-
-	status = enable_irq_routing(acpiModule, table);
-	if (status != B_OK) {
-		panic("failed to enable IRQ routing");
-		// if it failed early on it might still work in PIC mode
-		acpi_set_interrupt_model(acpiModule, ACPI_INTERRUPT_MODEL_PIC);
-		return;
-	}
-
-	print_irq_routing_table(table);
-
-	// configure the source overrides, but let the PCI config below override it
+	// configure the source overrides, but let the PCI config later override it
 	acpi_configure_source_overrides(madt);
-
-	// configure IO-APIC interrupts from PCI routing table
-	for (int i = 0; i < table.Count(); i++) {
-		irq_routing_entry& entry = table.ElementAt(i);
-		ioapic_configure_io_interrupt(entry.irq,
-			entry.polarity | entry.trigger_mode);
-	}
 
 	// kill the local ints on the local APIC
 	apic_disable_local_ints();
@@ -804,7 +787,7 @@ ioapic_init()
 	uint16 legacyInterrupts;
 	pic_disable(legacyInterrupts);
 
-	// enable previsouly enabled legacy interrupts
+	// enable previously enabled legacy interrupts
 	for (uint8 i = 0; i < 16; i++) {
 		if ((legacyInterrupts & (1 << i)) != 0)
 			ioapic_enable_io_interrupt(i);
@@ -824,7 +807,61 @@ ioapic_init()
 		current = current->next;
 	}
 
+	// IO-APIC interrupt routing occurs after PCI initialization.
+	sIOAPICPhys = args->arch_args.ioapic_phys;
+
 	// prefer the ioapic over the normal pic
 	dprintf("using io-apics for interrupt routing\n");
 	arch_int_set_interrupt_controller(ioapicController);
+}
+
+
+void
+ioapic_routing_init()
+{
+	if (sIOAPICPhys == 0) {
+		dprintf("no io-apics available, not using io-apics for interrupt routing\n");
+		return;
+	}
+
+	// load ACPI module
+	status_t status;
+	acpi_module_info* acpiModule;
+	status = get_module(B_ACPI_MODULE_NAME, (module_info**)&acpiModule);
+	if (status != B_OK) {
+		dprintf("ACPI module not available, not configuring io-apics\n");
+		return;
+	}
+	BPrivate::CObjectDeleter<const char, status_t, put_module>
+		acpiModulePutter(B_ACPI_MODULE_NAME);
+
+	IRQRoutingTable table;
+	status = prepare_irq_routing(acpiModule, table, &ioapic_is_interrupt_available);
+	if (status != B_OK) {
+		dprintf("IRQ routing preparation failed, not configuring io-apics\n");
+		// revert to PIC interrupt model just in case
+		acpi_set_interrupt_model(acpiModule, ACPI_INTERRUPT_MODEL_PIC);
+		return;
+	}
+
+#ifdef TRACE_IOAPIC
+	dprintf("trying interrupt routing:\n");
+	print_irq_routing_table(table);
+#endif
+
+	status = enable_irq_routing(acpiModule, table);
+	if (status != B_OK) {
+		panic("failed to enable IRQ routing");
+		// if it failed early on it might still work in PIC mode
+		acpi_set_interrupt_model(acpiModule, ACPI_INTERRUPT_MODEL_PIC);
+		return;
+	}
+
+	print_irq_routing_table(table);
+
+	// configure IO-APIC interrupts from PCI routing table
+	for (int i = 0; i < table.Count(); i++) {
+		irq_routing_entry& entry = table.ElementAt(i);
+		ioapic_configure_io_interrupt(entry.irq, entry.trigger_mode, entry.polarity);
+	}
 }

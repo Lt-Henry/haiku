@@ -1,4 +1,4 @@
-1	indonesian	x-vnd.haiku-softwareupdater	369324613
+1	indonesian	x-vnd.haiku-softwareupdater	1377379822
 Updating version	SoftwareUpdaterWindow	List item text	Memperbarui versi
 Click here to install {0, plural, one{# updated package} other{# updated packages}}.	CheckManager		Klik di sini untuk menginstal {0, plural, one{# updated package} other{# updated packages}}.
 Packages to be uninstalled	SoftwareUpdaterWindow	List super item label	Paket-paket yang akan dihapus
@@ -41,7 +41,6 @@ Exception occurred while checking for updates: %s\n	CheckAction		Pengecualian te
 Packages are being updated	UpdateManager		Paket sedang diperbarui
 Cancel	SoftwareUpdaterWindow		Batal
 Don't quit	SoftwareUpdaterWindow		Jangan berhenti
-Click here to run SoftwareUpdater. Some updates will require a problem solution to be selected.	CheckManager		Klik di sini untuk menjalankan SoftwareUpdater. Beberapa pembaruan akan membutuhkan solusi masalah untuk dipilih.
 Checking for updates	SoftwareUpdaterWindow		Memeriksa pembaruan
 Updates completed	UpdateManager		Pembaruan selesai
 Reboot	SoftwareUpdaterWindow		Boot-ulang
@@ -52,8 +51,8 @@ No remote repositories are available	UpdateManager	Error message	Tidak ada repos
 Software {0, plural, one{update} other{updates}} available	CheckManager		{0, plural, one{update} other{updates}} aplikasi tersedia
 Reboot	SoftwareUpdaterWindow	Button label	Boot-ulang
 Update	SoftwareUpdaterWindow	Alert button label	Memperbarui
-Open Repositories	SoftwareUpdaterWindow	Alert button label	Buka Repositori
 Updates did not complete	UpdateAction		Pembaruan tidak selesai
+Open Repositories	SoftwareUpdaterWindow	Alert button label	Buka Repositori
 Invalid update type, cannot continue with updates	UpdateAction		Jenis pembaruan tidak sah, tidak dapat melanjutkan pembaruan
 Uninstalling version	SoftwareUpdaterWindow	List item text	Menghapus versi
 %i of %i	UpdateManager	Do not translate %i	%i dari %i

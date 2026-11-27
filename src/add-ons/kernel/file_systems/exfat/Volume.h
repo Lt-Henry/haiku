@@ -14,13 +14,8 @@
 #define VOLUME_H
 
 
-#include <lock.h>
-#include <string.h>
-
-#include <StorageDefs.h>
-
 #include "exfat.h"
-#include "SplayTree.h"
+#include "system_dependencies.h"
 
 
 struct node_key {

@@ -1,4 +1,4 @@
-1	catalan; valencian	x-vnd.Haiku-PowerStatus	1104524835
+1	catalan; valencian	x-vnd.Haiku-PowerStatus	4069361317
 Run in window	PowerStatus		Executa en una finestra
 Extended battery info	PowerStatus		Informació ampliada de la bateria
 Show status icon	PowerStatus		Mostra la icona de l'estat
@@ -14,9 +14,9 @@ Quit	PowerStatus		Surt
 Battery not charging	PowerStatus		La bateria no carrega.
 Battery low	PowerStatus		Bateria baixa
 Model number: 	PowerStatus		Número del model: 
+You can run %appname% in a window or install it in the Deskbar.	PowerStatus		Podeu executar %appname% en una finestra o instal·lar-la a la barra de l'escriptori.
 Battery unused	PowerStatus		Bateria no usada
 Type: 	PowerStatus		Tipus: 
-You can run PowerStatus in a window or install it in the Deskbar.	PowerStatus		Podeu executar l'Estat de l'energia en una finestra o instal·lar-lo a la barra d’escriptori.
 Damaged or missing battery	PowerStatus		La bateria està malmesa o no hi és.
  mAh	PowerStatus		 mAh
 Battery discharging	PowerStatus		La bateria es descarrega.
@@ -31,7 +31,6 @@ Serial number: 	PowerStatus		Número de sèrie:
 Battery critical	PowerStatus		Bateria crítica
 Capacity: 	PowerStatus		Capacitat: 
  mW	PowerStatus		 mW
-No supported battery detected. PowerStatus cannot be used on your system.	PowerStatus		S'ha detectat una bateria no compatible. L'Estat de l'energia no es pot usar al vostre sistema.
 Show percent	PowerStatus		Mostra'n el percentatge
 Capacity granularity 1: 	PowerStatus		Granularitat de la capacitat 1: 
 The battery level is getting low, please plug in the device.	PowerStatus		El nivell de bateria comença a ser baix; si us plau, endolleu el dispositiu.
@@ -40,6 +39,7 @@ Capacity granularity 2: 	PowerStatus		Granularitat de la capacitat 2:
 Too bad!	PowerStatus		Quina manxiula!
 Technology: 	PowerStatus		Tecnologia: 
 not charging	PowerStatus		no carrega
+No supported battery detected. %appname% cannot be used on your system.	PowerStatus		No s'ha detectat cap bateria compatible. No es pot usar %appname% al sistema.
  mWh	PowerStatus		 mWh
 PowerStatus	System name		Estat de l'energia
 Design capacity: 	PowerStatus		Capacitat del disseny: 

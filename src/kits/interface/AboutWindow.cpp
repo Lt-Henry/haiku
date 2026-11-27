@@ -201,8 +201,8 @@ AboutView::AboutView(const char* appName, const char* signature)
 	BLayoutBuilder::Group<>(this, B_HORIZONTAL, 0)
 		.Add(fStripeView)
 		.AddGroup(B_VERTICAL)
-			.SetInsets(0, B_USE_DEFAULT_SPACING,
-				B_USE_DEFAULT_SPACING, B_USE_DEFAULT_SPACING)
+			.SetInsets(fStripeView->Icon() != NULL ? 0 : B_USE_DEFAULT_SPACING,
+				B_USE_DEFAULT_SPACING, B_USE_DEFAULT_SPACING, B_USE_DEFAULT_SPACING)
 			.AddGroup(B_VERTICAL, 0)
 				.Add(fNameView)
 				.Add(fVersionView)
@@ -527,7 +527,7 @@ BAboutWindow::AddSpecialThanks(const char** thanks)
 	if (thanks == NULL)
 		return;
 
-	const char* specialThanks = B_TRANSLATE_MARK("Special Thanks:");
+	const char* specialThanks = B_TRANSLATE_MARK("Special thanks:");
 	specialThanks = gSystemCatalog.GetString(specialThanks, "AboutWindow");
 
 	AddText(specialThanks, thanks);
@@ -553,14 +553,11 @@ BAboutWindow::AddExtraInfo(const char* extraInfo)
 	if (extraInfo == NULL)
 		return;
 
-	const char* appExtraInfo = B_TRANSLATE_MARK(extraInfo);
-	appExtraInfo = gSystemCatalog.GetString(extraInfo, "AboutWindow");
-
 	BString extra("");
 	if (fAboutView->InfoView()->TextLength() > 0)
 		extra << "\n\n";
 
-	extra << appExtraInfo;
+	extra << extraInfo;
 
 	fAboutView->InfoView()->Insert(extra.String());
 }

@@ -216,11 +216,7 @@ Partition::WriteAt(void *cookie, off_t position, const void *buffer,
 off_t
 Partition::Size() const
 {
-	struct stat stat;
-	if (fstat(fFD, &stat) == B_OK)
-		return stat.st_size;
-
-	return Node::Size();
+	return size;
 }
 
 
@@ -294,7 +290,7 @@ Partition::_Mount(file_system_module_info *module, Directory **_fileSystem)
 status_t
 Partition::Mount(Directory **_fileSystem, bool isBootDevice)
 {
-	if (isBootDevice && gBootVolume.GetBool(BOOT_VOLUME_BOOTED_FROM_IMAGE,
+	if (isBootDevice && gBootParams.GetBool(BOOT_VOLUME_BOOTED_FROM_IMAGE,
 			false)) {
 		return _Mount(&gTarFileSystemModule, _fileSystem);
 	}
@@ -319,7 +315,7 @@ Partition::Scan(bool mountFileSystems, bool isBootDevice)
 	// if we were not booted from the real boot device, we won't scan
 	// the device we were booted from (which is likely to be a slow
 	// floppy or CD)
-	if (isBootDevice && gBootVolume.GetBool(BOOT_VOLUME_BOOTED_FROM_IMAGE,
+	if (isBootDevice && gBootParams.GetBool(BOOT_VOLUME_BOOTED_FROM_IMAGE,
 			false)) {
 		return B_ENTRY_NOT_FOUND;
 	}
@@ -363,13 +359,15 @@ Partition::Scan(bool mountFileSystems, bool isBootDevice)
 		if (sFileSystemModules[i]->identify_file_system == NULL)
 			continue;
 
-		float priority = sFileSystemModules[i]->identify_file_system(this);
+		off_t blockForChecksum = 0;
+		float priority = sFileSystemModules[i]->identify_file_system(this, &blockForChecksum);
 		if (priority <= 0)
 			continue;
 
 		if (priority > bestFSPriority) {
 			bestFSModule = sFileSystemModules[i];
 			bestFSPriority = priority;
+			fBlockForChecksum = blockForChecksum;
 		}
 	}
 
@@ -452,7 +450,10 @@ add_partitions_for(int fd, bool mountFileSystems, bool isBootDevice)
 
 	// set some magic/default values
 	partition->block_size = 512;
-	partition->size = partition->Size();
+
+	struct stat stat;
+	if (fstat(fd, &stat) == B_OK)
+		partition->size = stat.st_size;
 
 	// add this partition to the list of partitions
 	// temporarily for Lookup() to work

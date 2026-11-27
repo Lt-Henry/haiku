@@ -1,8 +1,9 @@
 /*
- * Copyright 2019-2021, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2019-2025, Andrew Lindesay <apl@lindesay.co.nz>.
  * Copyright 2024 Haiku, Inc. All rights reserved.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
+
 
 #include "UserUsageConditionsWindow.h"
 
@@ -21,9 +22,9 @@
 #include "Logger.h"
 #include "MarkupTextView.h"
 #include "Model.h"
-#include "UserUsageConditions.h"
 #include "ServerHelper.h"
 #include "TextView.h"
+#include "UserUsageConditions.h"
 #include "WebAppInterface.h"
 
 
@@ -32,11 +33,13 @@
 
 #define PLACEHOLDER_TEXT "..."
 
-#define INTRODUCTION_TEXT_LATEST "HaikuDepot communicates with a " \
+#define INTRODUCTION_TEXT_LATEST \
+	"%Appname% communicates with a " \
 	"server component called HaikuDepotServer. These are the latest " \
 	"usage conditions for use of the HaikuDepotServer service."
 
-#define INTRODUCTION_TEXT_USER "HaikuDepot communicates with a " \
+#define INTRODUCTION_TEXT_USER \
+	"%Appname% communicates with a " \
 	"server component called HaikuDepotServer. These are the usage " \
 	"conditions that the user '%Nickname%' agreed to at %AgreedToTimestamp% "\
 	"in relation to the use of the HaikuDepotServer service."
@@ -67,11 +70,10 @@ UserUsageConditionsWindow::UserUsageConditionsWindow(Model& model,
 	be_plain_font->GetHeight(&fontHeight);
 	const float lineHeight = fontHeight.ascent + fontHeight.descent;
 
-	BScrollView* scrollView = new BScrollView("copy scroll view", fCopyView,
-		0, false, true, B_PLAIN_BORDER);
+	BScrollView* scrollView
+		= new BScrollView("copy scroll view", fCopyView, 0, false, true, B_PLAIN_BORDER);
 	scrollView->SetExplicitMinSize(BSize(B_SIZE_UNSET, lineHeight * 6));
-	BButton* okButton = new BButton("ok", B_TRANSLATE("OK"),
-		new BMessage(B_QUIT_REQUESTED));
+	BButton* okButton = new BButton("ok", B_TRANSLATE("OK"), new BMessage(B_QUIT_REQUESTED));
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL)
 		.SetInsets(B_USE_WINDOW_INSETS)
@@ -84,8 +86,11 @@ UserUsageConditionsWindow::UserUsageConditionsWindow(Model& model,
 			.End()
 		.End();
 
-	GetLayout()->SetExplicitMinSize(BSize(500, B_SIZE_UNSET));
+	GetLayout()->SetExplicitMinSize(BSize(be_plain_font->StringWidth("W") * 40, B_SIZE_UNSET));
+	GetLayout()->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, B_SIZE_UNSET));
 	ResizeToPreferred();
+	// Lock the preferred height as minimum, otherwise the progress bar and button can get cut off.
+	GetLayout()->SetExplicitMinSize(BSize(B_SIZE_UNSET, Size().Height()));
 	CenterOnScreen();
 
 	UserDetail userDetail;
@@ -118,11 +123,10 @@ UserUsageConditionsWindow::UserUsageConditionsWindow(Model& model,
 	UserDetail userDetail;
 	fIntroductionTextView->SetText(_IntroductionTextForMode(mode, userDetail));
 
-	BScrollView* scrollView = new BScrollView("copy scroll view", fCopyView,
-		0, false, true, B_PLAIN_BORDER);
+	BScrollView* scrollView
+		= new BScrollView("copy scroll view", fCopyView, 0, false, true, B_PLAIN_BORDER);
 	scrollView->SetExplicitMinSize(BSize(B_SIZE_UNSET, lineHeight * 6));
-	BButton* okButton = new BButton("ok", B_TRANSLATE("OK"),
-		new BMessage(B_QUIT_REQUESTED));
+	BButton* okButton = new BButton("ok", B_TRANSLATE("OK"), new BMessage(B_QUIT_REQUESTED));
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL)
 		.SetInsets(B_USE_WINDOW_INSETS)
@@ -138,8 +142,11 @@ UserUsageConditionsWindow::UserUsageConditionsWindow(Model& model,
 		.Add(fWorkerIndicator, 1)
 		.End();
 
-	GetLayout()->SetExplicitMinSize(BSize(500, B_SIZE_UNSET));
+	GetLayout()->SetExplicitMinSize(BSize(be_plain_font->StringWidth("W") * 40, B_SIZE_UNSET));
+	GetLayout()->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, B_SIZE_UNSET));
 	ResizeToPreferred();
+	// Lock the preferred height as minimum, otherwise the progress bar and button can get cut off.
+	GetLayout()->SetExplicitMinSize(BSize(B_SIZE_UNSET, Size().Height()));
 	CenterOnScreen();
 
 	_FetchData();
@@ -153,7 +160,7 @@ UserUsageConditionsWindow::~UserUsageConditionsWindow()
 
 
 /*! This sets up the UI controls / interface elements that are not specific to
-    a given mode of viewing.
+	a given mode of viewing.
 */
 
 void
@@ -165,15 +172,13 @@ UserUsageConditionsWindow::_InitUiControls()
 	fCopyView->SetHighUIColor(B_DOCUMENT_TEXT_COLOR);
 	fCopyView->SetInsets(8.0f);
 
-	fAgeNoteStringView = new BStringView("age note string view",
-		PLACEHOLDER_TEXT);
+	fAgeNoteStringView = new BStringView("age note string view", PLACEHOLDER_TEXT);
 	fAgeNoteStringView->AdoptSystemColors();
 
 	BFont versionFont(be_plain_font);
 	versionFont.SetSize(versionFont.Size() * 0.75f);
 
-	fVersionStringView = new BStringView("version string view",
-		PLACEHOLDER_TEXT);
+	fVersionStringView = new BStringView("version string view", PLACEHOLDER_TEXT);
 	fVersionStringView->AdoptSystemColors();
 	fVersionStringView->SetFont(&versionFont);
 	fVersionStringView->SetAlignment(B_ALIGN_RIGHT);
@@ -190,8 +195,7 @@ UserUsageConditionsWindow::MessageReceived(BMessage* message)
 			BMessage userDetailMessage;
 			BMessage userUsageConditionsMessage;
 			message->FindMessage(KEY_USER_DETAIL, &userDetailMessage);
-			message->FindMessage(KEY_USER_USAGE_CONDITIONS,
-				&userUsageConditionsMessage);
+			message->FindMessage(KEY_USER_USAGE_CONDITIONS, &userUsageConditionsMessage);
 			UserDetail userDetail(&userDetailMessage);
 			UserUsageConditions userUsageConditions(&userUsageConditionsMessage);
 			_DisplayData(userDetail, userUsageConditions);
@@ -216,7 +220,7 @@ UserUsageConditionsWindow::QuitRequested()
 	if (fWorkerThread == -1)
 		return true;
 	HDINFO("unable to quit when the user usage "
-		"conditions window is still fetching data");
+		   "conditions window is still fetching data");
 	return false;
 }
 
@@ -232,15 +236,15 @@ UserUsageConditionsWindow::_FetchData()
 {
 	if (-1 != fWorkerThread)
 		debugger("illegal state - attempt to fetch, but fetch in progress");
-	thread_id thread = spawn_thread(&_FetchDataThreadEntry,
-		"Fetch usage conditions data", B_NORMAL_PRIORITY, this);
+	thread_id thread = spawn_thread(&_FetchDataThreadEntry, "Fetch usage conditions data",
+		B_NORMAL_PRIORITY, this);
 	if (thread >= 0) {
 		fWorkerIndicator->Start();
 		_SetWorkerThread(thread);
 		resume_thread(fWorkerThread);
 	} else {
 		debugger("unable to start a thread to fetch the user usage "
-			"conditions.");
+				 "conditions.");
 	}
 }
 
@@ -253,8 +257,7 @@ UserUsageConditionsWindow::_FetchData()
 /*static*/ int32
 UserUsageConditionsWindow::_FetchDataThreadEntry(void* data)
 {
-	UserUsageConditionsWindow* win
-		= reinterpret_cast<UserUsageConditionsWindow*>(data);
+	UserUsageConditionsWindow* win = reinterpret_cast<UserUsageConditionsWindow*>(data);
 	win->_FetchDataPerform();
 	return 0;
 }
@@ -269,18 +272,16 @@ UserUsageConditionsWindow::_FetchDataPerform()
 {
 	UserDetail userDetail;
 	UserUsageConditions conditions;
-	WebAppInterface* interface = fModel.GetWebAppInterface();
+	WebAppInterfaceRef interface = fModel.WebApp();
 	BString code;
 	status_t status = _FetchUserUsageConditionsCodePerform(userDetail, code);
 
 	if (status == B_OK) {
 		if (fMode == USER && code.IsEmpty()) {
-			BString message = B_TRANSLATE(
-				"The user '%Nickname%' has not agreed to any usage "
-				"conditions.");
+			BString message = B_TRANSLATE("The user '%Nickname%' has not agreed to any usage "
+										  "conditions.");
 			message.ReplaceAll("%Nickname%", userDetail.Nickname());
-			AppUtils::NotifySimpleError(B_TRANSLATE("No usage conditions"),
-				message);
+			AppUtils::NotifySimpleError(SimpleAlert(B_TRANSLATE("No usage conditions"), message));
 			BMessenger(this).SendMessage(B_QUIT_REQUESTED);
 			status = B_BAD_DATA;
 		}
@@ -296,8 +297,7 @@ UserUsageConditionsWindow::_FetchDataPerform()
 			conditions.Archive(&userUsageConditionsMessage, true);
 			userDetail.Archive(&userDetailMessage, true);
 			BMessage dataMessage(MSG_USER_USAGE_CONDITIONS_DATA);
-			dataMessage.AddMessage(KEY_USER_USAGE_CONDITIONS,
-				&userUsageConditionsMessage);
+			dataMessage.AddMessage(KEY_USER_USAGE_CONDITIONS, &userUsageConditionsMessage);
 			dataMessage.AddMessage(KEY_USER_DETAIL, &userDetailMessage);
 			BMessenger(this).SendMessage(&dataMessage);
 		} else {
@@ -311,8 +311,8 @@ UserUsageConditionsWindow::_FetchDataPerform()
 
 
 status_t
-UserUsageConditionsWindow::_FetchUserUsageConditionsCodePerform(
-	UserDetail& userDetail, BString& code)
+UserUsageConditionsWindow::_FetchUserUsageConditionsCodePerform(UserDetail& userDetail,
+	BString& code)
 {
 	switch (fMode) {
 		case LATEST:
@@ -320,8 +320,7 @@ UserUsageConditionsWindow::_FetchUserUsageConditionsCodePerform(
 				// no code in order to get the latest
 			return B_OK;
 		case USER:
-			return _FetchUserUsageConditionsCodeForUserPerform(
-				userDetail, code);
+			return _FetchUserUsageConditionsCodeForUserPerform(userDetail, code);
 		default:
 			debugger("unhanded mode");
 			return B_ERROR;
@@ -330,14 +329,15 @@ UserUsageConditionsWindow::_FetchUserUsageConditionsCodePerform(
 
 
 status_t
-UserUsageConditionsWindow::_FetchUserUsageConditionsCodeForUserPerform(
-	UserDetail& userDetail, BString& code)
+UserUsageConditionsWindow::_FetchUserUsageConditionsCodeForUserPerform(UserDetail& userDetail,
+	BString& code)
 {
-	WebAppInterface* interface = fModel.GetWebAppInterface();
+	WebAppInterfaceRef interface = fModel.WebApp();
 
-	if (interface->Nickname().IsEmpty())
+	if (interface->Nickname().IsEmpty()) {
 		debugger("attempt to get user details for the current user, but"
-			" there is no current user");
+				 " there is no current user");
+	}
 
 	BMessage responseEnvelopeMessage;
 	status_t result = interface->RetrieveCurrentUserDetail(responseEnvelopeMessage);
@@ -347,8 +347,7 @@ UserUsageConditionsWindow::_FetchUserUsageConditionsCodeForUserPerform(
 		// containing data.
 		switch (WebAppInterface::ErrorCodeFromResponse(responseEnvelopeMessage)) {
 			case ERROR_CODE_NONE:
-				result = WebAppInterface::UnpackUserDetail(
-					responseEnvelopeMessage, userDetail);
+				result = WebAppInterface::UnpackUserDetail(responseEnvelopeMessage, userDetail);
 				break;
 			default:
 				ServerHelper::NotifyServerJsonRpcError(responseEnvelopeMessage);
@@ -358,20 +357,19 @@ UserUsageConditionsWindow::_FetchUserUsageConditionsCodeForUserPerform(
 		}
 	} else {
 		HDERROR("an error has arisen communicating with the"
-			" server to obtain data for a user's user usage conditions"
-			" [%s]", strerror(result));
+				" server to obtain data for a user's user usage conditions"
+				" [%s]",
+			strerror(result));
 		ServerHelper::NotifyTransportError(result);
 	}
 
 	if (result == B_OK) {
 		BString userUsageConditionsCode = userDetail.Agreement().Code();
-		HDDEBUG("the user [%s] has agreed to uuc [%s]",
-			interface->Nickname().String(),
+		HDDEBUG("the user [%s] has agreed to uuc [%s]", interface->Nickname().String(),
 			userUsageConditionsCode.String());
 		code.SetTo(userUsageConditionsCode);
 	} else {
-		HDDEBUG("unable to get details of the user [%s]",
-			interface->Nickname().String());
+		HDDEBUG("unable to get details of the user [%s]", interface->Nickname().String());
 	}
 
 	return result;
@@ -381,20 +379,19 @@ UserUsageConditionsWindow::_FetchUserUsageConditionsCodeForUserPerform(
 void
 UserUsageConditionsWindow::_NotifyFetchProblem()
 {
-	AppUtils::NotifySimpleError(
-		B_TRANSLATE("Usage conditions download problem"),
-		B_TRANSLATE("An error has arisen downloading the usage "
-			"conditions. Check the log for details and try again. "
-			ALERT_MSG_LOGS_USER_GUIDE));
+	AppUtils::NotifySimpleError(SimpleAlert(B_TRANSLATE("Usage conditions download problem"),
+		B_TRANSLATE(
+			"An error has arisen downloading the usage "
+			"conditions. Check the log for details and try again. " ALERT_MSG_LOGS_USER_GUIDE)));
 }
 
 
 void
 UserUsageConditionsWindow::_SetWorkerThread(thread_id thread)
 {
-	if (!Lock())
+	if (!Lock()) {
 		HDERROR("failed to lock window");
-	else {
+	} else {
 		fWorkerThread = thread;
 		Unlock();
 	}
@@ -402,26 +399,21 @@ UserUsageConditionsWindow::_SetWorkerThread(thread_id thread)
 
 
 void
-UserUsageConditionsWindow::_DisplayData(
-	const UserDetail& userDetail,
+UserUsageConditionsWindow::_DisplayData(const UserDetail& userDetail,
 	const UserUsageConditions& userUsageConditions)
 {
 	fCopyView->SetText(userUsageConditions.CopyMarkdown());
-	fAgeNoteStringView->SetText(_MinimumAgeText(
-		userUsageConditions.MinimumAge()));
+	fAgeNoteStringView->SetText(_MinimumAgeText(userUsageConditions.MinimumAge()));
 	fVersionStringView->SetText(_VersionText(userUsageConditions.Code()));
-	if (fIntroductionTextView != NULL) {
-		fIntroductionTextView->SetText(
-			_IntroductionTextForMode(fMode, userDetail));
-	}
+	if (fIntroductionTextView != NULL)
+		fIntroductionTextView->SetText(_IntroductionTextForMode(fMode, userDetail));
 }
 
 
 /*static*/ const BString
 UserUsageConditionsWindow::_VersionText(const BString& code)
 {
-	BString versionText(
-		B_TRANSLATE("Version %Code%"));
+	BString versionText(B_TRANSLATE("Version %Code%"));
 	versionText.ReplaceAll("%Code%", code);
 	return versionText;
 }
@@ -431,21 +423,25 @@ UserUsageConditionsWindow::_VersionText(const BString& code)
 UserUsageConditionsWindow::_MinimumAgeText(uint8 minimumAge)
 {
 	BString ageNoteText;
-	static BStringFormat formatText(B_TRANSLATE("Users are required to be "
-		"{0, plural, one{# year of age} other{# years of age}} or older."));
+	static BStringFormat formatText(
+		B_TRANSLATE("Users are required to be "
+					"{0, plural, one{# year of age} other{# years of age}} or older."));
 	formatText.Format(ageNoteText, minimumAge);
 	return ageNoteText;
 }
 
 
 /*static*/ const BString
-UserUsageConditionsWindow::_IntroductionTextForMode(
-	UserUsageConditionsSelectionMode mode,
+UserUsageConditionsWindow::_IntroductionTextForMode(UserUsageConditionsSelectionMode mode,
 	const UserDetail& userDetail)
 {
 	switch (mode) {
 		case LATEST:
-			return B_TRANSLATE(INTRODUCTION_TEXT_LATEST);
+		{
+			BString text(B_TRANSLATE(INTRODUCTION_TEXT_LATEST));
+			text.ReplaceFirst("%Appname%", B_TRANSLATE_SYSTEM_NAME("HaikuDepot"));
+			return text;
+		}
 		case USER:
 		{
 			BString nicknamePresentation = PLACEHOLDER_TEXT;
@@ -457,14 +453,14 @@ UserUsageConditionsWindow::_IntroductionTextForMode(
 			uint64 timestampAgreed = userDetail.Agreement().TimestampAgreed();
 
 			if (timestampAgreed > 0) {
-				agreedToTimestampPresentation =
-					LocaleUtils::TimestampToDateTimeString(timestampAgreed);
+				agreedToTimestampPresentation
+					= LocaleUtils::TimestampToDateTimeString(timestampAgreed);
 			}
 
 			BString text = B_TRANSLATE(INTRODUCTION_TEXT_USER);
+			text.ReplaceFirst("%Appname%", B_TRANSLATE_SYSTEM_NAME("HaikuDepot"));
 			text.ReplaceAll("%Nickname%", nicknamePresentation);
-			text.ReplaceAll("%AgreedToTimestamp%",
-				agreedToTimestampPresentation);
+			text.ReplaceAll("%AgreedToTimestamp%", agreedToTimestampPresentation);
 			return text;
 		}
 		default:

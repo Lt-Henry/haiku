@@ -34,7 +34,7 @@
 #include <find_directory_private.h>
 #include <fs/KPath.h>
 #include <heap.h>
-#include <int.h>
+#include <interrupts.h>
 #include <kernel.h>
 #include <kimage.h>
 #include <kscheduler.h>
@@ -445,7 +445,6 @@ Team::Team(team_id id, bool kernel)
 	realtime_sem_context = NULL;
 	xsi_sem_context = NULL;
 	death_entry = NULL;
-	list_init(&dead_threads);
 
 	dead_children.condition_variable.Init(&dead_children, "team children");
 	dead_children.count = 0;
@@ -461,7 +460,6 @@ Team::Team(team_id id, bool kernel)
 
 	address_space = NULL;
 	main_thread = NULL;
-	thread_list = NULL;
 	loading_info = NULL;
 
 	list_init(&watcher_list);
@@ -529,10 +527,8 @@ Team::~Team()
 	if (fQueuedSignalsCounter != NULL)
 		fQueuedSignalsCounter->ReleaseReference();
 
-	while (thread_death_entry* threadDeathEntry
-			= (thread_death_entry*)list_remove_head_item(&dead_threads)) {
+	while (thread_death_entry* threadDeathEntry = dead_threads.RemoveHead())
 		free(threadDeathEntry);
-	}
 
 	while (::job_control_entry* entry = dead_children.entries.RemoveHead())
 		delete entry;
@@ -833,6 +829,8 @@ Team::InheritSignalActions(Team* parent)
 status_t
 Team::AddUserTimer(UserTimer* timer)
 {
+	AssertLocked();
+
 	// don't allow addition of timers when already shutting the team down
 	if (state >= TEAM_STATE_SHUTDOWN)
 		return B_BAD_TEAM_ID;
@@ -858,6 +856,8 @@ Team::AddUserTimer(UserTimer* timer)
 void
 Team::RemoveUserTimer(UserTimer* timer)
 {
+	AssertLocked();
+
 	fUserTimers.RemoveTimer(timer);
 
 	if (timer->ID() >= USER_TIMER_FIRST_USER_DEFINED_ID)
@@ -938,8 +938,8 @@ Team::CPUTime(bool ignoreCurrentRun, Thread* lockedThread) const
 	Thread* currentThread = thread_get_current_thread();
 	bigtime_t now = system_time();
 
-	for (Thread* thread = thread_list; thread != NULL;
-			thread = thread->team_next) {
+	for (Thread* thread = thread_list.First(); thread != NULL;
+			thread = thread_list.GetNext(thread)) {
 		bool alreadyLocked = thread == lockedThread;
 		SpinLocker threadTimeLocker(thread->time_lock, alreadyLocked);
 		time += thread->kernel_time + thread->user_time;
@@ -970,8 +970,8 @@ Team::UserCPUTime() const
 
 	bigtime_t now = system_time();
 
-	for (Thread* thread = thread_list; thread != NULL;
-			thread = thread->team_next) {
+	for (Thread* thread = thread_list.First(); thread != NULL;
+			thread = thread_list.GetNext(thread)) {
 		SpinLocker threadTimeLocker(thread->time_lock);
 		time += thread->user_time;
 
@@ -1161,7 +1161,7 @@ _dump_team_info(Team* team)
 		(void*)team->user_data, team->user_data_area);
 	kprintf("free user thread: %p\n", team->free_user_threads);
 	kprintf("main_thread:      %p\n", team->main_thread);
-	kprintf("thread_list:      %p\n", team->thread_list);
+	kprintf("thread_list:      %p\n", team->thread_list.First());
 	kprintf("group_id:         %" B_PRId32 "\n", team->group_id);
 	kprintf("session_id:       %" B_PRId32 "\n", team->session_id);
 }
@@ -1917,6 +1917,44 @@ err1:
 }
 
 
+/*!	Kill all threads but the main thread
+*/
+static void
+team_kill_other_threads_locked(TeamLocker &teamLocker, thread_id threadNotBeKilled = -1)
+{
+	Team* team = teamLocker.Get();
+	team_death_entry deathEntry;
+	deathEntry.condition.Init(team, "team death");
+
+	while (true) {
+		team->death_entry = &deathEntry;
+		deathEntry.remaining_threads = 0;
+
+		for (Thread* thread = team->thread_list.First(); thread != NULL;
+				thread = team->thread_list.GetNext(thread)) {
+			if (thread != team->main_thread && thread->id != threadNotBeKilled) {
+				Signal signal(SIGKILLTHR, SI_USER, B_OK, team->id);
+				send_signal_to_thread(thread, signal, B_DO_NOT_RESCHEDULE);
+				deathEntry.remaining_threads++;
+			}
+		}
+
+		if (deathEntry.remaining_threads == 0)
+			break;
+
+		// there are threads to wait for
+		ConditionVariableEntry entry;
+		deathEntry.condition.Add(&entry);
+
+		teamLocker.Unlock();
+		entry.Wait();
+		teamLocker.Lock();
+	}
+
+	team->death_entry = NULL;
+}
+
+
 /*!	Almost shuts down the current team and loads a new image into it.
 	If successful, this function does not return and will takeover ownership of
 	the arguments provided.
@@ -1946,8 +1984,7 @@ exec_team(const char* path, char**& _flatArgs, size_t flatArgsSize,
 		return B_NOT_ALLOWED;
 
 	// we currently need to be single threaded here
-	// TODO: maybe we should just kill all other threads and
-	//	make the current thread the team's main thread?
+	// TODO: make the current thread the team's main thread?
 	Thread* currentThread = thread_get_current_thread();
 	if (currentThread != team->main_thread)
 		return B_NOT_ALLOWED;
@@ -1963,11 +2000,7 @@ exec_team(const char* path, char**& _flatArgs, size_t flatArgsSize,
 
 	debugInfoLocker.Unlock();
 
-	for (Thread* thread = team->thread_list; thread != NULL;
-			thread = thread->team_next) {
-		if (thread != team->main_thread && thread->id != nubThreadID)
-			return B_NOT_ALLOWED;
-	}
+	team_kill_other_threads_locked(teamLocker, nubThreadID);
 
 	team->DeleteUserTimers(true);
 	team->ResetSignalsOnExec();
@@ -2239,6 +2272,7 @@ fork_team(void)
 			parentThread->name, parentThread->priority, NULL, team->id, thread);
 		threadCreationAttributes.forkArgs = forkArgs;
 		threadCreationAttributes.flags |= THREAD_CREATION_FLAG_DEFER_SIGNALS;
+		threadCreationAttributes.signal_mask = thread->sig_block_mask;
 		threadID = thread_create_thread(threadCreationAttributes, false);
 		if (threadID < 0) {
 			status = threadID;
@@ -2785,9 +2819,8 @@ common_get_team_usage_info(team_id id, int32 who, team_usage_info* info,
 	switch (who) {
 		case B_TEAM_USAGE_SELF:
 		{
-			Thread* thread = team->thread_list;
-
-			for (; thread != NULL; thread = thread->team_next) {
+			for (Thread* thread = team->thread_list.First(); thread != NULL;
+					thread = team->thread_list.GetNext(thread)) {
 				InterruptsSpinLocker threadTimeLocker(thread->time_lock);
 				kernelTime += thread->kernel_time;
 				userTime += thread->user_time;
@@ -2804,9 +2837,8 @@ common_get_team_usage_info(team_id id, int32 who, team_usage_info* info,
 			for (; child != NULL; child = team->children.GetNext(child)) {
 				TeamLocker childLocker(child);
 
-				Thread* thread = team->thread_list;
-
-				for (; thread != NULL; thread = thread->team_next) {
+				for (Thread* thread = child->thread_list.First(); thread != NULL;
+						thread = child->thread_list.GetNext(thread)) {
 					InterruptsSpinLocker threadTimeLocker(thread->time_lock);
 					kernelTime += thread->kernel_time;
 					userTime += thread->user_time;
@@ -3031,8 +3063,10 @@ team_set_foreground_process_group(void* tty, pid_t processGroupID)
 	{
 		InterruptsSpinLocker groupHashLocker(sGroupHashLock);
 		ProcessGroup* group = sGroupHash.Lookup(processGroupID);
-		if (group == NULL || group->Session() != session)
+		if (group == NULL)
 			return B_BAD_VALUE;
+		if (group->Session() != session)
+			return EPERM;
 	}
 
 	// If we are a background group, we can do that unharmed only when we
@@ -3228,40 +3262,7 @@ team_shutdown_team(Team* team)
 
 	timeLocker.Unlock();
 
-	// kill all threads but the main thread
-	team_death_entry deathEntry;
-	deathEntry.condition.Init(team, "team death");
-
-	while (true) {
-		team->death_entry = &deathEntry;
-		deathEntry.remaining_threads = 0;
-
-		Thread* thread = team->thread_list;
-		while (thread != NULL) {
-			if (thread != team->main_thread) {
-				Signal signal(SIGKILLTHR, SI_USER, B_OK, team->id);
-				send_signal_to_thread(thread, signal, B_DO_NOT_RESCHEDULE);
-				deathEntry.remaining_threads++;
-			}
-
-			thread = thread->team_next;
-		}
-
-		if (deathEntry.remaining_threads == 0)
-			break;
-
-		// there are threads to wait for
-		ConditionVariableEntry entry;
-		deathEntry.condition.Add(&entry);
-
-		teamLocker.Unlock();
-
-		entry.Wait();
-
-		teamLocker.Lock();
-	}
-
-	team->death_entry = NULL;
+	team_kill_other_threads_locked(teamLocker);
 
 	return debuggerPort;
 }
@@ -4131,6 +4132,16 @@ _user_setpgid(pid_t processID, pid_t groupID)
 			return ESRCH;
 		BReference<Team> teamReference(team, true);
 
+		// check the target team is the current team or a child of current team
+		for (Team* parentTeam = team; parentTeam != currentTeam; parentTeam = parentTeam->parent) {
+			if (parentTeam == NULL || parentTeam->id == 1)
+				return ESRCH;
+		}
+
+		// we must not change our process group ID if we're a session leader
+		if (is_session_leader(team))
+			return B_NOT_ALLOWED;
+
 		// lock the new process group and the team's current process group
 		while (true) {
 			// lock the team's current process group
@@ -4191,20 +4202,12 @@ _user_setpgid(pid_t processID, pid_t groupID)
 		TeamLocker teamLocker(team, true);
 
 		// perform the checks
-		if (team == currentTeam) {
-			// we set our own group
-
-			// we must not change our process group ID if we're a session leader
-			if (is_session_leader(currentTeam))
-				return B_NOT_ALLOWED;
-		} else {
+		if (team != currentTeam) {
 			// Calling team != target team. The target team must be a child of
 			// the calling team and in the same session. (If that's the case it
 			// isn't a session leader either.)
-			if (team->parent != currentTeam
-				|| team->session_id != currentTeam->session_id) {
+			if (team->session_id != currentTeam->session_id)
 				return B_NOT_ALLOWED;
-			}
 
 			// The call is also supposed to fail on a child, when the child has
 			// already executed exec*() [EACCES].
@@ -4466,6 +4469,15 @@ _user_get_extended_team_info(team_id teamID, uint32 flags, void* buffer,
 		return B_BAD_ADDRESS;
 	}
 
+	Team* team = Team::Get(teamID);
+	if (team == NULL)
+		return B_BAD_TEAM_ID;
+	BReference<Team> teamReference(team, true);
+
+	uid_t uid = geteuid();
+	if (uid != 0 && uid != team->effective_uid)
+		return B_NOT_ALLOWED;
+
 	KMessage info;
 
 	if ((flags & B_TEAM_INFO_BASIC) != 0) {
@@ -4483,12 +4495,7 @@ _user_get_extended_team_info(team_id teamID, uint32 flags, void* buffer,
 
 		io_context* ioContext;
 		{
-			// get the team structure
-			Team* team = Team::GetAndLock(teamID);
-			if (team == NULL)
-				return B_BAD_TEAM_ID;
-			BReference<Team> teamReference(team, true);
-			TeamLocker teamLocker(team, true);
+			TeamLocker teamLocker(team);
 
 			// copy the data
 			teamClone.id = team->id;

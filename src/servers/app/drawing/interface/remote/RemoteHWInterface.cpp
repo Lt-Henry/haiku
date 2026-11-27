@@ -258,6 +258,20 @@ RemoteHWInterface::_EventThread()
 				status_t result = reply.Flush();
 				(void)result;
 				TRACE("init connection result: %s\n", strerror(result));
+				reply.Start(RP_SET_CURSOR);
+				reply.AddCursor(CursorAndDragBitmap().Get());
+				result = reply.Flush();
+				TRACE("init connection set cursor result: %s\n", strerror(result));
+				reply.Start(RP_SET_CURSOR_VISIBLE);
+				reply.Add(fCursorVisible);
+				result = reply.Flush();
+				TRACE("init connection set cursor visible result: %s\n", strerror(result));
+				BPoint position = CursorPosition();
+				reply.Start(RP_MOVE_CURSOR_TO);
+				reply.Add(position.x);
+				reply.Add(position.y);
+				result = reply.Flush();
+				TRACE("init connection set cursor position result: %s\n", strerror(result));
 				break;
 			}
 
@@ -406,14 +420,6 @@ RemoteHWInterface::GetDeviceInfo(accelerant_device_info* info)
 
 	ReadUnlock();
 	return B_OK;
-}
-
-
-status_t
-RemoteHWInterface::GetFrameBufferConfig(frame_buffer_config& config)
-{
-	// We don't actually have a frame buffer.
-	return B_UNSUPPORTED;
 }
 
 

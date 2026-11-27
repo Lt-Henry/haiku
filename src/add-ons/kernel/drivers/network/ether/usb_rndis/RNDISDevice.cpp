@@ -3,13 +3,17 @@
 	Copyright (C) 2022 Adrien Destugues <pulkomandy@pulkomandy.tk>
 	Distributed under the terms of the MIT license.
 */
+
 #include <ether_driver.h>
 #include <net/if_media.h>
-#include <string.h>
+#include <sys/sockio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "RNDISDevice.h"
 #include "Driver.h"
+
+#include <drivers/usb/USB_misc.h>
 
 
 const uint32 OID_GEN_MAXIMUM_FRAME_SIZE = 0x00010106;
@@ -251,30 +255,38 @@ status_t
 RNDISDevice::Read(uint8 *buffer, size_t *numBytes)
 {
 	if (fRemoved) {
+		TRACE("Reading, but device is removed\n");
 		*numBytes = 0;
 		return B_DEVICE_NOT_FOUND;
 	}
 
-	// The read funcion can return only one packet at a time, but we can receive multiple ones in
+	// The read function can return only one packet at a time, but we can receive multiple ones in
 	// a single USB transfer. So we need to buffer them, and check if we have something in our
 	// buffer for each Read() call before scheduling a new USB transfer. This would be more
 	// efficient if the network stack had a way to read multiple frames at once.
 	if (fReadHeader == NULL) {
+		TRACE("Reading next packet batch\n");
 		status_t result = gUSBModule->queue_bulk(fReadEndpoint, fReadBuffer, sizeof(fReadBuffer),
 			_ReadCallback, this);
 		if (result != B_OK) {
+			TRACE_ALWAYS("failed to schedule read transfer: %s\n", strerror(result));
+			fReadHeader = NULL;
 			*numBytes = 0;
 			return result;
 		}
 
 		result = acquire_sem_etc(fNotifyReadSem, 1, B_CAN_INTERRUPT, 0);
 		if (result < B_OK) {
+			TRACE_ALWAYS("error while waiting for frame: %s\n", strerror(result));
+			fReadHeader = NULL;
 			*numBytes = 0;
 			return result;
 		}
 
 		if (fStatusRead == B_CANCELED) {
+			TRACE_ALWAYS("request was cancelled: %s\n", strerror(result));
 			// The transfer was canceled, so no data was actually received.
+			fReadHeader = NULL;
 			*numBytes = 0;
 			return fStatusRead;
 		}
@@ -282,18 +294,21 @@ RNDISDevice::Read(uint8 *buffer, size_t *numBytes)
 		if ((fStatusRead != B_OK) && !fRemoved) {
 			// In other error cases (triggered by the device), we need to clear the "halt" feature
 			// so that the next transfers will work.
-			TRACE_ALWAYS("device status error 0x%08" B_PRIx32 "\n", fStatusRead);
+			TRACE_ALWAYS("device read status error: %s\n", strerror(fStatusRead));
 
 			gUSBModule->cancel_queued_transfers(fReadEndpoint);
 
 			result = gUSBModule->clear_feature(fReadEndpoint, USB_FEATURE_ENDPOINT_HALT);
 			if (result != B_OK) {
 				TRACE_ALWAYS("failed to clear halt state on read\n");
-				*numBytes = 0;
-				return result;
 			}
+			fReadHeader = NULL;
+			*numBytes = 0;
+			return fStatusRead;
 		}
 		fReadHeader = (uint32*)fReadBuffer;
+	} else {
+		TRACE("Returning buffered packet\n");
 	}
 
 	if (fReadHeader[0] != REMOTE_NDIS_PACKET_MSG) {
@@ -418,9 +433,9 @@ RNDISDevice::Write(const uint8 *buffer, size_t *numBytes)
 	}
 
 	if ((fStatusWrite != B_OK) && !fRemoved) {
-		TRACE_ALWAYS("device status error 0x%08" B_PRIx32 "\n", fStatusWrite);
+		TRACE_ALWAYS("device write status error 0x%08" B_PRIx32 "\n", fStatusWrite);
 
-		gUSBModule->cancel_queued_transfers(fReadEndpoint);
+		gUSBModule->cancel_queued_transfers(fWriteEndpoint);
 
 		result = gUSBModule->clear_feature(fWriteEndpoint, USB_FEATURE_ENDPOINT_HALT);
 		if (result != B_OK) {
@@ -466,6 +481,18 @@ RNDISDevice::Control(uint32 op, void *buffer, size_t length)
 			state->speed = fDownstreamSpeed * 100;
 			return B_OK;
 		}
+
+		case ETHER_SEND_NET_BUFFER:
+		case ETHER_RECEIVE_NET_BUFFER:
+			// Ignored for now, we use the old read/write interface instead
+			return B_DEV_INVALID_IOCTL;
+
+		case SIOCGIFSTATS:
+			// Parameter is a struct ifreq, fill in request.ifr_stats
+			// Number of received and sent packets and number of collisions
+			// Not needed since there are no collisions and the network stack can already keep
+			// track of sent/received packets on its own.
+			break;
 
 		default:
 			TRACE_ALWAYS("unsupported ioctl %" B_PRIu32 "\n", op);
@@ -567,6 +594,30 @@ RNDISDevice::_RNDISInitialize()
 }
 
 
+static bool
+descriptor_is_rndis(usb_interface_descriptor* descriptor)
+{
+	// Look for both Microsoft and USB standard definitions of RNDIS
+	if (descriptor->interface_class == USB_COMMUNICATION_WIRELESS_DEVICE_CLASS
+		&& descriptor->interface_subclass == 0x01
+		&& descriptor->interface_protocol == 0x03)
+		return true;
+
+	if (descriptor->interface_class == USB_MISCELLANEOUS_CLASS
+		&& descriptor->interface_subclass == B_USB_MISC_RNDIS_SUBCLASS
+		&& descriptor->interface_protocol == B_USB_RNDIS_ETHERNET_PROTOCOL)
+		return true;
+
+	// Also check for RNDIS as implemented on some old (Android 4.x) Samsung phones:
+	if (descriptor->interface_class == USB_COMMUNICATION_DEVICE_CLASS
+		&& descriptor->interface_subclass == B_USB_MISC_MULTIPLEXED_SUBCLASS
+		&& descriptor->interface_protocol == 0xff)
+		return true;
+
+	return false;
+}
+
+
 status_t
 RNDISDevice::_SetupDevice()
 {
@@ -592,10 +643,8 @@ RNDISDevice::_SetupDevice()
 		for (size_t j = 0; j < config->interface_count && !found; j++) {
 			const usb_interface_info *interface = config->interface[j].active;
 			usb_interface_descriptor *descriptor = interface->descr;
-			if (descriptor->interface_class != USB_COMMUNICATION_WIRELESS_DEVICE_CLASS
-				|| descriptor->interface_subclass != 0x01
-				|| descriptor->interface_protocol != 0x03
-				|| interface->generic_count == 0) {
+
+			if (!descriptor_is_rndis(descriptor) || interface->generic_count == 0) {
 				continue;
 			}
 
@@ -644,10 +693,7 @@ RNDISDevice::_SetupDevice()
 	// check that the indicated control interface fits our needs
 	usb_interface_info *interface = config->interface[controlIndex].active;
 	usb_interface_descriptor *descriptor = interface->descr;
-	if ((descriptor->interface_class != 0xE0
-		|| descriptor->interface_subclass != 0x01
-		|| descriptor->interface_protocol != 0x03)
-		|| interface->endpoint_count == 0) {
+	if (!descriptor_is_rndis(descriptor)) {
 		TRACE_ALWAYS("control interface invalid\n");
 		return B_ERROR;
 	}
@@ -697,8 +743,19 @@ RNDISDevice::_GetOID(uint32 oid, void* buffer, size_t length)
 
 	acquire_sem(fNotifyControlSem);
 
-	uint8 response[length + 24];
+	uint8 response[length + 24] = {0};
 	result = _ReadResponse(response, length + 24);
+	if (result != B_OK) {
+		TRACE_ALWAYS("GetOID read response failed: %s\n", strerror(result));
+		return result;
+	}
+
+	uint32 responseCode = *(uint32*)response;
+	if (responseCode != REMOTE_NDIS_QUERY_CMPLT) {
+		TRACE_ALWAYS("GetOID unexpected response code: %08x\n", responseCode);
+		return B_BAD_DATA;
+	}
+
 	memcpy(buffer, &response[24], length);
 	return result;
 }
@@ -843,7 +900,7 @@ RNDISDevice::_NotifyCallback(void *cookie, int32 status, void *_data,
 	}
 
 	if (status != B_OK) {
-		TRACE_ALWAYS("device status error 0x%08" B_PRIx32 "\n", status);
+		TRACE_ALWAYS("device notify status error 0x%08" B_PRIx32 "\n", status);
 
 		if (gUSBModule->clear_feature(device->fNotifyEndpoint,
 			USB_FEATURE_ENDPOINT_HALT) != B_OK)

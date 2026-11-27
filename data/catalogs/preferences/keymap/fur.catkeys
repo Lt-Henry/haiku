@@ -1,4 +1,4 @@
-1	friulian	x-vnd.Haiku-Keymap	83366860
+1	friulian	x-vnd.Haiku-Keymap	2110477243
 Key	Modifier keys window	As in a computer keyboard key	Tast
 Japanese	KeymapNames		Gjaponês
 US	KeymapNames		Stâts Unîts
@@ -8,6 +8,7 @@ Brazilian	KeymapNames		Brasilian
 ThinkPad (US)	KeyboardLayoutNames		ThinkPad (US)
 Right Option	Keyboard Layout View		Opzion di diestre
 X-Bows Nature	KeyboardLayoutNames		X-Bows Nature
+Apple Magic Extended International	KeyboardLayoutNames		Apple Magic estese internazionâl
 Dvorak	KeymapNames		Dvorak
 Option:	Modifier keys window	Option key role name	Opzion:
 Cancel	Modifier keys window		Anule
@@ -24,6 +25,7 @@ Serbian (Cyrillic)	KeymapNames		Serp (Cirilic)
 Belgian (point)	KeymapNames		Belgjic (pont)
 Finnish	KeymapNames		Finlandês
 Switch shortcut keys to Windows/Linux mode	Keymap window		Passe ai tascj des scurtis de modalitât Windows/Linux
+Apple Magic (US)	KeyboardLayoutNames		Apple Magic (US)
 Spanish (Dvorak)	KeymapNames		Spagnûl (Dvorak)
 Option	Keyboard Layout View	Option key	Opzion
 US-International	KeymapNames		US-Internazionâl
@@ -41,13 +43,11 @@ Belarusian (Mac)	KeymapNames		Bielorùs (Mac)
 Croatian	KeymapNames		Cravuat
 PAGE ↑	Keyboard Layout View		PAGJINE ↑
 Set modifier keys	Modifier keys window		Stabilìs i tascj modificadôrs
-Apple Aluminium International	KeyboardLayoutNames		Apple Aluminium Internazionâl
 Right Command	Keyboard Layout View		Comant di diestre
 Win/Cmd key	Modifier keys window	Label of the \"Windows\" key (PC)/Command key (Mac)	Tast Win/Cmd
 PG ↓	Keyboard Layout View	Very short for 'page down'	PAGJ
 ThinkPad X1 (US)	KeyboardLayoutNames		ThinkPad X1 (US)
 Spanish	KeymapNames		Spagnûl
-Apple Aluminum	KeyboardLayoutNames		Apple Aluminum
 HOME	Keyboard Layout View		INIZI
 COMMAND	Keyboard Layout View		COMANT
 Ukrainian (Mac)	KeymapNames		Ucrain (Mac)
@@ -59,7 +59,6 @@ Acute trigger	Keymap window		Acent acût
 ThinkPad T400s International	KeyboardLayoutNames		ThinkPad T400s Internazionâl
 Italian	KeymapNames		Talian
 Kinesis Ergo Elan International	KeyboardLayoutNames		Kinesis Ergo Elan Internazionâl
-Apple Aluminum (US)	KeyboardLayoutNames		Apple Aluminum (US)
 French (NF Z71-300)	KeymapNames		Francês (NF Z71-300)
 Modifier keys	Modifier keys window		Tascj modificadôrs
 ThinkPad X1 International	KeyboardLayoutNames		ThinkPad X1 Internazionâl
@@ -68,6 +67,7 @@ Left Option	Keyboard Layout View		Opzion di çampe
 Save as…	Keymap window		Salve come…
 Lithuanian (Standard)	KeymapNames		Lituan (Standard)
 Error: duplicate keys	Modifier keys window		Erôr: tascj dopleâts
+Apple Magic	KeyboardLayoutNames		Apple Magic
 NUM	Keyboard Layout View	Very short for 'num lock'	NUM
 Bulgarian (Phonetic)	KeymapNames		Bulgar (Fonetic)
 Kinesis Advantage	KeyboardLayoutNames		Kinesis Advantage
@@ -127,7 +127,6 @@ Quit	Keymap window		Jes
 Polish (Typewriter)	KeymapNames		Polac (Machine di scrivi)
 French (Mac)	KeymapNames		Francês (Mac)
 User:	Keymap window		Utent:
-Apple Aluminium Extended International	KeyboardLayoutNames		Apple Aluminium Estese Internazionâl
 Alt/Opt key	Modifier keys window	Label of Alt key (PC)/Option key (Mac)	Tast Alt/Opt
 SHIFT	Keyboard Layout View		MAIUSC
 Estonian	KeymapNames		Eston
@@ -146,7 +145,6 @@ Defaults	Keymap window		Predefinîts
 ISO-9995	KeymapNames		ISO-9995
 System:	Keymap window		Sisteme:
 ThinkPad International	KeyboardLayoutNames		ThinkPad Internazionâl
-Apple Aluminum Extended (US)	KeyboardLayoutNames		Apple Aluminum Estese (US)
 Switch shortcut keys	Keymap window		Scambie tascj di scurte
 NUM LOCK	Keyboard Layout View		BLOC NUM
 MENU	Keyboard Layout View		MENÙ
@@ -155,6 +153,8 @@ Norwegian	KeymapNames		Norvegjês
 Font	Keymap window		Caratar
 Danish	KeymapNames		Danês
 Generic 104-key	KeyboardLayoutNames		Gjeneriche 104-tascj
+Apple Magic Extended (US)	KeyboardLayoutNames		Apple Magic estese (US)
+Apple Magic International	KeyboardLayoutNames		Apple Magic Internazionâl
 Shift key	Modifier keys window	Label of key above Ctrl, usually Shift	Tast Maiusc
 Russian	KeymapNames		Rus
 PAUSE	Keyboard Layout View		PAUSE

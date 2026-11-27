@@ -60,18 +60,24 @@
 #ifndef FS_SHELL
 #include <dirent.h>
 #include <malloc.h>
+#include <new>
 
 #include <NodeMonitor.h>
 #include <SupportDefs.h>
 
 #include <AutoDeleter.h>
-#include <file_systems/mime_ext_table.h>
+#include <kernel.h>
 #include <real_time_clock.h>
 #include <util/AutoLock.h>
+#include <util/Vector.h>
+#include <util/convertutf.h>
+#else
+#include <fssh_kernel_priv.h>
 #endif // !FS_SHELL
 
 #include "debug.h"
 #include "dosfs.h"
+#include "encodings.h"
 #include "vcache.h"
 
 
@@ -129,41 +135,93 @@ ComponentName::Data()
 }
 
 
+/*!	Check whether a filename is legal in the FAT file system.
+	@param name A UTF-8 string.
+	@param permissive True if the client wants to allow some illegal characters that may appear
+	when reading miscoded filenames.
+	@param striclyLegal If \a permissive is false, this is ignored and can be NULL. If \a permissive
+	is true, it will be set to true on return only if the name meets the strict definition of legal.
+	@return If \a permissive is true, returns true if the filename is strictly legal, or if the
+	only illegalities are on the permitted list. If \a permissive is false, returns true if
+	the filename is strictly legal.
+*/
 bool
-is_filename_legal(const char* name)
+is_filename_legal(const char* name, bool permissive, bool* strictlyLegal)
 {
+	if (permissive)
+		*strictlyLegal = false;
+
 	if (name == NULL)
 		return false;
 
-	// illegal characters in a long file name
-	const char illegal[] = "\\/:*?\"<>|";
-
-	uint32 len = strlen(name);
-	if (len <= 0)
+	uint32 nameLength = strlen(name);
+	if (nameLength <= 0)
 		return false;
 
 	// names with only an extension are not allowed
 	if (strrchr(name, '.') == name)
 		return false;
 
-	// win2unixfn will trim trailing dots and spaces from the FAT longname
+	// utf8_to_winentry will trim trailing dots and spaces from the FAT longname
 	// but it does expect there to be something there other than dots and spaces.
 	bool hasContent = false;
-	for (uint32 i = 0; i < len && hasContent == false; i++) {
+	for (uint32 i = 0; i < nameLength && hasContent == false; i++) {
 		if (name[i] != ' ' && name[i] != '.')
 			hasContent = true;
 	}
 	if (hasContent == false)
 		return false;
 
-	for (uint32 i = 0; i < len; i++) {
-		if (name[i] & 0x80)
-			continue; // belongs to an utf8 char
-		if (strchr(illegal, name[i]))
-			return false;
-		if (static_cast<unsigned char>(name[i]) < 32)
-			return false;
+	if (permissive)
+		*strictlyLegal = true;
+
+	// Unicode points with values of zero in unix2dos[] are illegal
+	for (uint32 i = 0; i < nameLength;) {
+		u_char point;
+		if (begins_utf8_multibyte_char(name[i])) {
+			size_t charLength = utf8_corrected_char_len(reinterpret_cast<const u_char*>(name + i),
+				nameLength - i);
+			if (charLength > 2 || static_cast<uint8>(name[i]) > 0xC2) {
+				// this character is beyond the highest illegal character in unix2dos[]
+				i += charLength;
+				continue;
+			} else {
+				// convert multibyte char to code point
+				uint16 unit;
+				UTF8_TO_UTF16HE(name + i, &charLength, &unit, 1, NULL, false);
+				ASSERT(unit <= UCHAR_MAX);
+				point = unit;
+				i += charLength;
+			}
+		} else {
+			point = static_cast<u_char>(name[i]);
+			++i;
+		}
+
+		// Sometimes conversion of miscoded filenames to UTF-8 produces characters in the range
+		// 0x80 to 0xA0, which we normally consider illegal in a FAT file name. Also, the driver
+		// formerly used the substitution character 0x1A rather than underscore as a replacement
+		// character when writing short file names in SJIS; if the driver converts such a shortname
+		// to UTF-8 (in the unlikely event of a failure to read the longname), it would convert this
+		// character to a '?' which is also normally illegal.
+		const u_char permittedIllegal[] = {0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88,
+			0x89, 0x8A, 0x8B, 0x8C, 0x8D, 0x8E, 0x8F, 0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96,
+			0x97, 0x98, 0x99, 0x9A, 0x9B, 0x9C, 0x9D, 0x9E, 0x9F, 0xA0, '?', 0};
+
+		if (unix2dos[point] == 0) {
+			// found illegal character
+			if (permissive) {
+				*strictlyLegal = false;
+				if (strchr(reinterpret_cast<const char*>(permittedIllegal), point) == NULL) {
+					// not on the permitted list
+					return false;
+				}
+			} else {
+				return false;
+			}
+		}
 	}
+
 	return true;
 }
 
@@ -189,86 +247,106 @@ is_shortname_legal(const u_char* name)
 }
 
 
-/*! Convert a volume label from a null-terminated string to the format stored on disk.
-	@param label A C string of size LABEL_CSTRING.
-	@post The first LABEL_LENGTH characters of label contain an all-caps space-padded label, or
-	an error is returned.
+/*! Convert a volume label from a NULL-terminated UTF-8 string to the format stored on disk.
+	@param utf8Label A UTF-8 C string.
+	@param fatLabel Preallocated memory of size LABEL_LENGTH.
+	@param volume The volume if one is mounted, or NULL.
+	@pre \a volume->pm_flags is initialized if volume is not NULL.
+	@post Upon return with status B_OK, fatLabel contains an all-caps space-padded array encoded
+	in the code page indicated by \a volume settings.
 */
 status_t
-label_to_fat(char* label)
+label_to_fat(const char* utf8Label, uint8* fatLabel, msdosfsmount* volume)
 {
-	if (label[0] == 0) {
+	if (utf8Label[0] == 0) {
 		// bad name, kiddo
 		INFORM("label_to_fat: empty name\n");
 		return B_BAD_VALUE;
 	}
 
-	if (label[0] == ' ') {
+	if (utf8Label[0] == ' ') {
 		INFORM("label_to_fat: vol name starts with space\n");
 		return B_BAD_VALUE;
 	}
 
-	uint32 length = strlen(label);
-	if (length > LABEL_LENGTH)
-		return B_NAME_TOO_LONG;
+	uint32 length = strlen(utf8Label);
 
-	for (uint32 i = 0; i < length; i++) {
-		char c = label[i];
-		if (c >= 'a' && c <= 'z')
-			c+= 'A' - 'a';
-		// spaces acceptable in volume names
-		if (strchr(sAcceptable, c) || c == ' ') {
-			label[i] = c;
-		} else {
-			INFORM("label_to_fat: vol name contains illegal char (%c at index %" B_PRIu32
-				")\n", label[i], i);
-			return B_BAD_VALUE;
-		}
+	u_char fatCString[LABEL_CSTRING];
+		// stores the immediate output of unix2dosfn, which is the FAT-format label plus
+		// a null terminator
+
+	// set up a fake volume to pass to unix2dosfn when no actual volume is mounted
+	msdosfsmount* dummyVolume = NULL;
+	if (volume == NULL) {
+		volume = dummyVolume = new(std::nothrow) msdosfsmount;
+		if (dummyVolume == NULL)
+			return B_NO_MEMORY;
+		dummyVolume->pm_flags = 0;
+			// behave as if kernel_code_page is set to 1
 	}
 
-	for (uint32 i = length; i < LABEL_LENGTH; i++)
-		label[i] = ' ';
+	int result
+		= unix2dosfn(reinterpret_cast<const u_char*>(utf8Label), fatCString, length, 0, volume);
+	if (result == 0) {
+		INFORM("label_to_fat: unix2dosfn could not convert %s\n", utf8Label);
+		delete dummyVolume;
+		return B_BAD_VALUE;
+	}
 
-	PRINT("label_to_fat: converted to [%11.11s].\n", label);
+	memcpy(fatLabel, fatCString, LABEL_LENGTH);
+
+	PRINT_BYTES(fatLabel, LABEL_LENGTH);
+
+	delete dummyVolume;
 
 	return B_OK;
 }
 
 
-/*! Convert a volume label from the format stored on disk into a normal string.
-	@param name A character array of length 11 or a C string of size 12.
-	@post Name is null-terminated after the last non-space character, and converted to lower case.
+/*! Convert a volume label from the format stored on disk into a NULL-terminated UTF-8 string.
+	@param fatLabel A code page character array of length LABEL_LENGTH.
+	@param utf8Label Preallocated space of at least SHORT_TO_UTF8_SIZE bytes.
+	@param volume The volume if one is mounted, or NULL.
+	@pre volume->pm_flags is initialized if \a volume is not NULL.
+	@return The length of the string written to \a utf8Label.
 */
-void
-label_from_fat(char* name)
+int
+label_from_fat(const uint8* fatLabel, char* utf8Label, msdosfsmount* volume)
 {
-	int i;
-	for (i = 10; i > 0; i--) {
-		if (name[i] != ' ')
-			break;
+	msdosfsmount* dummyVolume = NULL;
+	if (volume == NULL) {
+		volume = dummyVolume = new(std::nothrow) msdosfsmount;
+		if (dummyVolume == NULL)
+			return B_NO_MEMORY;
+		dummyVolume->pm_flags = 0;
 	}
-	name[i + 1] = 0;
 
-	for (; i >= 0; i--) {
-		if (name[i] >= 'A' && name[i] <= 'Z')
-			name[i] += 'a' - 'A';
-	}
+	// dos2unixfn's input parameter is not const
+	uint8 mutableFatLabel[LABEL_LENGTH];
+	memcpy(mutableFatLabel, fatLabel, LABEL_LENGTH);
+
+	int written = dos2unixfn(mutableFatLabel, reinterpret_cast<u_char*>(utf8Label), 0, volume);
+
+	delete dummyVolume;
+
+	return written;
 }
 
 
 /*! Return the volume label.
 	@param fd The device file, specified independently of volume because in
 	dosfs_identify_partition, volume->pm_dev will not be initialized.
-	@param label The pre-allocated (LABEL_CSTRING bytes) string into which the label is copied.
+	@param label Pre-allocated space of at least UTF8_LABEL_CSTRING bytes that will store the
+	UTF-8 translation.
 	@pre The following members of volume are initialized:  pm_rootdirsize, pm_BlkPerSec,
-	pm_BytesPerSec, pm_bpcluster, pm_rootdirblk, pm_bnshift.  For a FAT32 volume,
+	pm_BytesPerSec, pm_bpcluster, pm_rootdirblk, pm_bnshift, pm_flags.  For a FAT32 volume,
 	pm_firstcluster must also be initialized.
 	@post If volume is an old DOS 3.3 era FAT volume, which will not have a label, then label is
 	set to an empty string and the function returns B_OK. For other volumes, the root
 	directory label is returned in label, if found; if not, the BPB label is returned.
 */
 status_t
-read_label(const msdosfsmount* volume, int fd, const uint8* buffer, char* label)
+read_label(msdosfsmount* volume, int fd, const uint8* buffer, char* label)
 {
 	*label = '\0';
 
@@ -276,9 +354,10 @@ read_label(const msdosfsmount* volume, int fd, const uint8* buffer, char* label)
 	uint8 check = fat32 == true ? 0x42 : 0x26;
 	uint8 offset = fat32 == true ? 0x47 : 0x2b;
 	if (buffer[check] == EXBOOTSIG && memcmp(buffer + offset, "           ", LABEL_LENGTH) != 0) {
-		memcpy(label, buffer + offset, LABEL_LENGTH);
-		label_from_fat(label);
+		label_from_fat(buffer + offset, label, volume);
 	} else {
+		*label = '\0';
+		INFORM("Could not find BPB label\n");
 		return B_OK;
 	}
 
@@ -314,8 +393,7 @@ read_label(const msdosfsmount* volume, int fd, const uint8* buffer, char* label)
 		direntry = reinterpret_cast<struct direntry*>(rootDirBuffer + direntrySize * i);
 		if (direntry->deName[0] != SLOT_DELETED && direntry->deAttributes != ATTR_WIN95
 			&& (direntry->deAttributes & ATTR_VOLUME) != 0) {
-			memcpy(label, direntry->deName, 11);
-			label_from_fat(label);
+			label_from_fat(direntry->deName, label, volume);
 			PRINT("found volume label in root directory:  %s at i = %" B_PRIu32 "\n", label, i);
 			if (volume->pm_mountp != NULL)
 				volume->pm_mountp->mnt_volentry = i;
@@ -326,6 +404,118 @@ read_label(const msdosfsmount* volume, int fd, const uint8* buffer, char* label)
 	free(rootDirBuffer);
 
 	return B_OK;
+}
+
+
+/*!	Get the UTF-16 long file name that is stored on disk.
+	@param bsdNode The node of the directory that holds the entry (i.e. the parent node of the file
+	of interest).
+	@param dirOffset The directory-relative byte offset where the direntry is located.
+	@param buffer The destination for the long file name.
+	@param bufferUnits The size of \a buffer, in words.
+	@post If B_OK was returned, \a buffer contains a host-endian UTF-16 string copied from the
+	winentries. The only alteration from the literal winentries, other than converting to
+	host-endian byte order, is to add a terminating NULL if it was not present. If the file
+	only has a short name, \a buffer contains an empty string.
+*/
+status_t
+read_longname(struct vnode* bsdNode, u_long dirOffset, uint16* buffer, size_t bufferUnits)
+{
+	status_t status = B_ERROR;
+#ifndef FS_SHELL // fs_shell does not provide the Vector class template
+	mount* bsdVolume = bsdNode->v_mount;
+	denode* fatNode = reinterpret_cast<denode*>(bsdNode->v_data);
+
+	if ((fatNode->de_Attributes & ATTR_DIRECTORY) == 0)
+		return B_NOT_A_DIRECTORY;
+
+	if (fatNode->de_FileSize == 0)
+		return B_OK;
+
+	mbnambuf longName;
+		// filename after extraction and conversion from winentries
+	mbnambuf_init(&longName);
+
+	Vector<direntry> entries;
+	status = read_dir_entries(bsdVolume, bsdNode, entries);
+	if (status != B_OK)
+		return status;
+
+	uint32 direntryIndex = dirOffset / 32;
+	if (direntryIndex == 0 || !is_winentry(&entries.ElementAt(direntryIndex - 1))) {
+		PRINT("File has no long name.\n");
+		buffer[0] = 0;
+		return B_OK;
+	}
+
+	// find the file's first winentry
+	int32 firstWinentryIndex = direntryIndex - 1;
+	while (firstWinentryIndex >= 0) {
+		if (is_winentry(&entries.ElementAt(firstWinentryIndex))) {
+			winentry* winPtr = reinterpret_cast<winentry*>(&entries.ElementAt(firstWinentryIndex));
+			if ((winPtr->weCnt & WIN_LAST) != 0)
+				break;
+		} else {
+			INFORM("Can't find first winentry.\n");
+			return B_ERROR;
+		}
+		--firstWinentryIndex;
+	}
+
+	size_t workingUnits = WIN_MAXLEN + 1;
+	uint16 workingBuffer[workingUnits];
+	uint16* bufferPointer = workingBuffer;
+
+	bool done = false;
+	for (int32 i = direntryIndex - 1; i >= firstWinentryIndex && !done; --i) {
+		winentry& entry = reinterpret_cast<winentry&>(entries.ElementAt(i));
+
+		const uint16* entryPtr;
+		for (entryPtr = reinterpret_cast<const uint16*>(entry.wePart1);
+			entryPtr < reinterpret_cast<const uint16*>(entry.wePart1 + WEPART1_BYTES) && !done;
+			++bufferPointer, ++entryPtr) {
+			if (bufferPointer >= workingBuffer + workingUnits)
+				return B_NAME_TOO_LONG;
+			*bufferPointer = B_LENDIAN_TO_HOST_INT16(*entryPtr);
+			if (*bufferPointer == 0)
+				done = true;
+		}
+		if (done)
+			break;
+		for (entryPtr = reinterpret_cast<const uint16*>(entry.wePart2);
+			entryPtr < reinterpret_cast<const uint16*>(entry.wePart2 + WEPART2_BYTES) && !done;
+			++bufferPointer, ++entryPtr) {
+			if (bufferPointer >= workingBuffer + workingUnits)
+				return B_NAME_TOO_LONG;
+			*bufferPointer = B_LENDIAN_TO_HOST_INT16(*entryPtr);
+			if (*bufferPointer == 0)
+				done = true;
+		}
+		if (done)
+			break;
+		for (entryPtr = reinterpret_cast<const uint16*>(entry.wePart3);
+			entryPtr < reinterpret_cast<const uint16*>(entry.wePart3 + WEPART3_BYTES) && !done;
+			++bufferPointer, ++entryPtr) {
+			if (bufferPointer >= workingBuffer + workingUnits)
+				return B_NAME_TOO_LONG;
+			*bufferPointer = B_LENDIAN_TO_HOST_INT16(*entryPtr);
+			if (*bufferPointer == 0)
+				done = true;
+		}
+	}
+
+	if (bufferPointer < workingBuffer + workingUnits)
+		*bufferPointer++ = 0;
+	else if (*(bufferPointer - 1) != 0)
+		return B_NAME_TOO_LONG;
+
+	if (static_cast<size_t>(bufferPointer - workingBuffer) > bufferUnits)
+		return B_NAME_TOO_LONG;
+
+	memcpy(buffer, workingBuffer, 2 * (bufferPointer - workingBuffer));
+#endif
+
+	return status;
 }
 
 
@@ -557,7 +747,8 @@ read_fsinfo(msdosfsmount* volume, const vnode* devNode)
 		const uint8* buffer;
 		const struct fsinfo* fsInfo;
 
-		status = block_cache_get_etc(volume->pm_mountp->mnt_cache, volume->pm_fsinfo,
+		off_t cachedBlock = BLOCK_TO_SECTOR(volume, volume->pm_fsinfo);
+		status = block_cache_get_etc(volume->pm_mountp->mnt_cache, cachedBlock,
 			reinterpret_cast<const void**>(&buffer));
 		if (status != B_OK)
 			RETURN_ERROR(status);
@@ -575,7 +766,7 @@ read_fsinfo(msdosfsmount* volume, const vnode* devNode)
 			volume->pm_fsinfo = 0;
 		}
 
-		block_cache_put(volume->pm_mountp->mnt_cache, volume->pm_fsinfo);
+		block_cache_put(volume->pm_mountp->mnt_cache, cachedBlock);
 	}
 
 	/*
@@ -603,15 +794,16 @@ write_fsinfo(msdosfsmount* volume)
 		return B_OK;
 	}
 
-	void* buffer = block_cache_get_writable(volume->pm_mountp->mnt_cache, volume->pm_fsinfo, -1);
+	off_t cachedBlock = BLOCK_TO_SECTOR(volume, volume->pm_fsinfo);
+	void* buffer = block_cache_get_writable(volume->pm_mountp->mnt_cache, cachedBlock, -1);
 	if (buffer == NULL)
 		RETURN_ERROR(B_ERROR);
 
 	struct fsinfo* fsInfo = reinterpret_cast<struct fsinfo*>(buffer);
 	if (memcmp(fsInfo->fsisig1, "RRaA", 4) != 0 || memcmp(fsInfo->fsisig2, "rrAa", 4) != 0
 		|| memcmp(fsInfo->fsisig3, "\0\0\125\252", 4) != 0) {
-		block_cache_set_dirty(volume->pm_mountp->mnt_cache, volume->pm_fsinfo, false, -1);
-		block_cache_put(volume->pm_mountp->mnt_cache, volume->pm_fsinfo);
+		block_cache_set_dirty(volume->pm_mountp->mnt_cache, cachedBlock, false, -1);
+		block_cache_put(volume->pm_mountp->mnt_cache, cachedBlock);
 		RETURN_ERROR(B_ERROR);
 	}
 
@@ -619,7 +811,7 @@ write_fsinfo(msdosfsmount* volume)
 	putulong(fsInfo->fsinxtfree, volume->pm_nxtfree);
 	volume->pm_flags &= ~MSDOSFS_FSIMOD;
 
-	block_cache_put(volume->pm_mountp->mnt_cache, volume->pm_fsinfo);
+	block_cache_put(volume->pm_mountp->mnt_cache, cachedBlock);
 
 	return B_OK;
 }
@@ -632,32 +824,36 @@ write_fsinfo(msdosfsmount* volume)
 status_t
 check_fat(const msdosfsmount* volume)
 {
-	uint8 fatBuffer[512];
-	uint8 mirrorBuffer[512];
+	uint32 bytesPerSec = volume->pm_BytesPerSec;
+	uint32 fatSectors = volume->pm_FATsecs / volume->pm_BlkPerSec;
+		// pm_FATsecs is always in units of DEV_BSIZE
+
+	uint8 fatBuffer[bytesPerSec];
+	uint8 mirrorBuffer[bytesPerSec];
 
 	// For small FATs, check whether each FAT mirror matches the active FAT.
-	// For large FATs, that takes too long, so just check the first block of each FAT.
-	uint32 checkBlocks = volume->pm_FATsecs > 4096 ? 1 : volume->pm_FATsecs;
-	PRINT("check_fat checking %" B_PRIu32 " blocks\n", checkBlocks);
+	// For large FATs, that takes too long, so just check the first sector of each FAT.
+	uint32 checkSectors = fatSectors > 4096 ? 1 : fatSectors;
+	PRINT("check_fat checking %" B_PRIu32 " sectors\n", checkSectors);
 
-	// for each block
-	for (uint32 i = 0; i < checkBlocks; ++i) {
-		// read a block from the first/active fat
-		uint32 resBlocks = volume->pm_ResSectors * volume->pm_BlkPerSec;
-		off_t position = 512 * (resBlocks + volume->pm_curfat * volume->pm_FATsecs + i);
+	// for each sector
+	for (uint32 i = 0; i < checkSectors; ++i) {
+		// read a sector from the first/active fat
+		uint32 resSectors = volume->pm_ResSectors;
+		off_t position = bytesPerSec * (resSectors + volume->pm_curfat * fatSectors + i);
 		ssize_t bytes_read
-			= read_pos(volume->pm_dev->si_fd, position, reinterpret_cast<void*>(fatBuffer), 0x200);
-		if (bytes_read != 0x200)
+			= read_pos(volume->pm_dev->si_fd, position, reinterpret_cast<void*>(fatBuffer), bytesPerSec);
+		if (bytes_read != static_cast<ssize_t>(bytesPerSec))
 			RETURN_ERROR(B_IO_ERROR);
 
 		// for each mirror
 		for (uint32 j = 0; j < volume->pm_FATs; ++j) {
 			if (j == volume->pm_curfat)
 				continue;
-			position = 512 * (resBlocks + volume->pm_FATsecs * j + i);
+			position = bytesPerSec * (resSectors + fatSectors * j + i);
 			bytes_read = read_pos(volume->pm_dev->si_fd, position,
-				reinterpret_cast<void*>(mirrorBuffer), 0x200);
-			if (bytes_read != 0x200)
+				reinterpret_cast<void*>(mirrorBuffer), bytesPerSec);
+			if (bytes_read != static_cast<ssize_t>(bytesPerSec))
 				RETURN_ERROR(B_IO_ERROR);
 
 			if (i == 0 && mirrorBuffer[0] != volume->pm_Media) {
@@ -670,7 +866,7 @@ check_fat(const msdosfsmount* volume)
 			// checking for exact matches of fats is too
 			// restrictive; allow these to go through in
 			// case the fat is corrupted for some reason
-			if (memcmp(fatBuffer, mirrorBuffer, 0x200)) {
+			if (memcmp(fatBuffer, mirrorBuffer, bytesPerSec)) {
 				INFORM("FAT %" B_PRIu32 " doesn't match active FAT (%u) on %s.\n"
 					   "Install dosfstools and use fsck.fat to inspect %s.\n",
 					j, volume->pm_curfat, volume->pm_dev->si_device, volume->pm_dev->si_device);
@@ -810,6 +1006,91 @@ iter_csi(struct csi* csi, int sectors)
 }
 
 
+/*!	Similar to dosfs_readdir, but returns FAT directory entries instead of POSIX dirents.
+	@param entries An empty Vector.
+	@post If B_OK was returned, all direntries and winentries in the given directory have been
+	copied into \a entries, in the same order as arranged on disk.
+*/
+status_t
+read_dir_entries(mount* bsdVolume, const vnode* bsdNode, Vector<direntry>& entries)
+{
+	status_t status = B_ERROR;
+#ifndef FS_SHELL // fs_shell does not provide the Vector class template
+
+	msdosfsmount* fatVolume = reinterpret_cast<msdosfsmount*>(bsdVolume->mnt_data);
+	denode* fatNode = reinterpret_cast<denode*>(bsdNode->v_data);
+
+	if ((fatNode->de_Attributes & ATTR_DIRECTORY) == 0)
+		RETURN_ERROR(B_NOT_A_DIRECTORY);
+
+	// This function, unlike dosfs_readdir, does not simulate . and .. entries in the
+	// root directory, so there is no need for a bias variable.
+
+	uint32 entryIndex = 0;
+		// directory-relative index of the current direntry or winentry
+
+	if (fatNode->de_FileSize == 0)
+		return B_OK;
+
+	buf* entriesBuf;
+		// disk entries being read from
+	mbnambuf longName;
+		// filename after extraction and conversion from winentries
+	mbnambuf_init(&longName);
+	bool done = false;
+
+	while (done == false) {
+		int32 logicalCluster = de_cluster(fatVolume, entryIndex * sizeof(direntry));
+			// file-relative cluster number containing the next entry to read
+		int32 clusterOffset = (entryIndex * sizeof(direntry)) & fatVolume->pm_crbomask;
+			// byte offset into buf::b_data at which the inner loop starts reading
+		int32 fileDiff = fatNode->de_FileSize - (entryIndex * sizeof(direntry));
+			// remaining data in the directory file
+		if (fileDiff <= 0)
+			break;
+		int32 bytesLeft
+			= min_c(static_cast<int32>(fatVolume->pm_bpcluster) - clusterOffset, fileDiff);
+			// remaining data in the struct buf, excluding any area past EOF
+
+		int readSize;
+			// how many bytes to read into the struct buf at a time; usually cluster size but
+			// sector size for the FAT12/16 root directory
+		daddr_t readBlock;
+			// volume-relative index of the readSize-sized block into entriesBuf
+		u_long volumeCluster;
+			// volume-relative cluster number containing the next entry to read
+		status = pcbmap(fatNode, logicalCluster, &readBlock, &volumeCluster, &readSize);
+		if (status != B_OK)
+			break;
+
+		status = bread(fatVolume->pm_devvp, readBlock, readSize, NOCRED, &entriesBuf);
+		if (status != B_OK)
+			break;
+
+		bytesLeft = min_c(bytesLeft, readSize - entriesBuf->b_resid);
+		if (bytesLeft == 0) {
+			brelse(entriesBuf);
+			status = B_IO_ERROR;
+			break;
+		}
+
+		for (direntry* fatEntry = reinterpret_cast<direntry*>(entriesBuf->b_data + clusterOffset);
+			reinterpret_cast<char*>(fatEntry) < entriesBuf->b_data + clusterOffset + bytesLeft;
+			++fatEntry, ++entryIndex) {
+			status = entries.PushBack(*fatEntry);
+			if (status != B_OK || fatEntry->deName[0] == SLOT_EMPTY) {
+				done = true;
+				break;
+			}
+		}
+		brelse(entriesBuf);
+	}
+#endif // !FS_SHELL
+
+	return status;
+}
+
+
 NodePutter::NodePutter()
 	:
 	fNode(NULL)
@@ -849,6 +1130,51 @@ NodePutter::Put()
 			REPORT_ERROR(status);
 		fNode = NULL;
 	}
+}
+
+
+/*!	Get the ino and node for a given directory and name.
+
+*/
+status_t
+walk_private(mount* bsdVolume, vnode* bsdDir, const char* name, ino_t* _id, vnode** bsdResult)
+{
+	denode* fatDir = reinterpret_cast<denode*>(bsdDir->v_data);
+	msdosfsmount* fatVolume = reinterpret_cast<msdosfsmount*>(bsdVolume->mnt_data);
+
+	WriteLocker locker(bsdDir->v_vnlock->haikuRW);
+		// msdosfs_lookup_ino will modify de_fndoffset, de_fndcnt
+
+	if (bsdDir->v_type != VDIR)
+		RETURN_ERROR(B_NOT_A_DIRECTORY);
+
+	ComponentName bsdName(strcmp(name, "..") == 0 ? MAKEENTRY | ISDOTDOT : MAKEENTRY, NOCRED,
+		LOOKUP, 0, name);
+
+	daddr_t dirClust;
+	u_long dirOffset;
+	status_t status = B_FROM_POSIX_ERROR(
+		msdosfs_lookup_ino(bsdDir, NULL, bsdName.Data(), &dirClust, &dirOffset));
+	if (status != B_OK)
+		RETURN_ERROR(B_ENTRY_NOT_FOUND);
+
+	// msdosfs_lookup_ino will return 0 for cluster number if looking up .. in a directory
+	// whose parent is the root directory, even on FAT32 volumes (which reflects the
+	// value that is meant to be stored in the .. direntry, per the FAT spec)
+	if (FAT32(fatVolume) == true && dirClust == MSDOSFSROOT)
+		dirClust = fatVolume->pm_rootdirblk;
+
+	status = assign_inode_and_get(bsdVolume, dirClust, dirOffset, bsdResult);
+	if (status != B_OK)
+		RETURN_ERROR(status);
+	denode* fatResult = reinterpret_cast<denode*>((*bsdResult)->v_data);
+
+	// dosfs_read_vnode does not set this because it does not know the parent inode
+	(*bsdResult)->v_parent = fatDir->de_inode;
+
+	*_id = fatResult->de_inode;
+
+	return B_OK;
 }
 
 
@@ -957,6 +1283,42 @@ node_exists(mount* bsdVolume, uint64_t inode)
 }
 
 
+/*!	Returns the ino for RECYCLED/_BEOS_.
+
+*/
+status_t
+recycle_bin_inode(mount* bsdVolume, ino_t* id)
+{
+	fs_volume* fsVolume = bsdVolume->mnt_fsvolume;
+	msdosfsmount* fatVolume = reinterpret_cast<msdosfsmount*>(bsdVolume->mnt_data);
+
+	vnode* rootBsdNode;
+	status_t status
+		= get_vnode(fsVolume, root_inode(fatVolume), reinterpret_cast<void**>(&rootBsdNode));
+	if (status != B_OK)
+		return status;
+	NodePutter rootPutter(rootBsdNode);
+
+	ino_t recycled;
+	vnode* recycledBsdNode;
+	status = walk_private(bsdVolume, rootBsdNode, "RECYCLED", &recycled, &recycledBsdNode);
+	if (status != B_OK)
+		return status;
+	NodePutter recycledPutter(recycledBsdNode);
+
+	ino_t beos;
+	vnode* beosBsdNode;
+	status = walk_private(bsdVolume, recycledBsdNode, "_BEOS_", &beos, &beosBsdNode);
+	if (status != B_OK)
+		return status;
+	put_vnode(fsVolume, beos);
+
+	*id = beos;
+
+	return status;
+}
+
+
 /*! Analagous to FreeBSD's vfs_timestamp, but returns the local time instead of GMT.
 
 */
@@ -1054,7 +1416,7 @@ fill_gap_with_zeros(vnode* bsdNode, off_t pos, off_t newSize)
 		else
 			size = newSize - pos;
 
-		status_t status = file_cache_write(bsdNode->v_cache, NULL, pos, NULL, &size);
+		status_t status = file_cache_write(bsdNode->v_cache, pos, NULL, &size);
 		if (status < B_OK)
 			return status;
 
@@ -1081,13 +1443,17 @@ sync_clusters(vnode* bsdNode)
 	u_long cluster = fatNode->de_dirclust;
 
 	if (cluster == MSDOSFSROOT) {
-		status = block_cache_sync_etc(bsdVolume->mnt_cache, fatVolume->pm_rootdirblk,
-			fatVolume->pm_rootdirsize);
+		off_t cachedBlock = BLOCK_TO_SECTOR(fatVolume, fatVolume->pm_rootdirblk);
+		size_t numBlocks =
+			HOWMANY(fatVolume->pm_rootdirsize * DEV_BSIZE, fatVolume->pm_BytesPerSec);
+		status = block_cache_sync_etc(bsdVolume->mnt_cache, cachedBlock, numBlocks);
 	} else {
 		status_t fatStatus = B_OK;
 		while ((IS_DATA_CLUSTER(cluster)) && status == B_OK && fatStatus == B_OK) {
-			status = block_cache_sync_etc(bsdVolume->mnt_cache, de_cn2bn(fatVolume, cluster),
-				BLOCKS_PER_CLUSTER(fatVolume));
+			off_t cachedBlock = BLOCK_TO_SECTOR(fatVolume, cntobn(fatVolume, cluster));
+				// changed from de_cn2bn
+			status = block_cache_sync_etc(bsdVolume->mnt_cache, cachedBlock,
+				SECTORS_PER_CLUSTER(fatVolume));
 			fatStatus = B_FROM_POSIX_ERROR(fatentry(FAT_GET, fatVolume, cluster, &cluster, 0));
 		}
 		if (fatStatus != B_OK)
@@ -1117,14 +1483,14 @@ discard_clusters(vnode* bsdNode, off_t newLength)
 	// Typically we are discarding all clusters associated with a directory. However, in
 	// the case of an error, the driver might shrink a directory to undo an attempted expansion,
 	// as in createde.
-	for (uint32 skip = howmany(newLength, fatVolume->pm_bpcluster); skip > 0 && status == B_OK;
+	for (uint32 skip = HOWMANY(newLength, fatVolume->pm_bpcluster); skip > 0 && status == B_OK;
 		skip--) {
 		status = B_FROM_POSIX_ERROR(fatentry(FAT_GET, fatVolume, cluster, &cluster, 0));
 	}
 
 	while ((IS_DATA_CLUSTER(cluster)) && status == B_OK) {
-		block_cache_discard(bsdVolume->mnt_cache, de_cn2bn(fatVolume, cluster),
-			BLOCKS_PER_CLUSTER(fatVolume));
+		off_t cachedBlock = BLOCK_TO_SECTOR(fatVolume, cntobn(fatVolume, cluster));
+		block_cache_discard(bsdVolume->mnt_cache, cachedBlock, SECTORS_PER_CLUSTER(fatVolume));
 		status = B_FROM_POSIX_ERROR(fatentry(FAT_GET, fatVolume, cluster, &cluster, 0));
 	}
 
@@ -1184,43 +1550,16 @@ mode_bits(const vnode* bsdNode, mode_t* mode)
 
 	// In FAT, there is no place to store an executable flag on disk. FreeBSD makes all FAT files
 	// executable, but Tracker will complain if, for example, a text file is executable.
-	// To avoid that, we go by the MIME type.
+	// To avoid that, only list files without extensions as executable.
 	if (bsdNode->v_type == VDIR
-		|| (bsdNode->v_type == VREG && bsdNode->v_mime != NULL
-			&& strcmp(bsdNode->v_mime, "application/octet-stream") == 0)) {
+		|| (bsdNode->v_type == VREG
+			&& !(fatNode->de_Name[7] == ' ' && memcmp(&fatNode->de_Name[8], "  ", 3) != 0))) {
 		*mode |= S_IXUSR | S_IXGRP | S_IXOTH;
 	}
 
 	*mode &= (bsdNode->v_type == VDIR) ? fatVolume->pm_dirmask : fatVolume->pm_mask;
 
 	return;
-}
-
-
-/*! Set the mime type of a node; has no effect in fat_shell.
-	@param update True if this is an update to a pre-existing mime setting.
-*/
-status_t
-set_mime_type(vnode* bsdNode, bool update)
-{
-#ifndef FS_SHELL
-	mount* bsdVolume = reinterpret_cast<mount*>(bsdNode->v_mount);
-	denode* fatNode = reinterpret_cast<denode*>(bsdNode->v_data);
-	msdosfsmount* fatVolume = reinterpret_cast<msdosfsmount*>(fatNode->de_pmp);
-
-	if (bsdNode->v_type == VREG) {
-		char unixShortname[SHORTNAME_CSTRING + 1];
-			// +1 for the period added by dos2unixfn
-		dos2unixfn(fatNode->de_Name, reinterpret_cast<u_char*>(unixShortname), 0, fatVolume);
-
-		set_mime(&bsdNode->v_mime, unixShortname);
-
-		notify_attribute_changed(bsdVolume->mnt_fsvolume->id, bsdNode->v_parent, fatNode->de_inode,
-			"BEOS:TYPE", update ? B_ATTR_CHANGED : B_ATTR_CREATED);
-	}
-#endif // FS_SHELL
-
-	return B_OK;
 }
 
 

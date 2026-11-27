@@ -2,19 +2,21 @@ SubDir HAIKU_TOP src tests apps haikudepot ;
 
 AddSubDirSupportedPlatforms libbe_test ;
 
+include [ FDirName $(HAIKU_TOP) src apps haikudepot build jam JsonSchemaGenRules ] ;
+
 SubDirHdrs [ FDirName $(HAIKU_TOP) src apps haikudepot ] ;
 SubDirHdrs [ FDirName $(HAIKU_TOP) src apps haikudepot model ] ;
 SubDirHdrs [ FDirName $(HAIKU_TOP) src apps haikudepot server ] ;
-SubDirHdrs [ FDirName $(HAIKU_TOP) src apps haikudepot server dumpexportrepository ] ;
 SubDirHdrs [ FDirName $(HAIKU_TOP) src apps haikudepot util ] ;
 
 UsePrivateHeaders interface netservices shared ;
+
+HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY = $(TARGET_COMMON_DEBUG_LOCATE_TARGET) ;
 
 local sourceDirs =
 	model
 	packagemodel
 	server
-	server/dumpexportrepository
 	util
 	tar
 	textview
@@ -25,10 +27,19 @@ local sourceDir ;
 for sourceDir in $(sourceDirs) {
 	SEARCH_SOURCE += [ FDirName $(HAIKU_TOP) src apps haikudepot $(sourceDir) ] ;
 }
-SEARCH_SOURCE += [ FDirName $(HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY)
-	dumpexportrepositorybulklistener ] ;
-SEARCH_SOURCE += [ FDirName $(HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY)
-	dumpexportrepositorymodel ] ;
+local genServerRepositoryGenDirectory =
+	[ FDirName $(HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY) dumpexportrepository ] ;
+local genTestSchemaGenDirectory =
+	[ FDirName $(HAIKUDEPOT_GENERATED_SOURCES_DIRECTORY) testschema ] ;
+
+SEARCH_SOURCE += $(genServerRepositoryGenDirectory) ;
+SEARCH_SOURCE += $(genTestSchemaGenDirectory) ;
+
+local genServerRepositoryGenFiles =
+	DumpExportRepositoryModel.cpp DumpExportRepositoryJsonListener.cpp ;
+
+local genTestSchemaGenFiles =
+	TestSchemaObjectModel.cpp TestSchemaObjectJsonListener.cpp ;
 
 UnitTestLib haikudepottest.so :
 	HaikuDepotTestAddon.cpp
@@ -36,11 +47,12 @@ UnitTestLib haikudepottest.so :
 	DataIOUtils.cpp
 	DataIOUtilsTest.cpp
 
-	DumpExportRepositorySource.cpp
-	DumpExportRepositorySourceMirror.cpp
-	DumpExportRepository.cpp
-	DumpExportRepositoryJsonListener.cpp
+	$(genTestSchemaGenFiles)
+	TestSchemaValidationTest.cpp
+
+	$(genServerRepositoryGenFiles)
 	DumpExportRepositoryJsonListenerTest.cpp
+	DumpExportRepositoryTest.cpp
 
 	JwtTokenHelper.cpp
 	JwtTokenHelperTest.cpp
@@ -50,7 +62,6 @@ UnitTestLib haikudepottest.so :
 	LocaleUtils.cpp
 
 	Language.cpp
-	LanguageRepository.cpp
 	LocaleUtilsTest.cpp
 
 	StandardMetaData.cpp
@@ -77,6 +88,13 @@ UnitTestLib haikudepottest.so :
 	be shared bnetapi package [ TargetLibstdc++ ] [ TargetLibsupc++ ]
 	localestub
 ;
+
+{
+	local sourceDir = [ FDirName resources ] ;
+	local destDir = [ FDirName apps haikudepot ] ;
+	local files = sample.tar ;
+	UnitTestResources $(files:D=$(sourceDir)) : $(destDir) ;
+}
 
 Application TextDocumentTest :
 	TextDocumentTest.cpp
@@ -109,4 +127,18 @@ Application TextDocumentTest :
 	UndoableEditListener.cpp
 
 	: be translation shared [ TargetLibsupc++ ]
+;
+
+JsonSchemaModelAndParser
+	$(genTestSchemaGenDirectory)
+	: $(genTestSchemaGenFiles)
+	: [ FGristFiles TestSchemaValidationTest.cpp ]
+	: [ FDirName $(HAIKU_TOP) src tests apps haikudepot schema testschema.json ]
+;
+
+JsonSchemaModelAndParser
+	$(genServerRepositoryGenDirectory)
+	: $(genServerRepositoryGenFiles)
+	: [ FGristFiles DumpExportRepositoryJsonListenerTest.cpp DumpExportRepositoryTest.cpp ]
+	: [ FDirName $(HAIKU_TOP) src apps haikudepot server schema dumpexportrepository.json ]
 ;

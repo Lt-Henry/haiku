@@ -79,11 +79,12 @@ namespace BKernel {
 }
 
 
-struct thread_death_entry {
-	struct list_link	link;
+struct thread_death_entry : DoublyLinkedListLinkImpl<thread_death_entry> {
 	thread_id			thread;
 	status_t			status;
 };
+
+typedef DoublyLinkedList<thread_death_entry> ThreadDeathEntryList;
 
 struct team_loading_info {
 	ConditionVariable	condition;
@@ -216,231 +217,13 @@ struct TeamThreadIteratorEntry
 };
 
 
-struct Team : TeamThreadIteratorEntry<team_id>, KernelReferenceable,
-		AssociatedDataOwner {
-	DoublyLinkedListLink<Team>	global_list_link;
-	Team			*hash_next;		// next in hash
-	DoublyLinkedListLink<Team> siblings_link; // protected by parent's fLock
-	Team			*parent;		// write-protected by both parent (if any)
-									// and this team's fLock
-	DoublyLinkedList<Team, DoublyLinkedListMemberGetLink<Team, &Team::siblings_link> > children;
-		// protected by this team's fLock;
-		// adding/removing a child also requires the child's fLock
-	DoublyLinkedListLink<Team> group_link; // protected by the group's lock
-
-	int64			serial_number;	// immutable after adding team to hash
-
-	// process group info -- write-protected by both the group's lock, the
-	// team's lock, and the team's parent's lock
-	pid_t			group_id;
-	pid_t			session_id;
-	ProcessGroup	*group;
-
-	int				num_threads;	// number of threads in this team
-	int				state;			// current team state, see above
-	int32			flags;
-	struct io_context *io_context;
-	struct user_mutex_context *user_mutex_context;
-	struct realtime_sem_context	*realtime_sem_context;
-	struct xsi_sem_context *xsi_sem_context;
-	struct team_death_entry *death_entry;	// protected by fLock
-	struct list		dead_threads;
-
-	// protected by the team's fLock
-	team_dead_children dead_children;
-	team_job_control_children stopped_children;
-	team_job_control_children continued_children;
-
-	// protected by the parent team's fLock
-	struct job_control_entry* job_control_entry;
-
-	VMAddressSpace	*address_space;
-	Thread			*main_thread;	// protected by fLock, immutable
-									// after first set
-	Thread			*thread_list;	// protected by fLock, signal_lock and
-									// gThreadCreationLock
-	struct team_loading_info *loading_info;	// protected by fLock
-	DoublyLinkedList<image> image_list; // protected by sImageMutex
-	struct list		watcher_list;
-	struct list		sem_list;		// protected by sSemsSpinlock
-	struct list		port_list;		// protected by sPortsLock
-	struct arch_team arch_info;
-
-	addr_t			user_data;
-	area_id			user_data_area;
-	size_t			user_data_size;
-	size_t			used_user_data;
-	struct free_user_thread* free_user_threads;
-
-	void*			commpage_address;
-
-	struct team_debug_info debug_info;
-
-	bigtime_t		start_time;
-
-	// protected by time_lock
-	bigtime_t		dead_threads_kernel_time;
-	bigtime_t		dead_threads_user_time;
-	bigtime_t		cpu_clock_offset;
-	spinlock		time_lock;
-
-	// user group information; protected by fLock
-	uid_t			saved_set_uid;
-	uid_t			real_uid;
-	uid_t			effective_uid;
-	gid_t			saved_set_gid;
-	gid_t			real_gid;
-	gid_t			effective_gid;
-	BReference<GroupsArray> supplementary_groups;
-
-	// Exit status information. Set when the first terminal event occurs,
-	// immutable afterwards. Protected by fLock.
-	struct {
-		uint16		reason;			// reason for the team's demise, one of the
-									// CLD_* values defined in <signal.h>
-		uint16		signal;			// signal killing the team
-		uid_t		signaling_user;	// real UID of the signal sender
-		status_t	status;			// exit status, if normal team exit
-		bool		initialized;	// true when the state has been initialized
-	} exit;
-
-	spinlock		signal_lock;
-
-public:
-								~Team();
-
-	static	Team*				Create(team_id id, const char* name,
-									bool kernel);
-	static	Team*				Get(team_id id);
-	static	Team*				GetAndLock(team_id id);
-
-			bool				Lock()
-									{ mutex_lock(&fLock); return true; }
-			bool				TryLock()
-									{ return mutex_trylock(&fLock) == B_OK; }
-			void				Unlock()
-									{ mutex_unlock(&fLock); }
-
-			void				UnlockAndReleaseReference()
-									{ Unlock(); ReleaseReference(); }
-
-			void				LockTeamAndParent(bool dontLockParentIfKernel);
-			void				UnlockTeamAndParent();
-			void				LockTeamAndProcessGroup();
-			void				UnlockTeamAndProcessGroup();
-			void				LockTeamParentAndProcessGroup();
-			void				UnlockTeamParentAndProcessGroup();
-			void				LockProcessGroup()
-									{ LockTeamAndProcessGroup(); Unlock(); }
-
-			const char*			Name() const	{ return fName; }
-			void				SetName(const char* name);
-
-			const char*			Args() const	{ return fArgs; }
-			void				SetArgs(const char* args);
-			void				SetArgs(const char* path,
-									const char* const* otherArgs,
-									int otherArgCount);
-
-			BKernel::QueuedSignalsCounter* QueuedSignalsCounter() const
-									{ return fQueuedSignalsCounter; }
-			sigset_t			PendingSignals() const
-									{ return fPendingSignals.AllSignals(); }
-
-			void				AddPendingSignal(int signal)
-									{ fPendingSignals.AddSignal(signal); }
-			void				AddPendingSignal(Signal* signal)
-									{ fPendingSignals.AddSignal(signal); }
-			void				RemovePendingSignal(int signal)
-									{ fPendingSignals.RemoveSignal(signal); }
-			void				RemovePendingSignal(Signal* signal)
-									{ fPendingSignals.RemoveSignal(signal); }
-			void				RemovePendingSignals(sigset_t mask)
-									{ fPendingSignals.RemoveSignals(mask); }
-			void				ResetSignalsOnExec();
-
-	inline	int32				HighestPendingSignalPriority(
-									sigset_t nonBlocked) const;
-	inline	Signal*				DequeuePendingSignal(sigset_t nonBlocked,
-									Signal& buffer);
-
-			struct sigaction&	SignalActionFor(int32 signal)
-									{ return fSignalActions[signal - 1]; }
-			void				InheritSignalActions(Team* parent);
-
-			// user timers -- protected by fLock
-			UserTimer*			UserTimerFor(int32 id) const
-									{ return fUserTimers.TimerFor(id); }
-			status_t			AddUserTimer(UserTimer* timer);
-			void				RemoveUserTimer(UserTimer* timer);
-			void				DeleteUserTimers(bool userDefinedOnly);
-
-			bool				CheckAddUserDefinedTimer();
-			void				UserDefinedTimersRemoved(int32 count);
-
-			void				UserTimerActivated(TeamTimeUserTimer* timer)
-									{ fCPUTimeUserTimers.Add(timer); }
-			void				UserTimerActivated(TeamUserTimeUserTimer* timer)
-									{ fUserTimeUserTimers.Add(timer); }
-			void				UserTimerDeactivated(TeamTimeUserTimer* timer)
-									{ fCPUTimeUserTimers.Remove(timer); }
-			void				UserTimerDeactivated(
-									TeamUserTimeUserTimer* timer)
-									{ fUserTimeUserTimers.Remove(timer); }
-			void				DeactivateCPUTimeUserTimers();
-									// both total and user CPU timers
-			bool				HasActiveCPUTimeUserTimers() const
-									{ return !fCPUTimeUserTimers.IsEmpty(); }
-			bool				HasActiveUserTimeUserTimers() const
-									{ return !fUserTimeUserTimers.IsEmpty(); }
-			TeamTimeUserTimerList::ConstIterator
-									CPUTimeUserTimerIterator() const
-									{ return fCPUTimeUserTimers.GetIterator(); }
-	inline	TeamUserTimeUserTimerList::ConstIterator
-									UserTimeUserTimerIterator() const;
-
-			bigtime_t			CPUTime(bool ignoreCurrentRun,
-									Thread* lockedThread = NULL) const;
-			bigtime_t			UserCPUTime() const;
-
-			ConditionVariable*	CoreDumpCondition() const
-									{ return fCoreDumpCondition; }
-			void				SetCoreDumpCondition(
-									ConditionVariable* condition)
-									{ fCoreDumpCondition = condition; }
-private:
-								Team(team_id id, bool kernel);
-
-private:
-			mutex				fLock;
-			char				fName[B_OS_NAME_LENGTH];
-			char				fArgs[64];
-									// contents for the team_info::args field
-
-			BKernel::QueuedSignalsCounter* fQueuedSignalsCounter;
-			BKernel::PendingSignals	fPendingSignals;
-									// protected by signal_lock
-			struct sigaction 	fSignalActions[MAX_SIGNAL_NUMBER];
-									// indexed signal - 1, protected by fLock
-
-			UserTimerList		fUserTimers;			// protected by fLock
-			TeamTimeUserTimerList fCPUTimeUserTimers;
-									// protected by scheduler lock
-			TeamUserTimeUserTimerList fUserTimeUserTimers;
-			int32				fUserDefinedTimerCount;	// accessed atomically
-
-			ConditionVariable*	fCoreDumpCondition;
-									// protected by fLock
-};
-
-
 struct Thread : TeamThreadIteratorEntry<thread_id>, KernelReferenceable {
 	int32			flags;			// summary of events relevant in interrupt
 									// handlers (signals pending, user debugging
 									// enabled, etc.)
 	int64			serial_number;	// immutable after adding thread to hash
 	Thread			*hash_next;		// protected by thread hash lock
-	Thread			*team_next;		// protected by team lock and fLock
+	DoublyLinkedListLink<Thread> team_link; // protected by team lock and fLock
 	char			name[B_OS_NAME_LENGTH];	// protected by fLock
 	bool			going_to_suspend;	// protected by scheduler lock
 	int32			priority;		// protected by scheduler lock
@@ -448,7 +231,7 @@ struct Thread : TeamThreadIteratorEntry<thread_id>, KernelReferenceable {
 	int32			state;			// protected by scheduler lock
 	struct cpu_ent	*cpu;			// protected by scheduler lock
 	struct cpu_ent	*previous_cpu;	// protected by scheduler lock
-	CPUSet			cpumask;
+	CPUSet			cpumask;		// protected by scheduler lock
 	int32			pinned_to_cpu;	// only accessed by this thread or in the
 									// scheduler, when thread is not running
 	spinlock		scheduler_lock;
@@ -504,8 +287,8 @@ struct Thread : TeamThreadIteratorEntry<thread_id>, KernelReferenceable {
 
 	void			(*fault_handler)(void);
 	jmp_buf			fault_handler_state;
-	int32			page_faults_allowed;
-		/* this field may only stay in debug builds in the future */
+	int16			page_faults_allowed;
+	int16			page_fault_waits_allowed;
 
 	BKernel::Team	*team;	// protected by team lock, thread lock, scheduler
 							// lock, team_lock
@@ -514,7 +297,7 @@ struct Thread : TeamThreadIteratorEntry<thread_id>, KernelReferenceable {
 	struct {
 		sem_id		sem;		// immutable after thread creation
 		status_t	status;		// accessed only by this thread
-		struct list	waiters;	// protected by fLock
+		ThreadDeathEntryList waiters; // protected by fLock
 	} exit;
 
 	struct select_info *select_infos;	// protected by fLock
@@ -641,6 +424,227 @@ private:
 			UserTimerList		fUserTimers;			// protected by fLock
 			ThreadTimeUserTimerList fCPUTimeUserTimers;
 									// protected by time_lock
+};
+
+
+struct Team : TeamThreadIteratorEntry<team_id>, KernelReferenceable,
+		AssociatedDataOwner {
+	DoublyLinkedListLink<Team>	global_list_link;
+	Team			*hash_next;		// next in hash
+	DoublyLinkedListLink<Team> siblings_link; // protected by parent's fLock
+	Team			*parent;		// write-protected by both parent (if any)
+									// and this team's fLock
+	DoublyLinkedList<Team, DoublyLinkedListMemberGetLink<Team, &Team::siblings_link> > children;
+		// protected by this team's fLock;
+		// adding/removing a child also requires the child's fLock
+	DoublyLinkedListLink<Team> group_link; // protected by the group's lock
+
+	int64			serial_number;	// immutable after adding team to hash
+
+	// process group info -- write-protected by both the group's lock, the
+	// team's lock, and the team's parent's lock
+	pid_t			group_id;
+	pid_t			session_id;
+	ProcessGroup	*group;
+
+	int				num_threads;	// number of threads in this team
+	int				state;			// current team state, see above
+	int32			flags;
+	struct io_context *io_context;
+	struct user_mutex_context *user_mutex_context;
+	struct realtime_sem_context	*realtime_sem_context;
+	struct xsi_sem_context *xsi_sem_context;
+	struct team_death_entry *death_entry;	// protected by fLock
+	ThreadDeathEntryList	dead_threads;
+
+	// protected by the team's fLock
+	team_dead_children dead_children;
+	team_job_control_children stopped_children;
+	team_job_control_children continued_children;
+
+	// protected by the parent team's fLock
+	struct job_control_entry* job_control_entry;
+
+	VMAddressSpace	*address_space;
+	Thread			*main_thread;	// protected by fLock, immutable
+									// after first set
+	DoublyLinkedList<Thread, DoublyLinkedListMemberGetLink<Thread, &Thread::team_link> >
+		thread_list;	// protected by fLock, signal_lock and gThreadCreationLock
+	struct team_loading_info *loading_info;	// protected by fLock
+	DoublyLinkedList<image> image_list; // protected by sImageMutex
+	struct list		watcher_list;
+	struct list		sem_list;		// protected by sSemsSpinlock
+	struct list		port_list;		// protected by sPortsLock
+	struct arch_team arch_info;
+
+	addr_t			user_data;
+	area_id			user_data_area;
+	size_t			user_data_size;
+	size_t			used_user_data;
+	struct free_user_thread* free_user_threads;
+
+	void*			commpage_address;
+
+	struct team_debug_info debug_info;
+
+	bigtime_t		start_time;
+
+	// protected by time_lock
+	bigtime_t		dead_threads_kernel_time;
+	bigtime_t		dead_threads_user_time;
+	bigtime_t		cpu_clock_offset;
+	spinlock		time_lock;
+
+	// user group information; protected by fLock
+	uid_t			saved_set_uid;
+	uid_t			real_uid;
+	uid_t			effective_uid;
+	gid_t			saved_set_gid;
+	gid_t			real_gid;
+	gid_t			effective_gid;
+	BReference<GroupsArray> supplementary_groups;
+
+	// Exit status information. Set when the first terminal event occurs,
+	// immutable afterwards. Protected by fLock.
+	struct {
+		uint16		reason;			// reason for the team's demise, one of the
+									// CLD_* values defined in <signal.h>
+		uint16		signal;			// signal killing the team
+		uid_t		signaling_user;	// real UID of the signal sender
+		status_t	status;			// exit status, if normal team exit
+		bool		initialized;	// true when the state has been initialized
+	} exit;
+
+	spinlock		signal_lock;
+
+public:
+								~Team();
+
+	static	Team*				Create(team_id id, const char* name,
+									bool kernel);
+	static	Team*				Get(team_id id);
+	static	Team*				GetAndLock(team_id id);
+
+			bool				Lock()
+									{ mutex_lock(&fLock); return true; }
+			bool				TryLock()
+									{ return mutex_trylock(&fLock) == B_OK; }
+			void				Unlock()
+									{ mutex_unlock(&fLock); }
+			void				AssertLocked()
+									{ ASSERT_LOCKED_MUTEX(&fLock); }
+
+			void				UnlockAndReleaseReference()
+									{ Unlock(); ReleaseReference(); }
+
+			void				LockTeamAndParent(bool dontLockParentIfKernel);
+			void				UnlockTeamAndParent();
+			void				LockTeamAndProcessGroup();
+			void				UnlockTeamAndProcessGroup();
+			void				LockTeamParentAndProcessGroup();
+			void				UnlockTeamParentAndProcessGroup();
+			void				LockProcessGroup()
+									{ LockTeamAndProcessGroup(); Unlock(); }
+
+			const char*			Name() const	{ return fName; }
+			void				SetName(const char* name);
+
+			const char*			Args() const	{ return fArgs; }
+			void				SetArgs(const char* args);
+			void				SetArgs(const char* path,
+									const char* const* otherArgs,
+									int otherArgCount);
+
+			BKernel::QueuedSignalsCounter* QueuedSignalsCounter() const
+									{ return fQueuedSignalsCounter; }
+			sigset_t			PendingSignals() const
+									{ return fPendingSignals.AllSignals(); }
+
+			void				AddPendingSignal(int signal)
+									{ fPendingSignals.AddSignal(signal); }
+			void				AddPendingSignal(Signal* signal)
+									{ fPendingSignals.AddSignal(signal); }
+			void				RemovePendingSignal(int signal)
+									{ fPendingSignals.RemoveSignal(signal); }
+			void				RemovePendingSignal(Signal* signal)
+									{ fPendingSignals.RemoveSignal(signal); }
+			void				RemovePendingSignals(sigset_t mask)
+									{ fPendingSignals.RemoveSignals(mask); }
+			void				ResetSignalsOnExec();
+
+	inline	int32				HighestPendingSignalPriority(
+									sigset_t nonBlocked) const;
+	inline	Signal*				DequeuePendingSignal(sigset_t nonBlocked,
+									Signal& buffer);
+
+			struct sigaction&	SignalActionFor(int32 signal)
+									{ return fSignalActions[signal - 1]; }
+			void				InheritSignalActions(Team* parent);
+
+			// user timers -- protected by fLock
+			UserTimer*			UserTimerFor(int32 id) const
+									{ return fUserTimers.TimerFor(id); }
+			status_t			AddUserTimer(UserTimer* timer);
+			void				RemoveUserTimer(UserTimer* timer);
+			void				DeleteUserTimers(bool userDefinedOnly);
+
+			bool				CheckAddUserDefinedTimer();
+			void				UserDefinedTimersRemoved(int32 count);
+
+			void				UserTimerActivated(TeamTimeUserTimer* timer)
+									{ fCPUTimeUserTimers.Add(timer); }
+			void				UserTimerActivated(TeamUserTimeUserTimer* timer)
+									{ fUserTimeUserTimers.Add(timer); }
+			void				UserTimerDeactivated(TeamTimeUserTimer* timer)
+									{ fCPUTimeUserTimers.Remove(timer); }
+			void				UserTimerDeactivated(
+									TeamUserTimeUserTimer* timer)
+									{ fUserTimeUserTimers.Remove(timer); }
+			void				DeactivateCPUTimeUserTimers();
+									// both total and user CPU timers
+			bool				HasActiveCPUTimeUserTimers() const
+									{ return !fCPUTimeUserTimers.IsEmpty(); }
+			bool				HasActiveUserTimeUserTimers() const
+									{ return !fUserTimeUserTimers.IsEmpty(); }
+			TeamTimeUserTimerList::ConstIterator
+									CPUTimeUserTimerIterator() const
+									{ return fCPUTimeUserTimers.GetIterator(); }
+	inline	TeamUserTimeUserTimerList::ConstIterator
+									UserTimeUserTimerIterator() const;
+
+			bigtime_t			CPUTime(bool ignoreCurrentRun,
+									Thread* lockedThread = NULL) const;
+			bigtime_t			UserCPUTime() const;
+
+			ConditionVariable*	CoreDumpCondition() const
+									{ return fCoreDumpCondition; }
+			void				SetCoreDumpCondition(
+									ConditionVariable* condition)
+									{ fCoreDumpCondition = condition; }
+private:
+								Team(team_id id, bool kernel);
+
+private:
+			mutex				fLock;
+			char				fName[B_OS_NAME_LENGTH];
+			char				fArgs[64];
+									// contents for the team_info::args field
+
+			BKernel::QueuedSignalsCounter* fQueuedSignalsCounter;
+			BKernel::PendingSignals	fPendingSignals;
+									// protected by signal_lock
+			struct sigaction 	fSignalActions[MAX_SIGNAL_NUMBER];
+									// indexed signal - 1, protected by fLock
+
+			UserTimerList		fUserTimers;			// protected by fLock
+			TeamTimeUserTimerList fCPUTimeUserTimers;
+									// protected by time_lock
+			TeamUserTimeUserTimerList fUserTimeUserTimers;
+									// protected by time_lock
+			int32				fUserDefinedTimerCount;	// accessed atomically
+
+			ConditionVariable*	fCoreDumpCondition;
+									// protected by fLock
 };
 
 

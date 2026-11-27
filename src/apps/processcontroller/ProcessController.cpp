@@ -127,7 +127,16 @@ extern "C" _EXPORT BView*
 instantiate_deskbar_item(float maxWidth, float maxHeight)
 {
 	gInDeskbar = true;
+	return new ProcessController(ProcessController::ComposeSize(maxWidth, maxHeight));
+}
 
+
+//	#pragma mark -
+
+
+BSize
+ProcessController::ComposeSize(float maxWidth, float maxHeight)
+{
 	system_info info;
 	get_system_info(&info);
 	int width = 4;
@@ -139,15 +148,18 @@ instantiate_deskbar_item(float maxWidth, float maxHeight)
 	// For the memory bar
 	width += 8;
 
+	// Scale, and be at least as wide as tall
+	if (maxHeight > 16)
+		width *= (int)(maxHeight / 16);
+	if (width < maxHeight)
+		width = (int)maxHeight;
+
 	// Damn, you got a lot of CPU
 	if (width > maxWidth)
 		width = (int)maxWidth;
 
-	return new ProcessController(width - 1, maxHeight - 1);
+	return BSize(width - 1, maxHeight - 1);
 }
-
-
-//	#pragma mark -
 
 
 ProcessController::ProcessController(BRect frame, bool temp)
@@ -192,10 +204,10 @@ ProcessController::ProcessController(BMessage *data)
 }
 
 
-ProcessController::ProcessController(float width, float height)
+ProcessController::ProcessController(BSize size)
 	:
-	BView(BRect (0, 0, width, height), kDeskbarItemName, B_FOLLOW_NONE,
-		B_WILL_DRAW),
+	BView(BRect(0, 0, size.Width(), size.Height()),
+		kDeskbarItemName, B_FOLLOW_NONE, B_WILL_DRAW),
 	fProcessControllerIcon(kSignature),
 	fProcessorIcon(k_cpu_mini),
 	fTrackerIcon(kTrackerSig),
@@ -220,6 +232,8 @@ ProcessController::~ProcessController()
 		}
 	}
 
+	_SaveSettings();
+
 	delete fMessageRunner;
 	gPCView = NULL;
 
@@ -240,6 +254,8 @@ ProcessController::Init()
 	fMessageRunner = NULL;
 	fLastMemoryHeight = 0;
 	fPrevTime = 0;
+
+	_LoadSettings();
 }
 
 
@@ -258,6 +274,27 @@ ProcessController::_HandleDebugRequest(team_id team, thread_id thread)
 	if (error != B_OK) {
 		// TODO: notify user
 	}
+}
+
+
+void
+ProcessController::_LoadSettings()
+{
+	Preferences preferences(kPreferencesFileName, NULL, false);
+
+	int32 currentMode = get_scheduler_mode();
+	int32 savedMode;
+	if (preferences.ReadInt32(savedMode, "scheduler_mode") && currentMode != savedMode)
+		set_scheduler_mode(savedMode);
+}
+
+
+void
+ProcessController::_SaveSettings()
+{
+	Preferences preferences(kPreferencesFileName);
+
+	preferences.SaveInt32(get_scheduler_mode(), "scheduler_mode");
 }
 
 
@@ -287,7 +324,8 @@ ProcessController::MessageReceived(BMessage *message)
 	team_id team;
 	thread_id thread;
 	BAlert *alert;
-	char	question[1000];
+	BString question;
+
 	switch (message->what) {
 		case 'Puls':
 			Update ();
@@ -307,14 +345,15 @@ ProcessController::MessageReceived(BMessage *message)
 				info_pack infos;
 				if (get_team_info(team, &infos.team_info) == B_OK) {
 					get_team_name_and_icon(infos);
-					snprintf(question, sizeof(question),
-					B_TRANSLATE("What do you want to do with the team \"%s\"?"),
-					infos.team_name);
+					question.SetToFormat(
+						B_TRANSLATE("What do you want to do with the team \"%s\"?"),
+						infos.team_name);
 					alert = new BAlert(B_TRANSLATE("Please confirm"), question,
-					B_TRANSLATE("Cancel"), B_TRANSLATE("Debug this team!"),
-					B_TRANSLATE("Kill this team!"), B_WIDTH_AS_USUAL,
-					B_STOP_ALERT);
+						B_TRANSLATE("Cancel"), B_TRANSLATE("Debug this team!"),
+						B_TRANSLATE("Kill this team!"), B_WIDTH_AS_USUAL,
+						B_STOP_ALERT);
 					alert->SetShortcut(0, B_ESCAPE);
+					alert->SetFeel(B_FLOATING_ALL_WINDOW_FEEL);
 					int result = alert->Go();
 					switch (result) {
 						case 1:
@@ -332,6 +371,7 @@ ProcessController::MessageReceived(BMessage *message)
 						B_TRANSLATE("Ok!"), NULL, NULL, B_WIDTH_AS_USUAL,
 						B_STOP_ALERT);
 					alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+					alert->SetFeel(B_FLOATING_ALL_WINDOW_FEEL);
 					alert->Go();
 				}
 			}
@@ -342,8 +382,7 @@ ProcessController::MessageReceived(BMessage *message)
 				thread_info	thinfo;
 				if (get_thread_info(thread, &thinfo) == B_OK) {
 					#if DEBUG_THREADS
-					snprintf(question, sizeof(question),
-						B_TRANSLATE("What do you want to do "
+					question.SetToFormat(B_TRANSLATE("What do you want to do "
 						"with the thread \"%s\"?"), thinfo.name);
 					alert = new BAlert(B_TRANSLATE("Please confirm"), question,
 						B_TRANSLATE("Cancel"), B_TRANSLATE("Debug this thread!"),
@@ -353,7 +392,7 @@ ProcessController::MessageReceived(BMessage *message)
 
 					#define KILL 2
 					#else
-					snprintf(question, sizeof(question),
+					question.SetToFormat(
 						B_TRANSLATE("Are you sure you want "
 						"to kill the thread \"%s\"?"), thinfo.name);
 					alert = new BAlert(B_TRANSLATE("Please confirm"), question,
@@ -364,6 +403,7 @@ ProcessController::MessageReceived(BMessage *message)
 					#define KILL 1
 					#endif
 					alert->SetShortcut(0, B_ESCAPE);
+					alert->SetFeel(B_FLOATING_ALL_WINDOW_FEEL);
 					int r = alert->Go();
 					if (r == KILL)
 						kill_thread(thread);
@@ -377,6 +417,7 @@ ProcessController::MessageReceived(BMessage *message)
 						B_TRANSLATE("Ok!"),	NULL, NULL,
 						B_WIDTH_AS_USUAL, B_STOP_ALERT);
 					alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+					alert->SetFeel(B_FLOATING_ALL_WINDOW_FEEL);
 					alert->Go();
 				}
 			}
@@ -456,6 +497,7 @@ ProcessController::MessageReceived(BMessage *message)
 						B_TRANSLATE("That's no Fun!"), NULL, NULL,
 						B_WIDTH_AS_USUAL, B_WARNING_ALERT);
 					alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
+					alert->SetFeel(B_FLOATING_ALL_WINDOW_FEEL);
 					alert->Go();
 				} else
 					_kern_set_cpu_enabled(cpu, !_kern_cpu_enabled(cpu));
@@ -468,12 +510,13 @@ ProcessController::MessageReceived(BMessage *message)
 			BMenuItem* source;
 			if (message->FindPointer("source", (void**)&source) != B_OK)
 				break;
+
 			if (!source->IsMarked())
 				set_scheduler_mode(SCHEDULER_MODE_POWER_SAVING);
 			else
 				set_scheduler_mode(SCHEDULER_MODE_LOW_LATENCY);
-			Preferences preferences(kPreferencesFileName);
-			preferences.SaveInt32(get_scheduler_mode(), "scheduler_mode");
+
+			_SaveSettings();
 			break;
 		}
 
@@ -828,31 +871,23 @@ thread_popup(void *arg)
 	// CPU on/off section
 	if (gCPUcount > 1) {
 		for (unsigned int i = 0; i < gCPUcount; i++) {
-			char item_name[32];
-			sprintf (item_name, B_TRANSLATE("Processor %d"), i + 1);
-			BMessage* m = new BMessage ('CPU ');
-			m->AddInt32 ("cpu", i);
-			item = new IconMenuItem (gPCView->fProcessorIcon, item_name, m);
+			BString itemName;
+			itemName.SetToFormat(B_TRANSLATE("Processor %d"), i + 1);
+			BMessage* m = new BMessage('CPU ');
+			m->AddInt32("cpu", i);
+			item = new IconMenuItem (gPCView->fProcessorIcon, itemName, m);
 			if (_kern_cpu_enabled(i))
-				item->SetMarked (true);
+				item->SetMarked(true);
 			item->SetTarget(gPCView);
 			addtopbottom(item);
 		}
-		addtopbottom (new BSeparatorItem ());
+		addtopbottom(new BSeparatorItem());
 	}
 
 	// Scheduler modes
-	int32 currentMode = get_scheduler_mode();
-	Preferences preferences(kPreferencesFileName, NULL, false);
-	int32 savedMode;
-	if (preferences.ReadInt32(savedMode, "scheduler_mode") && currentMode != savedMode) {
-		set_scheduler_mode(savedMode);
-		currentMode = get_scheduler_mode();
-	}
 	BMessage* msg = new BMessage('Schd');
 	item = new BMenuItem(B_TRANSLATE("Power saving"), msg);
-	if ((uint32)currentMode == SCHEDULER_MODE_POWER_SAVING)
-		item->SetMarked(true);
+	item->SetMarked((uint32)get_scheduler_mode() == SCHEDULER_MODE_POWER_SAVING);
 	item->SetTarget(gPCView);
 	addtopbottom(item);
 	addtopbottom(new BSeparatorItem());
@@ -903,10 +938,9 @@ thread_popup(void *arg)
 		addtopbottom(new BSeparatorItem ());
 	}
 
-
-	item = new IconMenuItem(gPCView->fProcessControllerIcon,
-	B_TRANSLATE("About ProcessController" B_UTF8_ELLIPSIS),
-		new BMessage(B_ABOUT_REQUESTED));
+	BString text(B_TRANSLATE("About %appname%" B_UTF8_ELLIPSIS));
+	text.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("ProcessController"));
+	item = new IconMenuItem(gPCView->fProcessControllerIcon, text, new BMessage(B_ABOUT_REQUESTED));
 	item->SetTarget(gPCView);
 	addtopbottom(item);
 

@@ -171,14 +171,16 @@ update_threads_breakpoints_flag()
 
 	TeamLocker teamLocker(team);
 
-	Thread* thread = team->thread_list;
-
 	if (arch_has_breakpoints(&team->debug_info.arch_info)) {
-		for (; thread != NULL; thread = thread->team_next)
+		for (Thread* thread = team->thread_list.First(); thread != NULL;
+				thread = team->thread_list.GetNext(thread)) {
 			atomic_or(&thread->flags, THREAD_FLAGS_BREAKPOINTS_DEFINED);
+		}
 	} else {
-		for (; thread != NULL; thread = thread->team_next)
+		for (Thread* thread = team->thread_list.First(); thread != NULL;
+				thread = team->thread_list.GetNext(thread)) {
 			atomic_and(&thread->flags, ~THREAD_FLAGS_BREAKPOINTS_DEFINED);
+		}
 	}
 }
 
@@ -205,14 +207,16 @@ update_thread_debugger_installed_flag(Thread* thread)
 static void
 update_threads_debugger_installed_flag(Team* team)
 {
-	Thread* thread = team->thread_list;
-
 	if (atomic_get(&team->debug_info.flags) & B_TEAM_DEBUG_DEBUGGER_INSTALLED) {
-		for (; thread != NULL; thread = thread->team_next)
+		for (Thread* thread = team->thread_list.First(); thread != NULL;
+				thread = team->thread_list.GetNext(thread)) {
 			atomic_or(&thread->flags, THREAD_FLAGS_DEBUGGER_INSTALLED);
+		}
 	} else {
-		for (; thread != NULL; thread = thread->team_next)
+		for (Thread* thread = team->thread_list.First(); thread != NULL;
+				thread = team->thread_list.GetNext(thread)) {
 			atomic_and(&thread->flags, ~THREAD_FLAGS_DEBUGGER_INSTALLED);
+		}
 	}
 }
 
@@ -1404,14 +1408,14 @@ profiling_do_sample()
 		+ debugInfo.profile.sample_count;
 	if (debugInfo.profile.variable_stack_depth) {
 		// variable sample count per hit
-		*returnAddresses = arch_debug_get_stack_trace(returnAddresses + 1,
+		*returnAddresses = arch_get_stack_trace(returnAddresses + 1,
 			stackDepth - 1, skipIFrames, 0, flags);
 
 		debugInfo.profile.sample_count += *returnAddresses + 1;
 	} else {
 		// fixed sample count per hit
 		if (stackDepth > 1 || !debugInfo.profile.profile_kernel) {
-			int32 count = arch_debug_get_stack_trace(returnAddresses,
+			int32 count = arch_get_stack_trace(returnAddresses,
 				stackDepth, skipIFrames, 0, flags);
 
 			for (int32 i = count; i < stackDepth; i++)
@@ -2606,8 +2610,8 @@ install_team_debugger_init_debug_infos(Team *team, team_id debuggerTeam,
 	arch_clear_team_debug_info(&team->debug_info.arch_info);
 
 	// set the user debug flags and signal masks of all threads to the default
-	for (Thread *thread = team->thread_list; thread;
-			thread = thread->team_next) {
+	for (Thread *thread = team->thread_list.First(); thread != NULL;
+			thread = team->thread_list.GetNext(thread)) {
 		SpinLocker threadDebugInfoLocker(thread->debug_info.lock);
 
 		if (thread->id == nubThread) {

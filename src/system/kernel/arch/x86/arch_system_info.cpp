@@ -5,6 +5,7 @@
 
 
 #include <arch/system_info.h>
+#include <arch/x86/timer.h>
 
 #include <string.h>
 
@@ -13,24 +14,28 @@
 
 #include <boot/kernel_args.h>
 #include <cpu.h>
+#include <debug.h>
 #include <kernel.h>
 #include <smp.h>
 
 
-enum cpu_vendor sCPUVendor;
-uint32 sCPUModel;
-int64 sCPUClockSpeed;
+static enum cpu_vendor sCPUVendor;
+static uint32 sCPUModel;
 
 
-static bool
-get_cpuid_for(cpuid_info *info, uint32 currentCPU, uint32 eaxRegister,
-	uint32 forCPU)
+struct get_cpuid_args {
+	int forCPU;
+	cpuid_info* info;
+	uint32 eaxRegister;
+};
+
+
+static void
+get_cpuid_for(void* arg, int currentCPU)
 {
-	if (currentCPU != forCPU)
-		return false;
-
-	get_current_cpuid(info, eaxRegister, 0);
-	return true;
+	get_cpuid_args* args = (get_cpuid_args*)arg;
+	ASSERT(currentCPU == args->forCPU);
+	get_current_cpuid(args->info, args->eaxRegister, 0);
 }
 
 
@@ -38,23 +43,17 @@ status_t
 get_cpuid(cpuid_info *info, uint32 eaxRegister, uint32 forCPU)
 {
 	uint32 numCPUs = (uint32)smp_get_num_cpus();
-	cpu_status state;
-
 	if (forCPU >= numCPUs)
 		return B_BAD_VALUE;
 
-	// prevent us from being rescheduled
-	state = disable_interrupts();
+	get_cpuid_args args;
+	args.forCPU = forCPU;
+	args.info = info;
+	args.eaxRegister = eaxRegister;
 
 	// ToDo: as long as we only run on pentium-class systems, we can assume
 	//	that the CPU supports cpuid.
-
-	if (!get_cpuid_for(info, smp_get_current_cpu(), eaxRegister, forCPU)) {
-		smp_send_broadcast_ici(SMP_MSG_CALL_FUNCTION, (addr_t)info,
-			eaxRegister, forCPU, (void *)get_cpuid_for, SMP_MSG_FLAG_SYNC);
-	}
-
-	restore_interrupts(state);
+	call_single_cpu_sync(forCPU, get_cpuid_for, &args);
 	return B_OK;
 }
 
@@ -99,19 +98,7 @@ arch_system_info_init(struct kernel_args *args)
 		| (cpu->arch.extended_model << 16) | (cpu->arch.type << 12)
 		| (cpu->arch.family << 8) | (cpu->arch.model << 4) | cpu->arch.stepping;
 
-	sCPUClockSpeed = args->arch_args.cpu_clock_speed;
-	if (cpu->arch.vendor == VENDOR_INTEL) {
-		cpuid_info cpuid;
-		get_current_cpuid(&cpuid, 0, 0);
-		uint32 maxBasicLeaf = cpuid.eax_0.max_eax;
-		if (maxBasicLeaf >= 0x16) {
-			get_current_cpuid(&cpuid, 0x16, 0);
-			if (cpuid.regs.eax != 0) {
-				sCPUClockSpeed = cpuid.regs.eax * 1000000LL;
-				dprintf("found clock speed with CPUID.16h\n");
-			}
-		}
-	}
+	// gCPUClockSpeed is initialized by arch_timer.
 	return B_OK;
 }
 
@@ -137,7 +124,7 @@ arch_fill_topology_node(cpu_topology_node_info* node, int32 cpu)
 
 		case B_TOPOLOGY_CORE:
 			node->data.core.model = sCPUModel;
-			node->data.core.default_frequency = sCPUClockSpeed;
+			node->data.core.default_frequency = gCPUClockSpeed;
 			break;
 
 		default:
@@ -166,7 +153,7 @@ get_frequency_for(void *_frequency, int cpu)
 	if (mperf2 == mperf)
 		*frequency = 0;
 	else {
-		*frequency = (aperf2 - aperf) * sCPUClockSpeed / (mperf2 - mperf);
+		*frequency = (aperf2 - aperf) * gCPUClockSpeed / (mperf2 - mperf);
 		gCPU[cpu].arch.mperf_prev = mperf2;
 		gCPU[cpu].arch.aperf_prev = aperf2;
 		gCPU[cpu].arch.perf_timestamp = timestamp2;
@@ -181,7 +168,7 @@ arch_get_frequency(uint64 *frequency, int32 cpu)
 	if (x86_check_feature(IA32_FEATURE_APERFMPERF, FEATURE_6_ECX))
 		call_single_cpu_sync(cpu, get_frequency_for, frequency);
 	else
-		*frequency = sCPUClockSpeed;
+		*frequency = gCPUClockSpeed;
 
 	return B_OK;
 }

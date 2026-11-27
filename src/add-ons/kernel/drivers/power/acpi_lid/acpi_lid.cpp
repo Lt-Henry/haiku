@@ -118,11 +118,6 @@ acpi_lid_read(void* _cookie, off_t position, void *buf, size_t* num_bytes)
 	if (*num_bytes < 1)
 		return B_IO_ERROR;
 
-	if (position > 0) {
-		*num_bytes = 0;
-		return B_OK;
-	}
-
 	if (user_memcpy(buf, &device->last_status, sizeof(uint8)) < B_OK)
 		return B_BAD_ADDRESS;
 
@@ -293,19 +288,21 @@ static status_t
 acpi_lid_register_child_devices(void *_cookie)
 {
 	acpi_lid_device_info *device = (acpi_lid_device_info *)_cookie;
-	int path_id;
-	char name[128];
+	char name[B_DEV_NAME_LENGTH];
 
-	path_id = sDeviceManager->create_id(ACPI_LID_PATHID_GENERATOR);
-	if (path_id < 0) {
+	int id = sDeviceManager->create_id(ACPI_LID_PATHID_GENERATOR);
+	if (id < 0) {
 		ERROR("register_child_devices: couldn't create a path_id\n");
 		return B_ERROR;
 	}
 
-	snprintf(name, sizeof(name), ACPI_LID_BASENAME, path_id);
+	snprintf(name, sizeof(name), ACPI_LID_BASENAME, id);
 
-	return sDeviceManager->publish_device(device->node, name,
+	status_t status = sDeviceManager->publish_device(device->node, name,
 		ACPI_LID_DEVICE_MODULE_NAME);
+	if (status != B_OK)
+		sDeviceManager->free_id(ACPI_LID_PATHID_GENERATOR, id);
+	return status;
 }
 
 

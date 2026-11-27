@@ -199,7 +199,7 @@ private:
 		status_t			_PopulateAttributeDirents();
 		status_t			_CreateCommon(const char *name, int type, int perms,
 								ino_t *newInodeNumber, OverlayInode **node,
-								bool attribute, type_code attributeType);
+								bool attribute, type_code attributeType, bool exclusive = false);
 
 		recursive_lock		fLock;
 		OverlayVolume *		fVolume;
@@ -502,7 +502,7 @@ OverlayInode::ReadStat(struct stat *stat)
 		_PopulateStat();
 
 	memcpy(stat, &fStat, sizeof(struct stat));
-	stat->st_blocks = (stat->st_size + stat->st_blksize - 1) / stat->st_blksize;
+	stat->st_blocks = (stat->st_size + DEV_BSIZE - 1) / DEV_BSIZE;
 	return B_OK;
 }
 
@@ -558,7 +558,7 @@ OverlayInode::Create(const char *name, int openMode, int perms, void **cookie,
 {
 	OverlayInode *newNode = NULL;
 	status_t result = _CreateCommon(name, attribute ? S_ATTR : S_IFREG, perms,
-		newInodeNumber, &newNode, attribute, attributeType);
+		newInodeNumber, &newNode, attribute, attributeType, (openMode & O_EXCL) != 0);
 	if (result != B_OK)
 		return result;
 
@@ -582,9 +582,11 @@ OverlayInode::Open(int openMode, void **_cookie)
 	*_cookie = cookie;
 
 	if (fIsVirtual) {
-		if (openMode & O_TRUNC) {
+		if ((openMode & O_TRUNC) && fStat.st_size != 0) {
 			fStat.st_size = 0;
 			_TrimBuffers();
+
+			notify_stat_changed(SuperVolume()->id, -1, fInodeNumber, B_STAT_SIZE);
 		}
 
 		return B_OK;
@@ -600,6 +602,8 @@ OverlayInode::Open(int openMode, void **_cookie)
 			_TrimBuffers();
 			if (!fIsDataModified)
 				SetDataModified();
+
+			notify_stat_changed(SuperVolume()->id, -1, fInodeNumber, B_STAT_SIZE);
 		}
 	}
 
@@ -1438,9 +1442,11 @@ close_attr_dir:
 status_t
 OverlayInode::_CreateCommon(const char *name, int type, int perms,
 	ino_t *newInodeNumber, OverlayInode **_node, bool attribute,
-	type_code attributeType)
+	type_code attributeType, bool exclusive)
 {
 	RecursiveLocker locker(fLock);
+	status_t result;
+
 	if (!fHasStat)
 		_PopulateStat();
 
@@ -1448,6 +1454,16 @@ OverlayInode::_CreateCommon(const char *name, int type, int perms,
 		return B_NOT_A_DIRECTORY;
 
 	locker.Unlock();
+
+	if (!attribute && (type == S_IFDIR || type == S_IFLNK || exclusive)) {
+		ino_t lookupInodeNumber;
+		result = Lookup(name, &lookupInodeNumber);
+
+		if (result != B_ENTRY_NOT_FOUND) {
+			put_vnode(Volume(), lookupInodeNumber);
+			return B_FILE_EXISTS;
+		}
+	}
 
 	overlay_dirent *entry = (overlay_dirent *)malloc(sizeof(overlay_dirent));
 	if (entry == NULL)
@@ -1474,7 +1490,7 @@ OverlayInode::_CreateCommon(const char *name, int type, int perms,
 		return B_NO_MEMORY;
 	}
 
-	status_t result = AddEntry(entry, attribute);
+	result = AddEntry(entry, attribute);
 	if (result != B_OK) {
 		free(entry->name);
 		free(entry);
@@ -1770,7 +1786,7 @@ overlay_deselect(fs_volume *volume, fs_vnode *vnode, void *cookie, uint8 event,
 
 
 static status_t
-overlay_fsync(fs_volume *volume, fs_vnode *vnode)
+overlay_fsync(fs_volume *volume, fs_vnode *vnode, bool dataOnly)
 {
 	return B_OK;
 }
@@ -2557,6 +2573,9 @@ static status_t
 overlay_mount(fs_volume *volume, const char *device, uint32 flags,
 	const char *args, ino_t *rootID)
 {
+	if (volume->super_volume == NULL)
+		return B_UNSUPPORTED;
+
 	TRACE_VOLUME("mounting write overlay\n");
 	volume->private_volume = new(std::nothrow) OverlayVolume(volume);
 	if (volume->private_volume == NULL)

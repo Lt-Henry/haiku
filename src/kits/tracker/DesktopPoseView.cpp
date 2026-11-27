@@ -42,13 +42,16 @@ All rights reserved.
 
 #include <NodeMonitor.h>
 #include <Path.h>
+#include <Screen.h>
 #include <Volume.h>
 #include <VolumeRoster.h>
 
+#include "Background.h"
 #include "Commands.h"
 #include "FSUtils.h"
 #include "PoseList.h"
 #include "Tracker.h"
+#include "TrackerDefaults.h"
 #include "TrackerSettings.h"
 #include "TrackerString.h"
 
@@ -61,6 +64,56 @@ DesktopPoseView::DesktopPoseView(Model* model, uint32 viewMode)
 	BPoseView(model, viewMode)
 {
 	SetFlags(Flags() | B_DRAW_ON_CHILDREN);
+}
+
+
+void
+DesktopPoseView::AttachedToWindow()
+{
+	AddFilter(new TPoseViewFilter(this));
+
+	_inherited::AttachedToWindow();
+}
+
+
+void
+DesktopPoseView::MessageReceived(BMessage* message)
+{
+	switch (message->what) {
+		case B_WORKSPACE_ACTIVATED:
+		{
+			bool active;
+			int32 workspace;
+			if (message->FindBool("active", &active) != B_OK || !active
+				|| message->FindInt32("workspace", &workspace) != B_OK
+				|| workspace != current_workspace()) {
+				break;
+			}
+
+			AdoptSystemColors();
+			Invalidate();
+
+			_inherited::MessageReceived(message);
+			break;
+		}
+
+		case B_RESTORE_BACKGROUND_IMAGE:
+		{
+			AdoptSystemColors();
+			Invalidate();
+
+			// call workspace activated on child replicant views
+			BMessage forward(B_WORKSPACE_ACTIVATED);
+			forward.AddBool("active", true);
+			forward.AddInt32("workspace", current_workspace());
+			_inherited::MessageReceived(&forward);
+			break;
+		}
+
+		default:
+			_inherited::MessageReceived(message);
+			break;
+	}
 }
 
 
@@ -90,8 +143,8 @@ DesktopPoseView::InitDesktopDirentIterator(BPoseView* nodeMonitoringTarget,
 
 	result->AddItem(perDesktopIterator);
 	if (nodeMonitoringTarget != NULL) {
-		TTracker::WatchNode(sourceModel.NodeRef(),
-			B_WATCH_DIRECTORY | B_WATCH_NAME | B_WATCH_STAT | B_WATCH_ATTR,
+		TTracker::WatchNode(sourceModel.NodeRef(), B_WATCH_DIRECTORY | B_WATCH_CHILDREN
+				| B_WATCH_NAME | B_WATCH_STAT | B_WATCH_INTERIM_STAT | B_WATCH_ATTR,
 			nodeMonitoringTarget);
 	}
 
@@ -107,41 +160,29 @@ DesktopPoseView::InitDesktopDirentIterator(BPoseView* nodeMonitoringTarget,
 }
 
 
-EntryListBase*
-DesktopPoseView::InitDirentIterator(const entry_ref* ref)
+void
+DesktopPoseView::AdoptSystemColors()
 {
-	return InitDesktopDirentIterator(this, ref);
+	BScreen screen(Window());
+	rgb_color background = screen.DesktopColor();
+	SetLowColor(background);
+	SetViewColor(background);
+
+	AdaptToBackgroundColorChange();
 }
 
 
 bool
-DesktopPoseView::FSNotification(const BMessage* message)
+DesktopPoseView::HasSystemColors() const
 {
-	switch (message->FindInt32("opcode")) {
-		case B_DEVICE_MOUNTED:
-		{
-			dev_t device;
-			if (message->FindInt32("new device", &device) != B_OK)
-				break;
+	return false;
+}
 
-			ASSERT(TargetModel());
-			TrackerSettings settings;
 
-			BVolume volume(device);
-			if (volume.InitCheck() != B_OK)
-				break;
-
-			if (settings.MountVolumesOntoDesktop()
-				&& (!volume.IsShared()
-					|| settings.MountSharedVolumesOntoDesktop())) {
-				// place an icon for the volume onto the desktop
-				CreateVolumePose(&volume, true);
-			}
-		}
-		break;
-	}
-
-	return _inherited::FSNotification(message);
+EntryListBase*
+DesktopPoseView::InitDirentIterator(const entry_ref* ref)
+{
+	return InitDesktopDirentIterator(this, ref);
 }
 
 
@@ -156,6 +197,9 @@ void
 DesktopPoseView::AddPosesCompleted()
 {
 	_inherited::AddPosesCompleted();
+
+	// Create Trash pose after other poses have been added
+	// so that it is positioned in the next available space.
 	CreateTrashPose();
 }
 
@@ -181,28 +225,14 @@ DesktopPoseView::Represents(const entry_ref* ref) const
 
 
 void
-DesktopPoseView::ShowVolumes(bool visible, bool showShared)
-{
-	if (LockLooper()) {
-		SavePoseLocations();
-		if (!visible)
-			RemoveRootPoses();
-		else
-			AddRootPoses(true, showShared);
-
-		UnlockLooper();
-	}
-}
-
-
-void
 DesktopPoseView::StartSettingsWatch()
 {
-	if (be_app->LockLooper()) {
-		be_app->StartWatching(this, kShowDisksIconChanged);
-		be_app->StartWatching(this, kVolumesOnDesktopChanged);
-		be_app->StartWatching(this, kDesktopIntegrationChanged);
-		be_app->UnlockLooper();
+	TTracker* tracker = dynamic_cast<TTracker*>(be_app);
+	if (tracker != NULL && tracker->LockLooper()) {
+		tracker->StartWatching(this, kShowDisksIconChanged);
+		tracker->StartWatching(this, kVolumesOnDesktopChanged);
+		tracker->StartWatching(this, kDesktopIntegrationChanged);
+		tracker->UnlockLooper();
 	}
 }
 
@@ -210,11 +240,12 @@ DesktopPoseView::StartSettingsWatch()
 void
 DesktopPoseView::StopSettingsWatch()
 {
-	if (be_app->LockLooper()) {
-		be_app->StopWatching(this, kShowDisksIconChanged);
-		be_app->StopWatching(this, kVolumesOnDesktopChanged);
-		be_app->StopWatching(this, kDesktopIntegrationChanged);
-		be_app->UnlockLooper();
+	TTracker* tracker = dynamic_cast<TTracker*>(be_app);
+	if (tracker != NULL && tracker->LockLooper()) {
+		tracker->StopWatching(this, kShowDisksIconChanged);
+		tracker->StopWatching(this, kVolumesOnDesktopChanged);
+		tracker->StopWatching(this, kDesktopIntegrationChanged);
+		tracker->UnlockLooper();
 	}
 }
 
@@ -222,17 +253,14 @@ DesktopPoseView::StopSettingsWatch()
 void
 DesktopPoseView::AdaptToVolumeChange(BMessage* message)
 {
+	if (Window() == NULL)
+		return;
+
 	TTracker* tracker = dynamic_cast<TTracker*>(be_app);
 	ThrowOnAssert(tracker != NULL);
 
-	bool showDisksIcon = false;
-	bool mountVolumesOnDesktop = true;
-	bool mountSharedVolumesOntoDesktop = false;
-
+	bool showDisksIcon = kDefaultShowDisksIcon;
 	message->FindBool("ShowDisksIcon", &showDisksIcon);
-	message->FindBool("MountVolumesOntoDesktop", &mountVolumesOnDesktop);
-	message->FindBool("MountSharedVolumesOntoDesktop",
-		&mountSharedVolumesOntoDesktop);
 
 	BEntry entry("/");
 	Model model(&entry);
@@ -246,89 +274,42 @@ DesktopPoseView::AdaptToVolumeChange(BMessage* message)
 			entryMessage.AddInt32("opcode", B_ENTRY_REMOVED);
 			entry_ref ref;
 			if (entry.GetRef(&ref) == B_OK) {
-				BContainerWindow* disksWindow
-					= tracker->FindContainerWindow(&ref);
+				BContainerWindow* disksWindow = tracker->FindContainerWindow(&ref);
 				if (disksWindow != NULL) {
 					disksWindow->Lock();
 					disksWindow->Close();
 				}
 			}
 		}
+
 		entryMessage.AddInt32("device", model.NodeRef()->device);
 		entryMessage.AddInt64("node", model.NodeRef()->node);
 		entryMessage.AddInt64("directory", model.EntryRef()->directory);
 		entryMessage.AddString("name", model.EntryRef()->name);
-		BContainerWindow* deskWindow
-			= dynamic_cast<BContainerWindow*>(Window());
-		if (deskWindow != NULL)
-			deskWindow->PostMessage(&entryMessage, deskWindow->PoseView());
+
+		Window()->PostMessage(&entryMessage, this);
 	}
 
-	ShowVolumes(mountVolumesOnDesktop, mountSharedVolumesOntoDesktop);
+	ToggleDisksVolumes();
 }
 
 
 void
 DesktopPoseView::AdaptToDesktopIntegrationChange(BMessage* message)
 {
-	bool mountVolumesOnDesktop = true;
-	bool mountSharedVolumesOntoDesktop = true;
-
-	message->FindBool("MountVolumesOntoDesktop", &mountVolumesOnDesktop);
-	message->FindBool("MountSharedVolumesOntoDesktop",
-		&mountSharedVolumesOntoDesktop);
-
-	ShowVolumes(false, mountSharedVolumesOntoDesktop);
-	ShowVolumes(mountVolumesOnDesktop, mountSharedVolumesOntoDesktop);
+	ToggleDisksVolumes();
 }
 
 
-rgb_color
-DesktopPoseView::TextColor(bool selected) const
+void
+DesktopPoseView::AdaptToBackgroundColorChange()
 {
-	// The desktop color is chosen independently for the desktop.
+	// The Desktop text color is chosen independently for the Desktop.
 	// The text color is chosen globally for all directories.
 	// It's fairly easy to get something unreadable (even with the default
 	// settings, it's expected that text will be black on white in Tracker
 	// folders, but white on blue on the desktop).
-	// So here we check if the colors are different enough, and otherwise,
-	// force the text to be either white or black.
-	rgb_color textColor = HighColor();
-	rgb_color viewColor = ViewColor();
 
-	// The colors are different enough, we can use them as is
-	if (rgb_color::Contrast(viewColor, textColor) > 127)
-		return textColor;
-
-	return viewColor.IsLight() ? kBlack : kWhite;
-}
-
-
-rgb_color
-DesktopPoseView::BackColor(bool selected) const
-{
-	// returns black or white color depending on the desktop background
-	int32 thresh = 0;
-	rgb_color color = LowColor();
-
-	if (color.red > 150)
-		thresh++;
-
-	if (color.green > 150)
-		thresh++;
-
-	if (color.blue > 150)
-		thresh++;
-
-	if (thresh > 1) {
-		color.red = 255;
-		color.green = 255;
-		color.blue = 255;
-	} else {
-		color.red = 0;
-		color.green = 0;
-		color.blue = 0;
-	}
-
-	return color;
+	int32 desktopBrightness = ui_color(B_DESKTOP_COLOR).Brightness();
+	SetHighColor(LowColor().Brightness() <= desktopBrightness ? kWhite : kBlack);
 }

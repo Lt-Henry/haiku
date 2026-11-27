@@ -85,8 +85,10 @@ IORequestChunk::~IORequestChunk()
 
 
 IOBuffer*
-IOBuffer::Create(uint32 count, bool vip)
+IOBuffer::Create(size_t count, bool vip)
 {
+	ASSERT(count < (UINT32_MAX / sizeof(generic_io_vec)));
+
 	size_t size = sizeof(IOBuffer) + sizeof(generic_io_vec) * (count - 1);
 	IOBuffer* buffer
 		= (IOBuffer*)(malloc_etc(size, vip ? HEAP_PRIORITY_VIP : 0));
@@ -115,6 +117,7 @@ void
 IOBuffer::SetVecs(generic_size_t firstVecOffset, generic_size_t lastVecSize,
 	const generic_io_vec* vecs, uint32 count, generic_size_t length, uint32 flags)
 {
+	ASSERT(count <= fCapacity);
 	memcpy(fVecs, vecs, sizeof(generic_io_vec) * count);
 
 	if (count > 0 && firstVecOffset > 0) {
@@ -218,8 +221,10 @@ IOBuffer::FreeVirtualVecCookie(void* _cookie)
 {
 	virtual_vec_cookie* cookie = (virtual_vec_cookie*)_cookie;
 
-	if (cookie->mapped_area >= 0)
+	if (cookie->mapped_area >= 0) {
 		delete_area(cookie->mapped_area);
+		cookie->mapped_area = -1;
+	}
 	cookie->PutPhysicalPageIfNeeded();
 
 	free_etc(cookie, fVIP ? HEAP_PRIORITY_VIP : 0);
@@ -227,7 +232,7 @@ IOBuffer::FreeVirtualVecCookie(void* _cookie)
 
 
 status_t
-IOBuffer::LockMemory(team_id team, bool isWrite)
+IOBuffer::LockMemory(team_id team, bool forWriteRequest)
 {
 	if (fMemoryLocked) {
 		panic("memory already locked!");
@@ -236,9 +241,9 @@ IOBuffer::LockMemory(team_id team, bool isWrite)
 
 	for (uint32 i = 0; i < fVecCount; i++) {
 		status_t status = lock_memory_etc(team, (void*)(addr_t)fVecs[i].base,
-			fVecs[i].length, isWrite ? 0 : B_READ_DEVICE);
+			fVecs[i].length, forWriteRequest ? 0 : B_READ_DEVICE);
 		if (status != B_OK) {
-			_UnlockMemory(team, i, isWrite);
+			_UnlockMemory(team, i, forWriteRequest);
 			return status;
 		}
 	}
@@ -249,11 +254,11 @@ IOBuffer::LockMemory(team_id team, bool isWrite)
 
 
 void
-IOBuffer::_UnlockMemory(team_id team, size_t count, bool isWrite)
+IOBuffer::_UnlockMemory(team_id team, size_t count, bool forWriteRequest)
 {
 	for (uint32 i = 0; i < count; i++) {
 		unlock_memory_etc(team, (void*)(addr_t)fVecs[i].base, fVecs[i].length,
-			isWrite ? 0 : B_READ_DEVICE);
+			forWriteRequest ? 0 : B_READ_DEVICE);
 	}
 }
 
@@ -279,8 +284,8 @@ IOBuffer::Dump() const
 	kprintf("  origin:     %s\n", fUser ? "user" : "kernel");
 	kprintf("  kind:       %s\n", fPhysical ? "physical" : "virtual");
 	kprintf("  length:     %" B_PRIuGENADDR "\n", fLength);
-	kprintf("  capacity:   %" B_PRIuSIZE "\n", fCapacity);
-	kprintf("  vecs:       %" B_PRIuSIZE "\n", fVecCount);
+	kprintf("  capacity:   %" B_PRIu32 "\n", fCapacity);
+	kprintf("  vecs:       %" B_PRIu32 "\n", fVecCount);
 
 	for (uint32 i = 0; i < fVecCount; i++) {
 		kprintf("    [%" B_PRIu32 "] %#" B_PRIxGENADDR ", %" B_PRIuGENADDR "\n",

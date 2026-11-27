@@ -95,6 +95,8 @@ alloc_fd(void)
 bool
 fd_close_on_exec(const struct io_context* context, int fd)
 {
+	ASSERT_READ_LOCKED_RW_LOCK(&context->lock);
+
 	return CHECK_BIT(context->fds_close_on_exec[fd / 8], fd & 7) ? true : false;
 }
 
@@ -102,10 +104,33 @@ fd_close_on_exec(const struct io_context* context, int fd)
 void
 fd_set_close_on_exec(struct io_context* context, int fd, bool closeFD)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&context->lock);
+
 	if (closeFD)
 		context->fds_close_on_exec[fd / 8] |= (1 << (fd & 7));
 	else
 		context->fds_close_on_exec[fd / 8] &= ~(1 << (fd & 7));
+}
+
+
+bool
+fd_close_on_fork(const struct io_context* context, int fd)
+{
+	ASSERT_READ_LOCKED_RW_LOCK(&context->lock);
+
+	return CHECK_BIT(context->fds_close_on_fork[fd / 8], fd & 7) ? true : false;
+}
+
+
+void
+fd_set_close_on_fork(struct io_context* context, int fd, bool closeFD)
+{
+	ASSERT_WRITE_LOCKED_RW_LOCK(&context->lock);
+
+	if (closeFD)
+		context->fds_close_on_fork[fd / 8] |= (1 << (fd & 7));
+	else
+		context->fds_close_on_fork[fd / 8] &= ~(1 << (fd & 7));
 }
 
 
@@ -171,8 +196,8 @@ put_fd(struct file_descriptor* descriptor)
 
 		object_cache_free(sFileDescriptorCache, descriptor, 0);
 	} else if ((descriptor->open_mode & O_DISCONNECTED) != 0
-		&& previous - 1 == descriptor->open_count
-		&& descriptor->ops != NULL) {
+			&& previous - 1 == descriptor->open_count
+			&& descriptor->ops != NULL) {
 		// the descriptor has been disconnected - it cannot
 		// be accessed anymore, let's close it (no one is
 		// currently accessing this descriptor)
@@ -247,6 +272,13 @@ inc_fd_ref_count(struct file_descriptor* descriptor)
 }
 
 
+void
+inc_fd_open_count(struct file_descriptor* descriptor)
+{
+	atomic_add(&descriptor->open_count, 1);
+}
+
+
 static struct file_descriptor*
 get_fd_locked(const struct io_context* context, int fd)
 {
@@ -307,7 +339,6 @@ remove_fd(struct io_context* context, int fd)
 		descriptor = context->fds[fd];
 
 	select_info* selectInfos = NULL;
-	bool disconnected = false;
 
 	if (descriptor != NULL)	{
 		// fd is valid
@@ -315,18 +346,17 @@ remove_fd(struct io_context* context, int fd)
 
 		context->fds[fd] = NULL;
 		fd_set_close_on_exec(context, fd, false);
+		fd_set_close_on_fork(context, fd, false);
 		context->num_used_fds--;
 
 		selectInfos = context->select_infos[fd];
 		context->select_infos[fd] = NULL;
-
-		disconnected = (descriptor->open_mode & O_DISCONNECTED);
 	}
 
 	if (selectInfos != NULL)
 		deselect_select_infos(descriptor, selectInfos, true);
 
-	return disconnected ? NULL : descriptor;
+	return descriptor;
 }
 
 
@@ -351,6 +381,7 @@ dup_fd(int fd, bool kernel)
 	} else {
 		WriteLocker locker(context->lock);
 		fd_set_close_on_exec(context, status, false);
+		fd_set_close_on_fork(context, status, false);
 	}
 
 	return status;
@@ -374,7 +405,7 @@ dup2_fd(int oldfd, int newfd, int flags, bool kernel)
 	// quick check
 	if (oldfd < 0 || newfd < 0)
 		return B_FILE_ERROR;
-	if ((flags & ~O_CLOEXEC) != 0)
+	if ((flags & ~(O_CLOEXEC | O_CLOFORK)) != 0)
 		return B_BAD_VALUE;
 
 	// Get current I/O context and lock it
@@ -400,8 +431,8 @@ dup2_fd(int oldfd, int newfd, int flags, bool kernel)
 		evicted = context->fds[newfd];
 		select_info* selectInfos = context->select_infos[newfd];
 		context->select_infos[newfd] = NULL;
-		atomic_add(&context->fds[oldfd]->ref_count, 1);
-		atomic_add(&context->fds[oldfd]->open_count, 1);
+		inc_fd_ref_count(context->fds[oldfd]);
+		inc_fd_open_count(context->fds[oldfd]);
 		context->fds[newfd] = context->fds[oldfd];
 
 		if (evicted == NULL)
@@ -411,6 +442,7 @@ dup2_fd(int oldfd, int newfd, int flags, bool kernel)
 	}
 
 	fd_set_close_on_exec(context, newfd, (flags & O_CLOEXEC) != 0);
+	fd_set_close_on_fork(context, newfd, (flags & O_CLOFORK) != 0);
 
 	locker.Unlock();
 
@@ -837,6 +869,27 @@ common_close(int fd, bool kernel)
 }
 
 
+static status_t
+common_close_range(u_int minFd, u_int maxFd, int flags, bool kernel)
+{
+	if (maxFd < minFd)
+		return B_BAD_VALUE;
+	struct io_context* context = get_current_io_context(kernel);
+	maxFd = min_c(maxFd, context->table_size - 1);
+	if ((flags & CLOSE_RANGE_CLOEXEC) == 0) {
+		for (u_int fd = minFd; fd <= maxFd; fd++)
+			close_fd_index(context, fd);
+	} else {
+		WriteLocker locker(context->lock);
+		for (u_int fd = minFd; fd <= maxFd; fd++) {
+			if (context->fds[fd] != NULL)
+				fd_set_close_on_exec(context, fd, true);
+		}
+	}
+	return B_OK;
+}
+
+
 status_t
 user_fd_kernel_ioctl(int fd, uint32 op, void* buffer, size_t length)
 {
@@ -995,6 +1048,15 @@ status_t
 _user_close(int fd)
 {
 	return common_close(fd, false);
+}
+
+
+status_t
+_user_close_range(u_int minFd, u_int maxFd, int flags)
+{
+	if ((flags & ~(CLOSE_RANGE_CLOEXEC)) != 0)
+		return B_BAD_VALUE;
+	return common_close_range(minFd, maxFd, flags, false);
 }
 
 
@@ -1187,6 +1249,13 @@ status_t
 _kern_close(int fd)
 {
 	return common_close(fd, true);
+}
+
+
+status_t
+_kern_close_range(u_int minFd, u_int maxFd, int flags)
+{
+	return common_close_range(minFd, maxFd, flags, true);
 }
 
 

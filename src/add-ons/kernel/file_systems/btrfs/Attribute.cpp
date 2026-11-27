@@ -133,8 +133,10 @@ Attribute::Read(attr_cookie* cookie, off_t pos, uint8* buffer, size_t* _length)
 		length = entry->DataLength() - pos;
 	else
 		length = *_length - pos;
-	memcpy(buffer, (uint8*)entry + entry->NameLength()
+	status = user_memcpy(buffer, (uint8*)entry + entry->NameLength()
 		+ sizeof(btrfs_dir_entry) + (uint32)pos, length);
+	if (status != B_OK)
+		return B_BAD_ADDRESS;
 	*_length = length;
 
 	free(entries);
@@ -182,12 +184,13 @@ Attribute::_FindEntry(btrfs_dir_entry* entries, size_t length,
 	btrfs_dir_entry* entry = entries;
 	uint16 current = 0;
 	while (current < length) {
+		if (entry->NameLength() == nameLength
+			&& strncmp((char*)entry->name, name, nameLength) == 0) {
+			*_entry = entry;
+			return B_OK;
+		}
 		current += entry->Length();
-		break;
-		// TODO there could be several entries with the same name hash
 		entry = (btrfs_dir_entry*)((uint8*)entry + entry->Length());
 	}
-
-	*_entry = entry;
-	return B_OK;
+	return B_ENTRY_NOT_FOUND;
 }

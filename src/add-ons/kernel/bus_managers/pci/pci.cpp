@@ -6,16 +6,20 @@
  */
 
 
+#include <debug.h>
 #include <string.h>
 #include <KernelExport.h>
+#include <util/kernel_cpp.h>
+#include <util/AutoLock.h>
+
 #define __HAIKU_PCI_BUS_MANAGER_TESTING 1
 #include <PCI.h>
 #include <arch/generic/msi.h>
 #if defined(__i386__) || defined(__x86_64__)
 #include <arch/x86/msi.h>
+#include "../../busses/pci/x86/PCI_x86.h"
 #endif
 
-#include "util/kernel_cpp.h"
 #include "pci_fixup.h"
 #include "pci_info.h"
 #include "pci_private.h"
@@ -28,6 +32,10 @@
 
 
 PCI *gPCI;
+
+#if defined(__i386__) || defined(__x86_64__)
+static spinlock sEarlyConfigAccessLock = B_SPINLOCK_INITIALIZER;
+#endif
 
 
 // #pragma mark bus manager exports
@@ -44,16 +52,38 @@ uint32
 pci_read_config(uint8 virtualBus, uint8 device, uint8 function, uint16 offset,
 	uint8 size)
 {
+#if defined(__i386__) || defined(__x86_64__)
+	// On some x86 machines, ACPI initialization accesses PCI configuration space,
+	// but PCI won't be initialized then, as ECAM depends on ACPI being initialized.
+	// To break the circular dependency, access config space directly.
+	if (gPCI->_GetDomainData(0) == NULL) {
+		if (offset > 0xff)
+			return (uint32)-1;
+
+		InterruptsSpinLocker _(sEarlyConfigAccessLock);
+		pci_write_io_32(PCI_MECH1_REQ_PORT,
+			PCI_MECH1_REQ_DATA(virtualBus, device, function, offset));
+		switch (size) {
+			case 1:
+				return pci_read_io_8(PCI_MECH1_DATA_PORT + (offset & 3));
+			case 2:
+				return pci_read_io_16(PCI_MECH1_DATA_PORT + (offset & 3));
+			case 4:
+				return pci_read_io_32(PCI_MECH1_DATA_PORT);
+		}
+		return (uint32)-1;
+	}
+#endif
+
 	uint8 bus;
 	uint8 domain;
 	uint32 value;
-
 	if (gPCI->ResolveVirtualBus(virtualBus, &domain, &bus) != B_OK)
-		return 0xffffffff;
+		return (uint32)-1;
 
 	if (gPCI->ReadConfig(domain, bus, device, function, offset, size,
 			&value) != B_OK)
-		return 0xffffffff;
+		return (uint32)-1;
 
 	return value;
 }
@@ -63,6 +93,29 @@ void
 pci_write_config(uint8 virtualBus, uint8 device, uint8 function, uint16 offset,
 	uint8 size, uint32 value)
 {
+#if defined(__i386__) || defined(__x86_64__)
+	if (gPCI->_GetDomainData(0) == NULL) {
+		if (offset > 0xff)
+			return;
+
+		InterruptsSpinLocker _(sEarlyConfigAccessLock);
+		pci_write_io_32(PCI_MECH1_REQ_PORT,
+			PCI_MECH1_REQ_DATA(virtualBus, device, function, offset));
+		switch (size) {
+			case 1:
+				pci_write_io_8(PCI_MECH1_DATA_PORT + (offset & 3), value);
+				break;
+			case 2:
+				pci_write_io_16(PCI_MECH1_DATA_PORT + (offset & 3), value);
+				break;
+			case 4:
+				pci_write_io_32(PCI_MECH1_DATA_PORT, value);
+				break;
+		}
+		return;
+	}
+#endif
+
 	uint8 bus;
 	uint8 domain;
 	if (gPCI->ResolveVirtualBus(virtualBus, &domain, &bus) != B_OK)
@@ -562,6 +615,9 @@ PCI::InitBus(PCIBus *bus)
 	_ConfigureBridges(bus);
 	ClearDeviceStatus(bus, false);
 	_RefreshDeviceInfo(bus);
+	_ReserveBARs(bus);
+	_AssignBARs(bus);
+	_RefreshDeviceInfo(bus);
 }
 
 
@@ -647,7 +703,11 @@ PCI::AddController(pci_controller_module_info *controller,
 	data.controller_cookie = controllerCookie;
 	data.root_node = rootNode;
 
-	data.bus = new(std::nothrow) PCIBus {.domain = domain};
+	data.bus = new(std::nothrow) PCIBus {
+		.domain = domain,
+		.io_window = PCIResourceWindow(),
+		.memory_window = PCIResourceWindow(),
+	};
 	if (data.bus == NULL)
 		return B_NO_MEMORY;
 
@@ -657,6 +717,22 @@ PCI::AddController(pci_controller_module_info *controller,
 	fDomainCount++;
 
 	InitDomainData(data);
+
+	// Add resource ranges provided by the PCI controller
+	// to bus 0. These ranges will later be split up and given to
+	// devices in _ReserveBARs and _AssignBARs.
+	for (int32 i = 0; i < data.ranges.Count(); i++) {
+		const pci_resource_range curResource = data.ranges[i];
+
+		PCIResourceWindow* window;
+		if (curResource.type == B_IO_PORT)
+			window = &data.bus->io_window;
+		else
+			window = &data.bus->memory_window;
+
+		window->FreeResource(curResource);
+	}
+
 	InitBus(data.bus);
 	if (data.controller->finalize != NULL)
 		data.controller->finalize(data.controller_cookie);
@@ -747,11 +823,12 @@ PCI::_GetDomainData(uint8 domain)
 
 
 inline int
-PCI::_NumFunctions(uint8 domain, uint8 bus, uint8 device)
+PCI::_NumFunctions(domain_data *domain, uint8 bus, uint8 device)
 {
-	uint8 type = ReadConfig(domain, bus, device,
-		0, PCI_header_type, 1);
-	return (type & PCI_multifunction) != 0 ? 8 : 1;
+	uint32 value;
+	if (_ReadConfig(domain, bus, device, 0, PCI_header_type, 1, &value) != B_OK)
+		return 0;
+	return (value & PCI_multifunction) != 0 ? 8 : 1;
 }
 
 
@@ -796,63 +873,73 @@ PCI::_EnumerateBus(uint8 domain, uint8 bus, uint8 *subordinateBus)
 {
 	TRACE(("PCI: EnumerateBus: domain %u, bus %u\n", domain, bus));
 
-	int maxBusDevices = _GetDomainData(domain)->max_bus_devices;
+	domain_data *info = _GetDomainData(domain);
+	const int maxBusDevices = info->max_bus_devices;
 
 	// step 1: disable all bridges on this bus
 	for (int dev = 0; dev < maxBusDevices; dev++) {
-		uint16 vendor_id = ReadConfig(domain, bus, dev, 0, PCI_vendor_id, 2);
-		if (vendor_id == 0xffff)
+		uint32 vendorId = 0xffff;
+		_ReadConfig(info, bus, dev, 0, PCI_vendor_id, 2, &vendorId);
+		if (vendorId == 0xffff)
 			continue;
 
-		int numFunctions = _NumFunctions(domain, bus, dev);
+		int numFunctions = _NumFunctions(info, bus, dev);
 		for (int function = 0; function < numFunctions; function++) {
-			uint16 device_id = ReadConfig(domain, bus, dev, function,
-				PCI_device_id, 2);
-			if (device_id == 0xffff)
+			uint32 deviceID = 0xffff;
+			_ReadConfig(info, bus, dev, function, PCI_device_id, 2, &deviceID);
+			if (deviceID == 0xffff)
 				continue;
 
-			uint8 baseClass = ReadConfig(domain, bus, dev, function,
-				PCI_class_base, 1);
-			uint8 subClass = ReadConfig(domain, bus, dev, function,
-				PCI_class_sub, 1);
+			uint32 baseClass = 0, subClass = 0;
+			_ReadConfig(info, bus, dev, function, PCI_class_base, 1, &baseClass);
+			_ReadConfig(info, bus, dev, function, PCI_class_sub, 1, &subClass);
 			if (baseClass != PCI_bridge || subClass != PCI_pci)
 				continue;
 
 			// skip incorrectly configured devices
-			uint8 headerType = ReadConfig(domain, bus, dev, function,
-				PCI_header_type, 1) & PCI_header_type_mask;
+			uint32 headerType = 0;
+			_ReadConfig(info, bus, dev, function, PCI_header_type, 1, &headerType);
+			headerType &= PCI_header_type_mask;
 			if (headerType != PCI_header_type_PCI_to_PCI_bridge)
 				continue;
 
 			TRACE(("PCI: found PCI-PCI bridge: domain %u, bus %u, dev %u, func %u\n",
 				domain, bus, dev, function));
+#ifdef TRACE_PCI
+			uint32 cfgCommand, cfgPrimary, cfgSecondary, cfgSubordinate;
+			_ReadConfig(info, bus, dev, function, PCI_command, 2, &cfgCommand);
+			_ReadConfig(info, bus, dev, function, PCI_primary_bus, 1, &cfgPrimary);
+			_ReadConfig(info, bus, dev, function, PCI_secondary_bus, 1, &cfgSecondary);
+			_ReadConfig(info, bus, dev, function, PCI_subordinate_bus, 1, &cfgSubordinate);
+
 			TRACE(("PCI: original settings: pcicmd %04" B_PRIx32 ", primary-bus "
 				"%" B_PRIu32 ", secondary-bus %" B_PRIu32 ", subordinate-bus "
 				"%" B_PRIu32 "\n",
-				ReadConfig(domain, bus, dev, function, PCI_command, 2),
-				ReadConfig(domain, bus, dev, function, PCI_primary_bus, 1),
-				ReadConfig(domain, bus, dev, function, PCI_secondary_bus, 1),
-				ReadConfig(domain, bus, dev, function, PCI_subordinate_bus, 1)));
+				cfgCommand, cfgPrimary, cfgSecondary, cfgSubordinate));
+#endif
 
 			// disable decoding
-			uint16 pcicmd;
-			pcicmd = ReadConfig(domain, bus, dev, function, PCI_command, 2);
-			pcicmd &= ~(PCI_command_io | PCI_command_memory
-				| PCI_command_master);
-			WriteConfig(domain, bus, dev, function, PCI_command, 2, pcicmd);
+			uint32 pcicmd = 0;
+			_ReadConfig(info, bus, dev, function, PCI_command, 2, &pcicmd);
+			pcicmd &= ~(PCI_command_io | PCI_command_memory | PCI_command_master);
+			_WriteConfig(info, bus, dev, function, PCI_command, 2, pcicmd);
 
 			// disable busses
-			WriteConfig(domain, bus, dev, function, PCI_primary_bus, 1, 0);
-			WriteConfig(domain, bus, dev, function, PCI_secondary_bus, 1, 0);
-			WriteConfig(domain, bus, dev, function, PCI_subordinate_bus, 1, 0);
+			_WriteConfig(info, bus, dev, function, PCI_primary_bus, 1, 0);
+			_WriteConfig(info, bus, dev, function, PCI_secondary_bus, 1, 0);
+			_WriteConfig(info, bus, dev, function, PCI_subordinate_bus, 1, 0);
+
+#ifdef TRACE_PCI
+			_ReadConfig(info, bus, dev, function, PCI_command, 2, &cfgCommand);
+			_ReadConfig(info, bus, dev, function, PCI_primary_bus, 1, &cfgPrimary);
+			_ReadConfig(info, bus, dev, function, PCI_secondary_bus, 1, &cfgSecondary);
+			_ReadConfig(info, bus, dev, function, PCI_subordinate_bus, 1, &cfgSubordinate);
 
 			TRACE(("PCI: disabled settings: pcicmd %04" B_PRIx32 ", primary-bus "
 				"%" B_PRIu32 ", secondary-bus %" B_PRIu32 ", subordinate-bus "
 				"%" B_PRIu32 "\n",
-				ReadConfig(domain, bus, dev, function, PCI_command, 2),
-				ReadConfig(domain, bus, dev, function, PCI_primary_bus, 1),
-				ReadConfig(domain, bus, dev, function, PCI_secondary_bus, 1),
-				ReadConfig(domain, bus, dev, function, PCI_subordinate_bus, 1)));
+				cfgCommand, cfgPrimary, cfgSecondary, cfgSubordinate));
+#endif
 		}
 	}
 
@@ -860,27 +947,28 @@ PCI::_EnumerateBus(uint8 domain, uint8 bus, uint8 *subordinateBus)
 
 	// step 2: assign busses to all bridges, and enable them again
 	for (int dev = 0; dev < maxBusDevices; dev++) {
-		uint16 vendor_id = ReadConfig(domain, bus, dev, 0, PCI_vendor_id, 2);
-		if (vendor_id == 0xffff)
+		uint32 vendorID = 0xffff;
+		_ReadConfig(info, bus, dev, 0, PCI_vendor_id, 2, &vendorID);
+		if (vendorID == 0xffff)
 			continue;
 
-		int numFunctions = _NumFunctions(domain, bus, dev);
+		int numFunctions = _NumFunctions(info, bus, dev);
 		for (int function = 0; function < numFunctions; function++) {
-			uint16 deviceID = ReadConfig(domain, bus, dev, function,
-				PCI_device_id, 2);
+			uint32 deviceID = 0xffff;
+			_ReadConfig(info, bus, dev, function, PCI_device_id, 2, &deviceID);
 			if (deviceID == 0xffff)
 				continue;
 
-			uint8 baseClass = ReadConfig(domain, bus, dev, function,
-				PCI_class_base, 1);
-			uint8 subClass = ReadConfig(domain, bus, dev, function,
-				PCI_class_sub, 1);
+			uint32 baseClass = 0, subClass = 0;
+			_ReadConfig(info, bus, dev, function, PCI_class_base, 1, &baseClass);
+			_ReadConfig(info, bus, dev, function, PCI_class_sub, 1, &subClass);
 			if (baseClass != PCI_bridge || subClass != PCI_pci)
 				continue;
 
 			// skip incorrectly configured devices
-			uint8 headerType = ReadConfig(domain, bus, dev, function,
-				PCI_header_type, 1) & PCI_header_type_mask;
+			uint32 headerType = 0;
+			_ReadConfig(info, bus, dev, function, PCI_header_type, 1, &headerType);
+			headerType &= PCI_header_type_mask;
 			if (headerType != PCI_header_type_PCI_to_PCI_bridge)
 				continue;
 
@@ -888,39 +976,48 @@ PCI::_EnumerateBus(uint8 domain, uint8 bus, uint8 *subordinateBus)
 				domain, bus, dev, function));
 
 			// open Scheunentor for enumerating the bus behind the bridge
-			WriteConfig(domain, bus, dev, function, PCI_primary_bus, 1, bus);
-			WriteConfig(domain, bus, dev, function, PCI_secondary_bus, 1,
+			_WriteConfig(info, bus, dev, function, PCI_primary_bus, 1, bus);
+			_WriteConfig(info, bus, dev, function, PCI_secondary_bus, 1,
 				lastUsedBusNumber + 1);
-			WriteConfig(domain, bus, dev, function, PCI_subordinate_bus, 1, 255);
+			_WriteConfig(info, bus, dev, function, PCI_subordinate_bus, 1, 255);
 
 			// enable decoding (too early here?)
-			uint16 pcicmd;
-			pcicmd = ReadConfig(domain, bus, dev, function, PCI_command, 2);
+			uint32 pcicmd = 0;
+			pcicmd = _ReadConfig(info, bus, dev, function, PCI_command, 2, &pcicmd);
 			pcicmd |= PCI_command_io | PCI_command_memory | PCI_command_master;
-			WriteConfig(domain, bus, dev, function, PCI_command, 2, pcicmd);
+			_WriteConfig(info, bus, dev, function, PCI_command, 2, pcicmd);
+
+#ifdef TRACE_PCI
+			uint32 cfgCommand, cfgPrimary, cfgSecondary, cfgSubordinate;
+			_ReadConfig(info, bus, dev, function, PCI_command, 2, &cfgCommand);
+			_ReadConfig(info, bus, dev, function, PCI_primary_bus, 1, &cfgPrimary);
+			_ReadConfig(info, bus, dev, function, PCI_secondary_bus, 1, &cfgSecondary);
+			_ReadConfig(info, bus, dev, function, PCI_subordinate_bus, 1, &cfgSubordinate);
 
 			TRACE(("PCI: probing settings: pcicmd %04" B_PRIx32 ", primary-bus "
 				"%" B_PRIu32 ", secondary-bus %" B_PRIu32 ", subordinate-bus "
 				"%" B_PRIu32 "\n",
-				ReadConfig(domain, bus, dev, function, PCI_command, 2),
-				ReadConfig(domain, bus, dev, function, PCI_primary_bus, 1),
-				ReadConfig(domain, bus, dev, function, PCI_secondary_bus, 1),
-				ReadConfig(domain, bus, dev, function, PCI_subordinate_bus, 1)));
+				cfgCommand, cfgPrimary, cfgSecondary, cfgSubordinate));
+#endif
 
 			// enumerate bus
 			_EnumerateBus(domain, lastUsedBusNumber + 1, &lastUsedBusNumber);
 
 			// close Scheunentor
-			WriteConfig(domain, bus, dev, function, PCI_subordinate_bus, 1, lastUsedBusNumber);
+			_WriteConfig(info, bus, dev, function, PCI_subordinate_bus, 1, lastUsedBusNumber);
+
+#ifdef TRACE_PCI
+			_ReadConfig(info, bus, dev, function, PCI_command, 2, &cfgCommand);
+			_ReadConfig(info, bus, dev, function, PCI_primary_bus, 1, &cfgPrimary);
+			_ReadConfig(info, bus, dev, function, PCI_secondary_bus, 1, &cfgSecondary);
+			_ReadConfig(info, bus, dev, function, PCI_subordinate_bus, 1, &cfgSubordinate);
 
 			TRACE(("PCI: configured settings: pcicmd %04" B_PRIx32 ", primary-bus "
 				"%" B_PRIu32 ", secondary-bus %" B_PRIu32 ", subordinate-bus "
 				"%" B_PRIu32 "\n",
-				ReadConfig(domain, bus, dev, function, PCI_command, 2),
-				ReadConfig(domain, bus, dev, function, PCI_primary_bus, 1),
-				ReadConfig(domain, bus, dev, function, PCI_secondary_bus, 1),
-				ReadConfig(domain, bus, dev, function, PCI_subordinate_bus, 1)));
-			}
+				cfgCommand, cfgPrimary, cfgSecondary, cfgSubordinate));
+#endif
+		}
 	}
 	if (subordinateBus)
 		*subordinateBus = lastUsedBusNumber;
@@ -934,7 +1031,8 @@ PCI::_FixupDevices(uint8 domain, uint8 bus)
 {
 	FLOW("PCI: FixupDevices domain %u, bus %u\n", domain, bus);
 
-	int maxBusDevices = _GetDomainData(domain)->max_bus_devices;
+	domain_data *info = _GetDomainData(domain);
+	const int maxBusDevices = info->max_bus_devices;
 	static int recursed = 0;
 
 	if (recursed++ > 10) {
@@ -946,32 +1044,31 @@ PCI::_FixupDevices(uint8 domain, uint8 bus)
 	}
 
 	for (int dev = 0; dev < maxBusDevices; dev++) {
-		uint16 vendorId = ReadConfig(domain, bus, dev, 0, PCI_vendor_id, 2);
+		uint32 vendorId = 0xffff;
+		_ReadConfig(info, bus, dev, 0, PCI_vendor_id, 2, &vendorId);
 		if (vendorId == 0xffff)
 			continue;
 
-		int numFunctions = _NumFunctions(domain, bus, dev);
+		int numFunctions = _NumFunctions(info, bus, dev);
 		for (int function = 0; function < numFunctions; function++) {
-			uint16 deviceId = ReadConfig(domain, bus, dev, function,
-				PCI_device_id, 2);
-			if (deviceId == 0xffff)
+			uint32 deviceID = 0xffff;
+			_ReadConfig(info, bus, dev, function, PCI_device_id, 2, &deviceID);
+			if (deviceID == 0xffff)
 				continue;
 
 			pci_fixup_device(this, domain, bus, dev, function);
 
-			uint8 baseClass = ReadConfig(domain, bus, dev, function,
-				PCI_class_base, 1);
-			if (baseClass != PCI_bridge)
-				continue;
-			uint8 subClass = ReadConfig(domain, bus, dev, function,
-				PCI_class_sub, 1);
-			if (subClass != PCI_pci)
+			uint32 baseClass = 0, subClass = 0;
+			_ReadConfig(info, bus, dev, function, PCI_class_base, 1, &baseClass);
+			_ReadConfig(info, bus, dev, function, PCI_class_sub, 1, &subClass);
+			if (baseClass != PCI_bridge || subClass != PCI_pci)
 				continue;
 
 			// some FIC motherboards have a buggy BIOS...
 			// make sure the header type is correct for a bridge,
-			uint8 headerType = ReadConfig(domain, bus, dev, function,
-				PCI_header_type, 1) & PCI_header_type_mask;
+			uint32 headerType = 0;
+			_ReadConfig(info, bus, dev, function, PCI_header_type, 1, &headerType);
+			headerType &= PCI_header_type_mask;
 			if (headerType != PCI_header_type_PCI_to_PCI_bridge) {
 				dprintf("PCI: dom %u, bus %u, dev %2u, func %u, PCI bridge"
 					" class but wrong header type 0x%02x, ignoring.\n",
@@ -980,11 +1077,11 @@ PCI::_FixupDevices(uint8 domain, uint8 bus)
 			}
 
 
-			int busBehindBridge = ReadConfig(domain, bus, dev, function,
-				PCI_secondary_bus, 1);
+			uint32 busBehindBridge = 0;
+			_ReadConfig(info, bus, dev, function, PCI_secondary_bus, 1, &busBehindBridge);
 
 			TRACE(("PCI: FixupDevices: checking bus %d behind %04x:%04x\n",
-				busBehindBridge, vendorId, deviceId));
+				busBehindBridge, vendorId, deviceID));
 			_FixupDevices(domain, busBehindBridge);
 		}
 	}
@@ -1013,10 +1110,8 @@ PCI::_ConfigureBridges(PCIBus *bus)
 			// Set discard timer to 2^15 PCI clocks
 			bridgeControlNew &= ~(PCI_bridge_primary_discard_timeout
 				| PCI_bridge_secondary_discard_timeout);
-			WriteConfig(dev->domain, dev->bus, dev->device, dev->function,
-				PCI_bridge_control, 2, bridgeControlNew);
-			bridgeControlNew = ReadConfig(dev->domain, dev->bus, dev->device,
-				dev->function, PCI_bridge_control, 2);
+			WriteConfig(dev, PCI_bridge_control, 2, bridgeControlNew);
+			bridgeControlNew = ReadConfig(dev, PCI_bridge_control, 2);
 			dprintf("PCI: dom %u, bus %u, dev %2u, func %u, changed PCI bridge"
 				" control from 0x%04x to 0x%04x\n", dev->domain, dev->bus,
 				dev->device, dev->function, bridgeControlOld,
@@ -1034,10 +1129,8 @@ PCI::ClearDeviceStatus(PCIBus *bus, bool dumpStatus)
 {
 	for (PCIDev *dev = bus->child; dev; dev = dev->next) {
 		// Clear and dump PCI device status
-		uint16 status = ReadConfig(dev->domain, dev->bus, dev->device,
-			dev->function, PCI_status, 2);
-		WriteConfig(dev->domain, dev->bus, dev->device, dev->function,
-			PCI_status, 2, status);
+		uint16 status = ReadConfig(dev, PCI_status, 2);
+		WriteConfig(dev, PCI_status, 2, status);
 		if (dumpStatus) {
 			kprintf("domain %u, bus %u, dev %2u, func %u, PCI device status "
 				"0x%04x\n", dev->domain, dev->bus, dev->device, dev->function,
@@ -1061,8 +1154,7 @@ PCI::ClearDeviceStatus(PCIBus *bus, bool dumpStatus)
 			// Clear and dump PCI bridge secondary status
 			uint16 secondaryStatus = ReadConfig(dev->domain, dev->bus,
 				dev->device, dev->function, PCI_secondary_status, 2);
-			WriteConfig(dev->domain, dev->bus, dev->device, dev->function,
-				PCI_secondary_status, 2, secondaryStatus);
+			WriteConfig(dev, PCI_secondary_status, 2, secondaryStatus);
 			if (dumpStatus) {
 				kprintf("domain %u, bus %u, dev %2u, func %u, PCI bridge "
 					"secondary status 0x%04x\n", dev->domain, dev->bus,
@@ -1082,10 +1174,8 @@ PCI::ClearDeviceStatus(PCIBus *bus, bool dumpStatus)
 			}
 
 			// Clear and dump the discard-timer error bit located in bridge-control register
-			uint16 bridgeControl = ReadConfig(dev->domain, dev->bus,
-				dev->device, dev->function, PCI_bridge_control, 2);
-			WriteConfig(dev->domain, dev->bus, dev->device, dev->function,
-				PCI_bridge_control, 2, bridgeControl);
+			uint16 bridgeControl = ReadConfig(dev, PCI_bridge_control, 2);
+			WriteConfig(dev, PCI_bridge_control, 2, bridgeControl);
 			if (dumpStatus) {
 				kprintf("domain %u, bus %u, dev %2u, func %u, PCI bridge "
 					"control 0x%04x\n", dev->domain, dev->bus, dev->device,
@@ -1103,11 +1193,161 @@ PCI::ClearDeviceStatus(PCIBus *bus, bool dumpStatus)
 
 
 void
+PCI::_ReserveBARs(PCIBus *bus)
+{
+	for (PCIDev* dev = bus->child; dev; dev = dev->next) {
+		// Find ranges pre-allocated by system firmware and
+		// reserve them so we won't try to assign them
+		// again later in _AssignBARs.
+		int nbars = (dev->child != NULL) ? 2 : 6;
+		for (int i = 0, next = 1; i < nbars; i = next, next++) {
+			uint32 flags;
+			uint64 addr, size;
+			if (dev->child == NULL) {
+				flags = dev->info.u.h0.base_register_flags[i];
+				addr = dev->info.u.h0.base_registers_pci[i];
+				size = dev->info.u.h0.base_register_sizes[i];
+
+				if ((flags & PCI_address_type) == PCI_address_type_64) {
+					addr |= (uint64)dev->info.u.h0.base_registers_pci[i + 1] << 32;
+					size |= (uint64)dev->info.u.h0.base_register_sizes[i + 1] << 32;
+					next++;
+				}
+			} else {
+				flags = dev->info.u.h1.base_register_flags[i];
+				addr = dev->info.u.h1.base_registers_pci[i];
+				size = dev->info.u.h1.base_register_sizes[i];
+
+				if ((flags & PCI_address_type) == PCI_address_type_64) {
+					addr |= (uint64)dev->info.u.h1.base_registers_pci[i + 1] << 32;
+					size |= (uint64)dev->info.u.h1.base_register_sizes[i + 1] << 32;
+					next++;
+				}
+			}
+
+			if (size == 0)
+				continue;
+
+			PCIResourceWindow* window;
+			if ((flags & PCI_address_space) == 1)
+				window = &bus->io_window;
+			else
+				window = &bus->memory_window;
+
+			window->ReserveResource(addr, size, dev->bar[i]);
+		}
+
+		if (dev->child != NULL) {
+			// PCI-to-PCI bridges each have three ranges of address space
+			// (I/O ports, memory, prefetchable memory) which determine
+			// when memory accesses will be forwarded to a bridge's children.
+			//
+			// For each of these ranges, we reserve the range in the bridge's
+			// parent's PCIResourceWindow (as we do with BARs above), then
+			// add the range to the bridge's PCIResourceWindows. These ranges
+			// can then be reserved or allocated for the bridge's children.
+			uint32 ioBase = (((uint32)(dev->info.u.h1.io_base & 0xf0)) << 8)
+				| (((uint32)dev->info.u.h1.io_base_upper16) << 16);
+			uint32 ioLimit = (((((uint32)(dev->info.u.h1.io_limit & 0xf0)) << 8)
+				| (((uint32)dev->info.u.h1.io_limit_upper16) << 16)))
+				+ 0xfff;
+			uint32 ioSize = ioLimit + 1 - ioBase;
+			// base > limit means the register was not programmed (no memory
+			// was assigned by system firmware), so there is nothing to reserve.
+			// Same for memory and prefetchable memory below.
+			if (ioLimit > ioBase) {
+				pci_resource_range range = {};
+				if (dev->parent->io_window.ReserveResource(ioBase, ioSize, range) == B_OK)
+					dev->child->io_window.FreeResource(range);
+			}
+
+			uint32 memBase = (((uint32)(dev->info.u.h1.memory_base & 0xfff0)) << 16);
+			uint32 memLimit = (((uint32)(dev->info.u.h1.memory_limit & 0xfff0)) << 16)
+				+ 0xfffff;
+			uint32 memSize = memLimit + 1 - memBase;
+			if (memLimit > memBase) {
+				pci_resource_range range = {};
+				if (dev->parent->memory_window.ReserveResource(
+						memBase, memSize, range) == B_OK)
+					dev->child->memory_window.FreeResource(range);
+			}
+
+			uint64 prefetchBase = (((uint64)dev->info.u.h1.prefetchable_memory_base & 0xfff0) << 16)
+				| (((uint64)dev->info.u.h1.prefetchable_memory_base_upper32) << 32);
+			uint64 prefetchLimit =
+				((((uint64)dev->info.u.h1.prefetchable_memory_limit & 0xfff0) << 16)
+				| ((uint64)dev->info.u.h1.prefetchable_memory_limit_upper32 << 32))
+				+ 0xfffff;
+			uint64 prefetchSize = prefetchLimit + 1 - prefetchBase;
+			if (prefetchLimit > prefetchBase) {
+				pci_resource_range range = {};
+				if (dev->parent->memory_window.ReserveResource(
+						prefetchBase, prefetchSize, range) == B_OK)
+					dev->child->memory_window.FreeResource(range);
+			}
+
+			_ReserveBARs(dev->child);
+		}
+	}
+}
+
+
+void
+PCI::_AssignBARs(PCIBus *bus)
+{
+	for (PCIDev* dev = bus->child; dev; dev = dev->next) {
+		if (dev->child != NULL) {
+			// This is a bridge. We don't currently try to allocate
+			// resources for the bridge itself, so continue on
+			// to the bridge's children.
+			_AssignBARs(dev->child);
+			continue;
+		}
+
+		for (int i = 0, next = 1; i < 6; i = next, next++) {
+			uint32 flags = dev->info.u.h0.base_register_flags[i];
+			uint64 size = dev->info.u.h0.base_register_sizes[i];
+			pci_resource_range& resource = dev->bar[i];
+
+			if ((flags & PCI_address_type) == PCI_address_type_64) {
+				size |= (uint64)dev->info.u.h0.base_register_sizes[i + 1] << 32;
+				next++;
+			}
+
+			// BAR was already assigned or does not need any space allocated
+			if (resource.type != 0 || size == 0)
+				continue;
+
+			PCIResourceWindow* window;
+			if ((flags & PCI_address_space) == 1)
+				window = &bus->io_window;
+			else
+				window = &bus->memory_window;
+
+			// Size (which is a power of two) is also used for alignment
+			// per PCI Local Bus Specification Revision 3.0, p. 226:
+			// "all address spaces used are a power of
+			// two in size and are naturally aligned"
+			if (window->AllocateResource(size, size, resource, flags) == B_OK) {
+				dprintf("PCI: Assigned BAR %d of %02x:%02x.%u address 0x%" B_PRIxPHYSADDR"\n",
+					i, dev->bus, dev->device, dev->function, resource.pci_address);
+				WriteConfig(dev, i * 4 + PCI_base_registers, 4, resource.pci_address);
+				if ((flags & PCI_address_type) == PCI_address_type_64) {
+					WriteConfig(dev, (i + 1) * 4 + PCI_base_registers, 4, resource.pci_address >> 32);
+				}
+			}
+		}
+	}
+}
+
+
+void
 PCI::_DiscoverBus(PCIBus *bus)
 {
 	FLOW("PCI: DiscoverBus, domain %u, bus %u\n", bus->domain, bus->bus);
 
-	int maxBusDevices = _GetDomainData(bus->domain)->max_bus_devices;
+	domain_data *info = _GetDomainData(bus->domain);
+	const int maxBusDevices = info->max_bus_devices;
 	static int recursed = 0;
 
 	if (recursed++ > 10) {
@@ -1119,12 +1359,12 @@ PCI::_DiscoverBus(PCIBus *bus)
 	}
 
 	for (int dev = 0; dev < maxBusDevices; dev++) {
-		uint16 vendorID = ReadConfig(bus->domain, bus->bus, dev, 0,
-			PCI_vendor_id, 2);
+		uint32 vendorID = 0xffff;
+		_ReadConfig(info, bus->bus, dev, 0, PCI_vendor_id, 2, &vendorID);
 		if (vendorID == 0xffff)
 			continue;
 
-		int numFunctions = _NumFunctions(bus->domain, bus->bus, dev);
+		int numFunctions = _NumFunctions(info, bus->bus, dev);
 		for (int function = 0; function < numFunctions; function++)
 			_DiscoverDevice(bus, dev, function);
 	}
@@ -1164,14 +1404,16 @@ PCI::_DiscoverDevice(PCIBus *bus, uint8 dev, uint8 function)
 PCIBus *
 PCI::_CreateBus(PCIDev *parent, uint8 domain, uint8 bus)
 {
-	PCIBus *newBus = new(std::nothrow) PCIBus;
+	PCIBus *newBus = new(std::nothrow) PCIBus {
+		.parent = parent,
+		.child = NULL,
+		.domain = domain,
+		.bus = bus,
+		.io_window = PCIResourceWindow(),
+		.memory_window = PCIResourceWindow(),
+	};
 	if (newBus == NULL)
 		return NULL;
-
-	newBus->parent = parent;
-	newBus->child = NULL;
-	newBus->domain = domain;
-	newBus->bus = bus;
 
 	// append
 	parent->child = newBus;
@@ -1186,7 +1428,7 @@ PCI::_CreateDevice(PCIBus *parent, uint8 device, uint8 function)
 	FLOW("PCI: CreateDevice, domain %u, bus %u, dev %u, func %u:\n", parent->domain,
 		parent->bus, device, function);
 
-	PCIDev *newDev = new(std::nothrow) PCIDev;
+	PCIDev *newDev = new(std::nothrow) PCIDev();
 	if (newDev == NULL)
 		return NULL;
 
@@ -1219,6 +1461,47 @@ PCI::_CreateDevice(PCIBus *parent, uint8 device, uint8 function)
 }
 
 
+status_t
+PCI::_ReadConfig(domain_data *domain, uint8 bus, uint8 device,
+	uint8 function, uint16 offset, uint8 size, uint32 *value)
+{
+	if (device > (domain->max_bus_devices - 1)
+		|| function > 7
+		|| (size != 1 && size != 2 && size != 4)
+		|| (size == 2 && (offset & 3) == 3)
+		|| (size == 4 && (offset & 3) != 0)) {
+		dprintf("PCI: can't read config for domain %p, %u:%u:%u, offset %u, size %u\n",
+			 domain, bus, device, function, offset, size);
+		return B_ERROR;
+	}
+
+	status_t status = (*domain->controller->read_pci_config)(domain->controller_cookie,
+		bus, device, function, offset, size, value);
+	if (status != B_OK) {
+		dprintf("PCI: failed to read config for domain %p, %u:%u:%u, offset %u, size %u\n",
+			domain, bus, device, function, offset, size);
+	}
+	return status;
+}
+
+
+status_t
+PCI::_WriteConfig(domain_data *domain, uint8 bus, uint8 device,
+	uint8 function, uint16 offset, uint8 size, uint32 value)
+{
+	if ((size != 1 && size != 2 && size != 4)
+		|| (size == 2 && (offset & 3) == 3)
+		|| (size == 4 && (offset & 3) != 0)) {
+		dprintf("PCI: can't write config for %p %u:%u:%u (%u, %u)\n",
+			 domain, bus, device, function, offset, size);
+		return B_ERROR;
+	}
+
+	return (*domain->controller->write_pci_config)(domain->controller_cookie,
+		bus, device, function, offset, size, value);
+}
+
+
 uint64
 PCI::_BarSize(uint64 bits)
 {
@@ -1238,14 +1521,10 @@ PCI::_GetBarInfo(PCIDev *dev, uint8 offset, uint32 &_ramAddress,
 	uint32 &_pciAddress, uint32 &_size, uint8 &flags, uint32 *_highRAMAddress,
 	uint32 *_highPCIAddress, uint32 *_highSize)
 {
-	uint64 pciAddress = ReadConfig(dev->domain, dev->bus, dev->device,
-		dev->function, offset, 4);
-	WriteConfig(dev->domain, dev->bus, dev->device, dev->function, offset, 4,
-		0xffffffff);
-	uint64 size = ReadConfig(dev->domain, dev->bus, dev->device, dev->function,
-		offset, 4);
-	WriteConfig(dev->domain, dev->bus, dev->device, dev->function, offset, 4,
-		pciAddress);
+	uint64 pciAddress = ReadConfig(dev, offset, 4);
+	WriteConfig(dev, offset, 4, 0xffffffff);
+	uint64 size = ReadConfig(dev, offset, 4);
+	WriteConfig(dev, offset, 4, pciAddress);
 
 	uint32 mask = PCI_address_memory_32_mask;
 	bool is64bit = false;
@@ -1255,14 +1534,10 @@ PCI::_GetBarInfo(PCIDev *dev, uint8 offset, uint32 &_ramAddress,
 		is64bit = (pciAddress & PCI_address_type) == PCI_address_type_64;
 
 		if (is64bit && _highRAMAddress != NULL) {
-			uint64 highPCIAddress = ReadConfig(dev->domain, dev->bus,
-				dev->device, dev->function, offset + 4, 4);
-			WriteConfig(dev->domain, dev->bus, dev->device, dev->function,
-				offset + 4, 4, 0xffffffff);
-			uint64 highSize = ReadConfig(dev->domain, dev->bus, dev->device,
-				dev->function, offset + 4, 4);
-			WriteConfig(dev->domain, dev->bus, dev->device, dev->function,
-				offset + 4, 4, highPCIAddress);
+			uint64 highPCIAddress = ReadConfig(dev, offset + 4, 4);
+			WriteConfig(dev, offset + 4, 4, 0xffffffff);
+			uint64 highSize = ReadConfig(dev, offset + 4, 4);
+			WriteConfig(dev, offset + 4, 4, highPCIAddress);
 
 			pciAddress |= highPCIAddress << 32;
 			size |= highSize << 32;
@@ -1298,14 +1573,10 @@ void
 PCI::_GetRomBarInfo(PCIDev *dev, uint8 offset, uint32 &_address, uint32 *_size,
 	uint8 *_flags)
 {
-	uint32 oldValue = ReadConfig(dev->domain, dev->bus, dev->device, dev->function,
-		offset, 4);
-	WriteConfig(dev->domain, dev->bus, dev->device, dev->function, offset, 4,
-		0xfffffffe); // LSB must be 0
-	uint32 newValue = ReadConfig(dev->domain, dev->bus, dev->device, dev->function,
-		offset, 4);
-	WriteConfig(dev->domain, dev->bus, dev->device, dev->function, offset, 4,
-		oldValue);
+	uint32 oldValue = ReadConfig(dev, offset, 4);
+	WriteConfig(dev, offset, 4, 0xfffffffe); // LSB must be 0
+	uint32 newValue = ReadConfig(dev, offset, 4);
+	WriteConfig(dev, offset, 4, oldValue);
 
 	_address = oldValue & PCI_rom_address_mask;
 	if (_size != NULL)
@@ -1325,31 +1596,21 @@ PCI::_ReadBasicInfo(PCIDev *dev)
 		return;
 	}
 
-	dev->info.vendor_id = ReadConfig(dev->domain, dev->bus, dev->device,
-		dev->function, PCI_vendor_id, 2);
-	dev->info.device_id = ReadConfig(dev->domain, dev->bus, dev->device,
-		dev->function, PCI_device_id, 2);
+	dev->info.vendor_id = ReadConfig(dev, PCI_vendor_id, 2);
+	dev->info.device_id = ReadConfig(dev, PCI_device_id, 2);
 	dev->info.bus = virtualBus;
 	dev->info.device = dev->device;
 	dev->info.function = dev->function;
-	dev->info.revision = ReadConfig(dev->domain, dev->bus, dev->device,
-		dev->function, PCI_revision, 1);
-	dev->info.class_api = ReadConfig(dev->domain, dev->bus, dev->device,
-		dev->function, PCI_class_api, 1);
-	dev->info.class_sub = ReadConfig(dev->domain, dev->bus, dev->device,
-		dev->function, PCI_class_sub, 1);
-	dev->info.class_base = ReadConfig(dev->domain, dev->bus, dev->device,
-		dev->function, PCI_class_base, 1);
-	dev->info.line_size = ReadConfig(dev->domain, dev->bus, dev->device,
-		dev->function, PCI_line_size, 1);
-	dev->info.latency = ReadConfig(dev->domain, dev->bus, dev->device,
-		dev->function, PCI_latency, 1);
+	dev->info.revision = ReadConfig(dev, PCI_revision, 1);
+	dev->info.class_api = ReadConfig(dev, PCI_class_api, 1);
+	dev->info.class_sub = ReadConfig(dev, PCI_class_sub, 1);
+	dev->info.class_base = ReadConfig(dev, PCI_class_base, 1);
+	dev->info.line_size = ReadConfig(dev, PCI_line_size, 1);
+	dev->info.latency = ReadConfig(dev, PCI_latency, 1);
 	// BeOS does not mask off the multifunction bit, developer must use
 	// (header_type & PCI_header_type_mask)
-	dev->info.header_type = ReadConfig(dev->domain, dev->bus, dev->device,
-		dev->function, PCI_header_type, 1);
-	dev->info.bist = ReadConfig(dev->domain, dev->bus, dev->device,
-		dev->function, PCI_bist, 1);
+	dev->info.header_type = ReadConfig(dev, PCI_header_type, 1);
+	dev->info.bist = ReadConfig(dev, PCI_bist, 1);
 	dev->info.reserved = 0;
 }
 
@@ -1362,10 +1623,8 @@ PCI::_ReadHeaderInfo(PCIDev *dev)
 		{
 			// disable PCI device address decoding (io and memory) while BARs
 			// are modified
-			uint16 pcicmd = ReadConfig(dev->domain, dev->bus, dev->device,
-				dev->function, PCI_command, 2);
-			WriteConfig(dev->domain, dev->bus, dev->device, dev->function,
-				PCI_command, 2,
+			uint16 pcicmd = ReadConfig(dev, PCI_command, 2);
+			WriteConfig(dev, PCI_command, 2,
 				pcicmd & ~(PCI_command_io | PCI_command_memory));
 
 			// get BAR size infos
@@ -1383,8 +1642,7 @@ PCI::_ReadHeaderInfo(PCIDev *dev)
 			}
 
 			// restore PCI device address decoding
-			WriteConfig(dev->domain, dev->bus, dev->device, dev->function,
-				PCI_command, 2, pcicmd);
+			WriteConfig(dev, PCI_command, 2, pcicmd);
 
 			dev->info.u.h0.rom_base = (uint32)pci_ram_address(
 				dev->info.u.h0.rom_base_pci);
@@ -1411,10 +1669,8 @@ PCI::_ReadHeaderInfo(PCIDev *dev)
 		{
 			// disable PCI device address decoding (io and memory) while BARs
 			// are modified
-			uint16 pcicmd = ReadConfig(dev->domain, dev->bus, dev->device,
-				dev->function, PCI_command, 2);
-			WriteConfig(dev->domain, dev->bus, dev->device, dev->function,
-				PCI_command, 2,
+			uint16 pcicmd = ReadConfig(dev, PCI_command, 2);
+			WriteConfig(dev, PCI_command, 2,
 				pcicmd & ~(PCI_command_io | PCI_command_memory));
 
 			_GetRomBarInfo(dev, PCI_bridge_rom_base,
@@ -1431,8 +1687,7 @@ PCI::_ReadHeaderInfo(PCIDev *dev)
 			}
 
 			// restore PCI device address decoding
-			WriteConfig(dev->domain, dev->bus, dev->device, dev->function,
-				PCI_command, 2, pcicmd);
+			WriteConfig(dev, PCI_command, 2, pcicmd);
 
 			dev->info.u.h1.rom_base = (uint32)pci_ram_address(
 				dev->info.u.h1.rom_base_pci);
@@ -1558,26 +1813,13 @@ PCI::ReadConfig(uint8 domain, uint8 bus, uint8 device, uint8 function,
 	uint16 offset, uint8 size, uint32 *value)
 {
 	domain_data *info = _GetDomainData(domain);
-	if (!info)
-		return B_ERROR;
-
-	if (device > (info->max_bus_devices - 1)
-		|| function > 7
-		|| (size != 1 && size != 2 && size != 4)
-		|| (size == 2 && (offset & 3) == 3)
-		|| (size == 4 && (offset & 3) != 0)) {
-		dprintf("PCI: can't read config for domain %d, %u:%u:%u, offset %u, size %u\n",
-			 domain, bus, device, function, offset, size);
+	if (info == NULL) {
+		KDEBUG_ONLY(panic("PCI: can't read config: domain %d does not exist!",
+			 domain));
 		return B_ERROR;
 	}
 
-	status_t status = (*info->controller->read_pci_config)(info->controller_cookie,
-		bus, device, function, offset, size, value);
-	if (status != B_OK) {
-		dprintf("PCI: failed to read config for domain %d, %u:%u:%u, offset %u, size %u\n",
-			domain, bus, device, function, offset, size);
-	}
-	return status;
+	return _ReadConfig(info, bus, device, function, offset, size, value);
 }
 
 
@@ -1607,33 +1849,57 @@ PCI::ReadConfig(PCIDev *device, uint16 offset, uint8 size)
 
 
 status_t
-PCI::WriteConfig(uint8 domain, uint8 bus, uint8 device, uint8 function,
+PCI::WriteConfig(uint8 domain, uint8 bus, uint8 _device, uint8 function,
 	uint16 offset, uint8 size, uint32 value)
 {
-	domain_data *info = _GetDomainData(domain);
-	if (!info)
-		return B_ERROR;
-
-	if (device > (info->max_bus_devices - 1)
-		|| function > 7
-		|| (size != 1 && size != 2 && size != 4)
-		|| (size == 2 && (offset & 3) == 3)
-		|| (size == 4 && (offset & 3) != 0)) {
-		dprintf("PCI: can't write config for domain %d, bus %u, device %u, function %u, offset %u, size %u\n",
-			 domain, bus, device, function, offset, size);
-		return B_ERROR;
+	PCIDev *device = FindDevice(domain, bus, _device, function);
+	if (device == NULL) {
+		KDEBUG_ONLY(panic("PCI: can't write config: can't find device!"));
+		return B_DEVICE_NOT_FOUND;
 	}
 
-	return (*info->controller->write_pci_config)(info->controller_cookie, bus,
-		device, function, offset, size, value);
+	return WriteConfig(device, offset, size, value);
 }
 
 
 status_t
 PCI::WriteConfig(PCIDev *device, uint16 offset, uint8 size, uint32 value)
 {
-	return WriteConfig(device->domain, device->bus, device->device,
-		device->function, offset, size, value);
+	domain_data *info = _GetDomainData(device->domain);
+	ASSERT(info != NULL);
+
+	status_t status = _WriteConfig(info, device->bus, device->device, device->function,
+		offset, size, value);
+	if (status != B_OK)
+		return status;
+
+	if (offset == PCI_command && size == 2 && (value & PCI_command_master) != 0) {
+		// Make sure PCI_command_master is also enabled on all PCI-to-PCI bridges
+		// above this device. (Linux does the same when enabling PCI_command_master.)
+		for (PCIBus* bus = device->parent; bus != NULL && bus->parent != NULL;
+				bus = bus->parent->parent) {
+			PCIDev* parent = bus->parent;
+			if (parent->info.class_base != PCI_bridge
+				|| parent->info.class_sub != PCI_pci
+				|| (parent->info.header_type & PCI_header_type_mask)
+					!= PCI_header_type_PCI_to_PCI_bridge)
+				continue;
+
+			uint16 command = ReadConfig(parent, PCI_command, 2);
+			if ((command & PCI_command_master) != 0)
+				continue;
+
+			status_t status = _WriteConfig(info,
+				parent->bus, parent->device, parent->function,
+				PCI_command, 2, command | PCI_command_master);
+			if (status != B_OK)
+				return status;
+			dprintf("PCI: enabled bus-mastering for bridge %d %u:%u:%u",
+				parent->domain, parent->bus, parent->device, parent->function);
+		}
+	}
+
+	return status;
 }
 
 
@@ -2027,9 +2293,12 @@ PCI::EnableMSI(PCIDev *device)
 	if (info->configured_count == 0)
 		return B_NO_INIT;
 
+	// ensure bus-mastering has already been enabled
+	const uint16 command = ReadConfig(device, PCI_command, 2);
+	ASSERT((command & PCI_command_master) != 0);
+
 	// ensure the pinned interrupt is disabled
-	WriteConfig(device, PCI_command, 2,
-		ReadConfig(device, PCI_command, 2) | PCI_command_int_disable);
+	WriteConfig(device, PCI_command, 2, command | PCI_command_int_disable);
 
 	// enable msi generation
 	info->control_value |= PCI_msi_control_enable;
@@ -2193,9 +2462,12 @@ PCI::EnableMSIX(PCIDev *device)
 	if (info->configured_count == 0)
 		return B_NO_INIT;
 
+	// ensure bus-mastering has already been enabled
+	const uint16 command = ReadConfig(device, PCI_command, 2);
+	ASSERT((command & PCI_command_master) != 0);
+
 	// ensure the pinned interrupt is disabled
-	WriteConfig(device, PCI_command, 2,
-		ReadConfig(device, PCI_command, 2) | PCI_command_int_disable);
+	WriteConfig(device, PCI_command, 2, command | PCI_command_int_disable);
 
 	// enable msi-x generation
 	info->control_value |= PCI_msix_control_enable;
@@ -2391,4 +2663,129 @@ PCI::_DisableMSIX(PCIDev *device)
 		info->control_value);
 
 	return B_OK;
+}
+
+
+status_t
+PCIResourceWindow::AllocateResource(uint64 size, uint64 alignment,
+	pci_resource_range& newResource, uint8 flags)
+{
+	// Find an appropriately sized free range in this window
+	// that matches the requested prefetchability and
+	// is within the 32-bit address space (if required)
+	for (int i = 0; i < fResources.Count(); i++) {
+		uint64 resourceAddrAligned = (fResources[i].pci_address + alignment - 1)
+			& ~(alignment - 1);
+		uint64 resourcePaddingSize = resourceAddrAligned - fResources[i].pci_address;
+		uint64 resourceUsableSize = fResources[i].size - resourcePaddingSize;
+		if (fResources[i].size > resourcePaddingSize
+			&& resourceUsableSize >= size
+			&& ((flags & PCI_address_type_64) || fResources[i].pci_address < 0x100000000)
+			&& ((flags & PCI_address_prefetchable)
+				== (fResources[i].address_type & PCI_address_prefetchable)))
+			return ReserveResource(resourceAddrAligned, size, newResource);
+	}
+
+	// We couldn't allocate prefetchable memory,
+	// try to allocate non-prefetchable instead.
+	if ((flags & PCI_address_prefetchable) != 0)
+		return AllocateResource(size, alignment, newResource,
+			flags & ~PCI_address_prefetchable);
+	return B_NO_MEMORY;
+}
+
+
+void
+PCIResourceWindow::FreeResource(pci_resource_range resource)
+{
+	// Add the given resource to the list of resources, so
+	// it may be reserved or allocated later
+	int i = 0;
+	for (; i <= fResources.Count(); i++) {
+		if (i == fResources.Count() || fResources[i].pci_address > resource.pci_address)
+			break;
+	}
+
+	fResources.Insert(resource, i);
+
+	// Try to merge the resource we just added with the
+	// previous and next resource, if possible.
+	if (i != 0) {
+		_MergeResourcesAt(i - 1, i);
+		i--;
+	}
+	if (i != fResources.Count() - 1)
+		_MergeResourcesAt(i, i + 1);
+}
+
+
+status_t
+PCIResourceWindow::ReserveResource(uint64 start, uint64 size, pci_resource_range& resourceOut)
+{
+	// Find which resource contains the given start address
+	bool found = false;
+	int i = 0;
+	for (; i < fResources.Count(); i++) {
+		auto& resource = fResources[i];
+		if (resource.pci_address <= start
+				&& (resource.pci_address + resource.size) > start) {
+			found = true;
+			break;
+		}
+	}
+	if (!found)
+		return B_ENTRY_NOT_FOUND;
+	if (start + size > fResources[i].pci_address + fResources[i].size) {
+		dprintf("PCI: BAR/bridge window 0x%" PRIx64 "-0x%" PRIx64
+			" exceeds parent window 0x%" PRIx64 "-0x%" PRIx64 "\n",
+			start, start + size,
+			fResources[i].pci_address, fResources[i].pci_address + fResources[i].size);
+	}
+
+	uint64 offsetWithinResource = (start - fResources[i].pci_address);
+	resourceOut.type = fResources[i].type;
+	resourceOut.address_type = fResources[i].address_type;
+	resourceOut.pci_address = fResources[i].pci_address + offsetWithinResource;
+	resourceOut.host_address = fResources[i].host_address + offsetWithinResource;
+	resourceOut.size = size;
+
+	// If reserving this range results in a hole in the middle
+	// of the range owned by this PCIResourceWindow, we need
+	// to add a new range after the hole
+	if (fResources[i].size - offsetWithinResource > size) {
+		fResources.Insert(pci_resource_range {
+			.type = fResources[i].type,
+			.address_type = fResources[i].address_type,
+			.host_address = (phys_addr_t)(fResources[i].host_address
+				+ offsetWithinResource + size),
+			.pci_address = (phys_addr_t)(fResources[i].pci_address
+				+ offsetWithinResource + size),
+			.size = fResources[i].size - offsetWithinResource - size
+		}, i + 1);
+	}
+
+	// Shrink the range we just reserved from, and delete
+	// it if we reserved the whole range
+	if (offsetWithinResource == 0)
+		fResources.Erase(i);
+	else
+		fResources[i].size = offsetWithinResource;
+
+	return B_OK;
+}
+
+
+void
+PCIResourceWindow::_MergeResourcesAt(int lower, int upper)
+{
+	// Merge two resources, with the specified indices,
+	// if they're adjacent and are the same type.
+	auto& resourceLower = fResources[lower];
+	auto& resourceUpper = fResources[upper];
+	if (resourceLower.type == resourceUpper.type
+			&& resourceLower.address_type == resourceUpper.address_type
+			&& resourceLower.pci_address + resourceLower.size == resourceUpper.pci_address) {
+		resourceLower.size += resourceUpper.size;
+		fResources.Erase(upper);
+	}
 }

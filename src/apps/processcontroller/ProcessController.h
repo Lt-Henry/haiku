@@ -18,9 +18,11 @@ class ThreadBarMenu;
 
 class ProcessController : public BView {
 	public:
+		static BSize	ComposeSize(float maxWidth, float maxHeight);
+
 						ProcessController(BRect frame, bool temp = false);
 						ProcessController(BMessage *data);
-						ProcessController(float width, float height);
+						ProcessController(BSize size);
 		virtual			~ProcessController();
 
 		virtual	void	MessageReceived(BMessage *message);
@@ -45,6 +47,8 @@ class ProcessController : public BView {
 	private:
 		void			Init();
 		void			_HandleDebugRequest(team_id team, thread_id thread);
+		void			_LoadSettings();
+		void			_SaveSettings();
 
 		const int32		kCPUCount;
 		bool			fTemp;
@@ -77,6 +81,5 @@ extern	const char*			kDeskbarItemName;
 extern	bool				gInDeskbar;
 
 #define kBarWidth 100
-#define kMargin	12
 
 #endif // _PCVIEW_H_

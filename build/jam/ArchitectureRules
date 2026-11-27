@@ -38,7 +38,7 @@ rule ArchitectureSetup architecture
 	switch $(cpu) {
 		case ppc : archFlags += -mcpu=440fp ;
 		case arm : archFlags += -march=armv7-a -mfloat-abi=hard ;
-		case arm64 : archFlags += -march=armv8.2-a+fp16 ;
+		case arm64 : archFlags += -march=armv8-a+crc ;
 		case x86 : archFlags += -march=pentium ;
 		case riscv64 : archFlags += -march=rv64gc ;
 	}
@@ -59,10 +59,10 @@ rule ArchitectureSetup architecture
 	HAIKU_C++_$(architecture) ?= $(HAIKU_CC_$(architecture)) ;
 	HAIKU_LINK_$(architecture) ?= $(HAIKU_CC_$(architecture)) ;
 
+	HAIKU_ASFLAGS_$(architecture) += $(archFlags) -nostdinc ;
 	HAIKU_CCFLAGS_$(architecture) += $(ccBaseFlags) -nostdinc ;
 	HAIKU_C++FLAGS_$(architecture) += $(ccBaseFlags) -nostdinc ;
 	HAIKU_LINKFLAGS_$(architecture) += $(ccBaseFlags) ;
-	HAIKU_ASFLAGS_$(architecture) += $(archFlags) -nostdinc ;
 
 	# strip is required
 	if ! $(HAIKU_STRIP_$(architecture)) {
@@ -137,12 +137,14 @@ rule ArchitectureSetup architecture
 	local debugFlags = -ggdb ;
 
 	# debug 0: suppress asserts
+	HAIKU_DEBUG_0_ASFLAGS_$(architecture) = [ FDefines NDEBUG=$(NDEBUG) ] ;
 	HAIKU_DEBUG_0_CCFLAGS_$(architecture) = [ FDefines NDEBUG=$(NDEBUG) ] ;
 	HAIKU_DEBUG_0_C++FLAGS_$(architecture) = [ FDefines NDEBUG=$(NDEBUG) ] ;
 
 	local level ;
 	for level in $(HAIKU_DEBUG_LEVELS[2-]) {
 		local flags = $(debugFlags) [ FDefines DEBUG=$(level) ] ;
+		HAIKU_DEBUG_$(level)_ASFLAGS_$(architecture) = $(flags) ;
 		HAIKU_DEBUG_$(level)_CCFLAGS_$(architecture) = $(flags) ;
 		HAIKU_DEBUG_$(level)_C++FLAGS_$(architecture) = $(flags) ;
 	}
@@ -231,6 +233,14 @@ rule KernelArchitectureSetup architecture
 			# offset in floppy image (>= sizeof(haiku_loader))
 			HAIKU_BOOT_ARCHIVE_IMAGE_OFFSET = 384 ; # in kB
 
+		case ppc64 :
+			HAIKU_KERNEL_PLATFORM ?= openfirmware ;
+			HAIKU_BOOT_TARGETS += openfirmware ;
+
+			HAIKU_BOOT_FLOPPY_IMAGE_SIZE = 1440 ; # in kB
+			# offset in floppy image (>= sizeof(haiku_loader))
+			HAIKU_BOOT_ARCHIVE_IMAGE_OFFSET = 384 ; # in kB
+
 		case sparc :
 			HAIKU_KERNEL_PLATFORM ?= openfirmware ;
 			HAIKU_BOOT_TARGETS += openfirmware ;
@@ -244,7 +254,7 @@ rule KernelArchitectureSetup architecture
 			HAIKU_BOOT_TARGETS += efi ;
 
 			# SOC's like allwinner need an offset to skip the hardcoded initial loader
-			HAIKU_BOOT_SDIMAGE_BEGIN = 20475 ; # in KiB
+			HAIKU_BOOT_SDIMAGE_BEGIN = 4096 ; # in KiB
 
 			HAIKU_BOOT_FLOPPY_IMAGE_SIZE = 1440 ;
 			# offset in floppy image (>= sizeof(haiku_loader))
@@ -255,7 +265,19 @@ rule KernelArchitectureSetup architecture
 			HAIKU_KERNEL_PLATFORM ?= efi ;
 			HAIKU_BOOT_TARGETS += efi ;
 
-			HAIKU_BOOT_SDIMAGE_BEGIN = 2 ; # in KiB
+			# SOC's like allwinner need an offset to skip the hardcoded initial loader
+			HAIKU_BOOT_SDIMAGE_BEGIN = 4096 ; # in KiB
+
+			HAIKU_BOOT_FLOPPY_IMAGE_SIZE = 1440 ;
+			# offset in floppy image (>= sizeof(haiku_loader))
+			HAIKU_BOOT_ARCHIVE_IMAGE_OFFSET = 192 ; # in kB - unused yet
+			HAIKU_BOOT_LOADER_BASE ?= 0x1000000 ;
+
+		case riscv64 :
+			HAIKU_KERNEL_PLATFORM ?= efi ;
+			HAIKU_BOOT_TARGETS += efi riscv ;
+
+			HAIKU_BOOT_SDIMAGE_BEGIN = 2 ; # KiB
 
 			HAIKU_BOOT_FLOPPY_IMAGE_SIZE = 1440 ;
 			# offset in floppy image (>= sizeof(haiku_loader))
@@ -275,21 +297,15 @@ rule KernelArchitectureSetup architecture
 				Exit "HAIKU_NASM not set. Please re-run configure." ;
 			}
 
-		case riscv64 :
-			HAIKU_KERNEL_PLATFORM ?= efi ;
-			HAIKU_BOOT_TARGETS += efi riscv ;
-
-			HAIKU_BOOT_SDIMAGE_BEGIN = 2 ; # KiB
-
-			HAIKU_BOOT_FLOPPY_IMAGE_SIZE = 1440 ;
-			# offset in floppy image (>= sizeof(haiku_loader))
-			HAIKU_BOOT_ARCHIVE_IMAGE_OFFSET = 192 ; # in kB - unused yet
-			HAIKU_BOOT_LOADER_BASE ?= 0x1000000 ;
-
 		case x86_64 :
-			# x86_64 completely shares the x86 bootloader for MBR.
-			HAIKU_KERNEL_PLATFORM ?= bios_ia32 ;
-			HAIKU_BOOT_TARGETS += bios_ia32 efi pxe_ia32 ;
+			if $(HAIKU_BOOT_32_LIBGCC_x86_64) != "" {
+				# x86_64 completely shares the x86 bootloader for MBR.
+				HAIKU_KERNEL_PLATFORM ?= bios_ia32 ;
+				HAIKU_BOOT_TARGETS = bios_ia32 efi pxe_ia32 ;
+			} else {
+				HAIKU_KERNEL_PLATFORM ?= efi ;
+				HAIKU_BOOT_TARGETS = efi ;
+			}
 
 			HAIKU_BOOT_FLOPPY_IMAGE_SIZE = 2880 ; # in kB
 			# offset in floppy image (>= sizeof(haiku_loader))
@@ -341,7 +357,8 @@ rule KernelArchitectureSetup architecture
 		;
 
 	# C/C++ flags
-	local ccBaseFlags = -ffreestanding -finline -fno-semantic-interposition ;
+	local ccBaseFlags = -ffreestanding -finline -fno-semantic-interposition
+		-Wno-error=unused-local-typedefs ;
 
 	# Since GCC 13, autovectorization generates code which causes problems
 	# in various virtual machines (bare metal is apparently unaffected.)
@@ -357,8 +374,8 @@ rule KernelArchitectureSetup architecture
 	HAIKU_KERNEL_CCFLAGS = $(HAIKU_CCFLAGS_$(architecture)) $(ccBaseFlags) ;
 	HAIKU_KERNEL_C++FLAGS = $(HAIKU_C++FLAGS_$(architecture)) $(c++BaseFlags) ;
 	HAIKU_KERNEL_PIC_CCFLAGS = ;
-	HAIKU_KERNEL_PIC_LINKFLAGS = ;
-	HAIKU_KERNEL_ADDON_LINKFLAGS = ;
+	HAIKU_KERNEL_PIC_LINKFLAGS = -Bsymbolic-functions ;
+	HAIKU_KERNEL_ADDON_LINKFLAGS = -Bsymbolic-functions -Wl,--hash-style=sysv ;
 
 	if $(HAIKU_CC_IS_CLANG_$(architecture)) = 1 {
 		HAIKU_KERNEL_PIC_LINKFLAGS += -z noseparate-code -z norelro --no-rosegment ;
@@ -369,7 +386,7 @@ rule KernelArchitectureSetup architecture
 	HAIKU_BOOT_CCFLAGS = $(HAIKU_CCFLAGS_$(architecture)) $(ccBaseFlags) ;
 	HAIKU_BOOT_C++FLAGS = $(HAIKU_C++FLAGS_$(architecture)) $(c++BaseFlags) ;
 	HAIKU_BOOT_OPTIM = -Os ;
-	HAIKU_BOOT_LINKFLAGS = ;
+	HAIKU_BOOT_LINKFLAGS = UNUSED ;
 	HAIKU_BOOT_LDFLAGS = -Bstatic ;
 
 	# Any special kernel base addresses
@@ -380,13 +397,11 @@ rule KernelArchitectureSetup architecture
 
 	switch $(cpu) {
 		case arm :
-			HAIKU_KERNEL_PIC_LINKFLAGS += -z max-page-size=0x1000 ;
 			HAIKU_KERNEL_ADDON_LINKFLAGS += -z max-page-size=0x1000 ;
 			HAIKU_KERNEL_PIC_CCFLAGS = -fpic ;
 			HAIKU_KERNEL_PIC_LINKFLAGS = -shared ;
 
 		case arm64 :
-			HAIKU_KERNEL_PIC_LINKFLAGS += -z max-page-size=0x1000 ;
 			HAIKU_KERNEL_ADDON_LINKFLAGS += -z max-page-size=0x1000 ;
 			HAIKU_KERNEL_PIC_CCFLAGS = -fpic ;
 			HAIKU_KERNEL_PIC_LINKFLAGS = -shared ;
@@ -539,11 +554,11 @@ rule KernelArchitectureSetup architecture
 					# TODO: coldfire (FireBee)
 				}
 			case riscv :
-				HAIKU_BOOT_$(bootTarget:U)_CCFLAGS += -mcmodel=medany -fno-omit-frame-pointer -fno-plt -fno-pic -fno-semantic-interposition ;
-				HAIKU_BOOT_$(bootTarget:U)_C++FLAGS += -mcmodel=medany -fno-omit-frame-pointer -fno-plt -fno-pic -fno-semantic-interposition ;
+				HAIKU_BOOT_$(bootTarget:U)_CCFLAGS += -mcmodel=medany -fno-omit-frame-pointer -fno-plt -fno-pic ;
+				HAIKU_BOOT_$(bootTarget:U)_C++FLAGS += -mcmodel=medany -fno-omit-frame-pointer -fno-plt -fno-pic ;
 			case openfirmware :
-				HAIKU_BOOT_$(bootTarget:U)_CCFLAGS += -fno-pic -fno-semantic-interposition -Wno-error=main -Wstack-usage=1023 ;
-				HAIKU_BOOT_$(bootTarget:U)_C++FLAGS += -fno-pic -fno-semantic-interposition -Wno-error=main -Wstack-usage=1023 ;
+				HAIKU_BOOT_$(bootTarget:U)_CCFLAGS += -fno-pic -Wno-error=main -Wstack-usage=1023 ;
+				HAIKU_BOOT_$(bootTarget:U)_C++FLAGS += -fno-pic -Wno-error=main -Wstack-usage=1023 ;
 			case * :
 				# all other bootloaders are non-PIC
 				HAIKU_BOOT_$(bootTarget:U)_CCFLAGS += -fno-pic -Wno-error=main ;
@@ -559,6 +574,8 @@ rule KernelArchitectureSetup architecture
 	local level ;
 	for level in $(HAIKU_DEBUG_LEVELS) {
 		local flags = $(HAIKU_DEBUG_FLAGS) [ FDefines DEBUG=$(level) ] ;
+		HAIKU_KERNEL_DEBUG_$(level)_ASFLAGS
+			= $(HAIKU_DEBUG_$(level)_ASFLAGS_$(architecture)) ;
 		HAIKU_KERNEL_DEBUG_$(level)_CCFLAGS
 			= $(HAIKU_DEBUG_$(level)_CCFLAGS_$(architecture)) ;
 		HAIKU_KERNEL_DEBUG_$(level)_C++FLAGS
@@ -662,25 +679,10 @@ rule ArchitectureSetupWarnings architecture
 	EnableWerror src add-ons kernel drivers bus ;
 	EnableWerror src add-ons kernel drivers common ;
 	EnableWerror src add-ons kernel drivers disk ;
-#	EnableWerror src add-ons kernel drivers display ;
+	EnableWerror src add-ons kernel drivers display ;
 	EnableWerror src add-ons kernel drivers dvb ;
-#	EnableWerror src add-ons kernel drivers graphics ;
-	EnableWerror src add-ons kernel drivers graphics 3dfx ;
-	EnableWerror src add-ons kernel drivers graphics ati ;
-	EnableWerror src add-ons kernel drivers graphics et6x00 ;
-	EnableWerror src add-ons kernel drivers graphics framebuffer ;
-	EnableWerror src add-ons kernel drivers graphics intel_i810 ;
-	EnableWerror src add-ons kernel drivers graphics intel_extreme ;
-	EnableWerror src add-ons kernel drivers graphics matrox ;
-	EnableWerror src add-ons kernel drivers graphics neomagic ;
-#	EnableWerror src add-ons kernel drivers graphics nvidia ;
-#	EnableWerror src add-ons kernel drivers graphics radeon ;
-	EnableWerror src add-ons kernel drivers graphics radeon_hd ;
-#	EnableWerror src add-ons kernel drivers graphics s3 ;
-	EnableWerror src add-ons kernel drivers graphics skeleton ;
-	EnableWerror src add-ons kernel drivers graphics vesa ;
-	EnableWerror src add-ons kernel drivers graphics via ;
-	EnableWerror src add-ons kernel drivers graphics virtio ;
+	EnableWerror src add-ons kernel drivers graphics ;
+	EnableWerror src add-ons kernel drivers hyperv ;
 	EnableWerror src add-ons kernel drivers input ;
 	EnableWerror src add-ons kernel drivers joystick ;
 	EnableWerror src add-ons kernel drivers midi ;
@@ -711,6 +713,7 @@ rule ArchitectureSetupWarnings architecture
 	EnableWerror src add-ons kernel drivers network ether usb_asix ;
 	EnableWerror src add-ons kernel drivers network ether usb_davicom ;
 	EnableWerror src add-ons kernel drivers network ether usb_ecm ;
+	EnableWerror src add-ons kernel drivers network ether usb_ncm ;
 	EnableWerror src add-ons kernel drivers network ether usb_rndis ;
 	EnableWerror src add-ons kernel drivers network ether via_rhine ;
 	EnableWerror src add-ons kernel drivers network ether virtio ;
@@ -720,11 +723,11 @@ rule ArchitectureSetupWarnings architecture
 	EnableWerror src add-ons kernel drivers network wwan ;
 	EnableWerror src add-ons kernel drivers ports ;
 	EnableWerror src add-ons kernel drivers power ;
-#	EnableWerror src add-ons kernel drivers pty ;
-#	EnableWerror src add-ons kernel drivers sensor ;
-#	EnableWerror src add-ons kernel drivers timer ;
+	EnableWerror src add-ons kernel drivers pty ;
+	EnableWerror src add-ons kernel drivers sensor ;
+	EnableWerror src add-ons kernel drivers timer ;
 	EnableWerror src add-ons kernel drivers video ;
-#	EnableWerror src add-ons kernel drivers wmi ;
+	EnableWerror src add-ons kernel drivers wmi ;
 	EnableWerror src add-ons kernel file_systems bfs ;
 	EnableWerror src add-ons kernel file_systems cdda ;
 	EnableWerror src add-ons kernel file_systems ext2 ;
@@ -732,7 +735,7 @@ rule ArchitectureSetupWarnings architecture
 	EnableWerror src add-ons kernel file_systems googlefs ;
 	EnableWerror src add-ons kernel file_systems iso9660 ;
 	EnableWerror src add-ons kernel file_systems layers ;
-#	EnableWerror src add-ons kernel file_systems netfs ;
+	EnableWerror src add-ons kernel file_systems netfs ;
 	EnableWerror src add-ons kernel file_systems nfs ;
 	EnableWerror src add-ons kernel file_systems nfs4 ;
 #	EnableWerror src add-ons kernel file_systems ntfs ;

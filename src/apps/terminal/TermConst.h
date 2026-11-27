@@ -141,15 +141,17 @@ static const char* const PREF_ROWS = "Rows";
 static const char* const PREF_TEXT_ENCODING = "Text encoding";
 
 static const char* const PREF_BLINK_CURSOR = "Blinking cursor";
-static const char* const PREF_ALLOW_BOLD = "Allow bold text";
 static const char* const PREF_USE_OPTION_AS_META =
 	"Use left Option as Meta key";
 static const char* const PREF_WARN_ON_EXIT = "Warn on exit";
 static const char* const PREF_CURSOR_STYLE = "Cursor style";
-static const char* const PREF_EMULATE_BOLD = "Emulate bold";
+static const char* const PREF_BOLD_STYLE = "Bold text style";
+static const char* const PREF_BRIGHTEN_ANSI = "Bold attribute brightens ANSI colors";
 
 static const char* const PREF_TAB_TITLE = "Tab title";
 static const char* const PREF_WINDOW_TITLE = "Window title";
+
+static const char* const PREF_ALTERNATE_SCROLL = "Alternate screen scroll";
 
 // shared strings
 extern const char* const kToolTipSetTabTitlePlaceholders;
@@ -159,6 +161,17 @@ extern const char* const kToolTipCommonTitlePlaceholders;
 extern const char* const kShellEscapeCharacters;
 extern const char* const kDefaultAdditionalWordCharacters;
 extern const char* const kURLAdditionalWordCharacters;
+
+struct UTF8Char;
+extern const UTF8Char kNonCharacter;
+
+
+// Bold text style
+enum {
+	BOLD_USE_FONT,
+	BOLD_SIMULATED,
+	BOLD_NONE
+};
 
 
 // Cursor style
@@ -219,12 +232,44 @@ enum {
 #define RESERVE			0x0080
 #define DUMPCR			0x0040
 #define UNDERSET		0x0020
+#define OVERLINE		0x0010
+#define HIDDEN			0x0008
 #define FORECOLOR		0xFF0000
 #define BACKCOLOR		0xFF000000
-#define CHAR_ATTRIBUTES	0xFFFF7720
+#define CHAR_ATTRIBUTES	0xFFFF7738
 
 #define FORECOLORED(x) ((x) << 16)
 #define BACKCOLORED(x) ((x) << 24)
 
+// Mouse events to report
+enum MouseMode {
+	MOUSE_MODE_OFF,
+	MOUSE_MODE_X10,
+	MOUSE_MODE_NORMAL,
+	MOUSE_MODE_BUTTON_EVENT,
+	MOUSE_MODE_ANY_EVENT
+};
+
+// Mouse encoding protocols
+enum MouseProtocol {
+	MOUSE_PROTOCOL_X10,
+	MOUSE_PROTOCOL_UTF8,
+	MOUSE_PROTOCOL_SGR
+};
+
+// Wheel up/down "buttons"
+enum {
+	MOUSE_WHEEL_UP = 1,
+	MOUSE_WHEEL_DOWN = 2
+};
+
+#define MODE_INTERPRET_META_KEY		0x0001
+#define MODE_META_KEY_SENDS_ESCAPE	0x0002
+#define MODE_BRACKETED_PASTE		0x0004
+#define MODE_CURSOR_BLINKING		0x0008
+#define MODE_CURSOR_HIDDEN			0x0010
+#define MODE_APPLICATION_CURSOR_KEYS	0x0020
+#define MODE_LINEFEED_NEWLINE		0x0040
+#define MODE_ALTERNATE_SCROLL		0x0080
 
 #endif	// TERMCONST_H_INCLUDED

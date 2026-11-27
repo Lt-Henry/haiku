@@ -33,7 +33,7 @@
 #include "cache_support.h"
 #include "dma_resources.h"
 #include "io_requests.h"
-#include "IOSchedulerSimple.h"
+#include "IORequest.h"
 
 
 //#define TRACE_RAM_DISK
@@ -242,7 +242,7 @@ struct RawDevice : Device, DoublyLinkedListLinkImpl<RawDevice> {
 		fFilePath(NULL),
 		fCache(NULL),
 		fDMAResource(NULL),
-		fIOScheduler(NULL)
+		fMaxOperationLength(B_PAGE_SIZE * 128)
 	{
 	}
 
@@ -353,28 +353,11 @@ struct RawDevice : Device, DoublyLinkedListLinkImpl<RawDevice> {
 			return error;
 		}
 
-		fIOScheduler = new(std::nothrow) IOSchedulerSimple(fDMAResource);
-		if (fIOScheduler == NULL) {
-			Unprepare();
-			return B_NO_MEMORY;
-		}
-
-		error = fIOScheduler->Init("ram disk device scheduler");
-		if (error != B_OK) {
-			Unprepare();
-			return error;
-		}
-
-		fIOScheduler->SetCallback(&_DoIOEntry, this);
-
 		return B_OK;
 	}
 
 	void Unprepare()
 	{
-		delete fIOScheduler;
-		fIOScheduler = NULL;
-
 		delete fDMAResource;
 		fDMAResource = NULL;
 
@@ -575,41 +558,80 @@ struct RawDevice : Device, DoublyLinkedListLinkImpl<RawDevice> {
 			TRACE("ramdisk: trim %" B_PRIu64 " bytes from %" B_PRIu64 "\n",
 				length, offset);
 
-			ASSERT(offset % B_PAGE_SIZE == 0);
-			ASSERT(length % B_PAGE_SIZE == 0);
-
-			BStackOrHeapArray<vm_page*, 16> pages(length / B_PAGE_SIZE);
-			if (!pages.IsValid()) {
-				result = B_NO_MEMORY;
-				break;
-			}
-
-			cache_get_pages(fCache, (off_t)offset, (off_t)length, false, pages);
-
 			AutoLocker<VMCache> locker(fCache);
-			uint64 j;
-			for (j = 0; j < length / B_PAGE_SIZE; j++) {
-				// If we run out of pages (some may already be trimmed), stop.
-				if (pages[j] == NULL)
-					break;
+			for (uint64 j = 0; j < length / B_PAGE_SIZE; j++) {
+				vm_page* page = fCache->LookupPage(offset + j * B_PAGE_SIZE);
+				if (page == NULL || page->busy)
+					continue;
 
 				TRACE("free range %" B_PRIu32 ", page %" B_PRIu64 ", offset %"
 					B_PRIu64 "\n", i, j, offset);
-				if (pages[j]->Cache())
-					fCache->RemovePage(pages[j]);
-				vm_page_free(NULL, pages[j]);
+				DEBUG_PAGE_ACCESS_START(page);
+
+				fCache->RemovePage(page);
+				vm_page_free(NULL, page);
 				trimmedSize += B_PAGE_SIZE;
 			}
 		}
 
 		trimData->trimmed_size = trimmedSize;
-
 		return result;
 	}
 
 	status_t DoIO(IORequest* request)
 	{
-		return fIOScheduler->ScheduleRequest(request);
+		IOOperation *operation = new(std::nothrow) IOOperation;
+		if (operation == NULL)
+			return B_NO_MEMORY;
+
+		while (!request->IsFinished() || request->RemainingBytes() > 0) {
+			IOBuffer *buffer = request->Buffer();
+
+			if (!buffer->IsMemoryLocked() && buffer->IsVirtual()) {
+				status_t status = buffer->LockMemory(request->TeamID(),
+					request->IsWrite());
+
+				if (status != B_OK) {
+					request->SetStatusAndNotify(status);
+					delete operation;
+					return status;
+				}
+			}
+
+			status_t status = fDMAResource->TranslateNext(request,
+				operation, fMaxOperationLength);
+
+			if (status != B_OK) {
+				delete operation;
+				return status;
+			}
+
+			status = _DoIO(operation);
+			if (status != B_OK) {
+				delete operation;
+				return status;
+			}
+
+			while (!operation->Finish()) {
+				operation->SetStatus(operation->Status(), 0);
+				status = _DoIO(operation);
+
+				if (status != B_OK) {
+					delete operation;
+					return status;
+				}
+			}
+
+			request->OperationFinished(operation);
+			fDMAResource->RecycleBuffer(operation->Buffer());
+			operation->SetParent(NULL);
+		}
+
+		request->NotifyFinished();
+
+		delete operation;
+
+		return B_OK;
 	}
 
 	virtual status_t PublishDevice()
@@ -619,11 +641,6 @@ struct RawDevice : Device, DoublyLinkedListLinkImpl<RawDevice> {
 	}
 
 private:
-	static status_t _DoIOEntry(void* data, IOOperation* operation)
-	{
-		return ((RawDevice*)data)->_DoIO(operation);
-	}
-
 	status_t _DoIO(IOOperation* operation)
 	{
 		off_t offset = operation->Offset();
@@ -664,11 +681,11 @@ private:
 			error == B_OK);
 
 		if (error != B_OK) {
-			fIOScheduler->OperationCompleted(operation, error, 0);
+			operation->SetStatus(error, 0);
 			return error;
 		}
 
-		fIOScheduler->OperationCompleted(operation, B_OK, operation->Length());
+		operation->SetStatus(B_OK, operation->Length());
 		return B_OK;
 	}
 
@@ -856,7 +873,7 @@ private:
 	char*			fFilePath;
 	VMCache*		fCache;
 	DMAResource*	fDMAResource;
-	IOScheduler*	fIOScheduler;
+	generic_size_t 	fMaxOperationLength;
 };
 
 
@@ -1389,8 +1406,9 @@ ram_disk_raw_device_control(void* _cookie, uint32 op, void* buffer,
 				return B_BAD_ADDRESS;
 
 			if (iconData.icon_size >= (int32)sizeof(kRamdiskIcon)) {
-				if (user_memcpy(iconData.icon_data, kRamdiskIcon,
-						sizeof(kRamdiskIcon)) != B_OK)
+				if (!IS_USER_ADDRESS(iconData.icon_data)
+						|| user_memcpy(iconData.icon_data, kRamdiskIcon,
+							sizeof(kRamdiskIcon)) != B_OK)
 					return B_BAD_ADDRESS;
 			}
 

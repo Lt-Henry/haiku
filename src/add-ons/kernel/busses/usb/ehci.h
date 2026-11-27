@@ -149,6 +149,10 @@ static int32						FinishIsochronousThread(void *data);
 										ehci_qtd **dataDescriptor,
 										bool *directionIn,
 										bool prepareKernelAccess);
+		status_t					_FillQueueWithPhysicalData(Transfer *transfer,
+										ehci_qh *queueHead,
+										ehci_qtd **dataDescriptor,
+										bool *directionIn);
 
 		bool						LockIsochronous();
 		void						UnlockIsochronous();
@@ -161,8 +165,9 @@ static int32						FinishIsochronousThread(void *data);
 										ehci_qtd **firstDescriptor,
 										ehci_qtd **lastDescriptor,
 										ehci_qtd *strayDescriptor,
-										size_t bufferSizeToAllocate,
-										uint8 pid);
+										uint8 pid,
+										size_t buffersLength,
+										int32 descriptorsCount = -1);
 		ehci_itd*					CreateItdDescriptor();
 		ehci_sitd*					CreateSitdDescriptor();
 
@@ -257,6 +262,7 @@ inline	uint32						ReadCapReg32(uint32 reg);
 		thread_id					fInterruptPollThread;
 		uint32						fIRQ;
 		bool						fUseMSI;
+		spinlock					fInterruptLock;
 };
 
 

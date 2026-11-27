@@ -89,8 +89,6 @@ smp_start_kernel(void)
 	preloaded_elf32_image *image = static_cast<preloaded_elf32_image *>(
 		gKernelArgs.kernel_image.Pointer());
 
-	// Important.  Make sure supervisor threads can fault on read only pages...
-	asm("movl %%eax, %%cr0" : : "a" ((1 << 31) | (1 << 16) | (1 << 5) | 1));
 	asm("cld");
 	asm("fninit");
 
@@ -98,12 +96,7 @@ smp_start_kernel(void)
 	set_debug_idt();
 
 	// Set up gdt
-	struct gdt_idt_descr gdt_descr;
-	gdt_descr.limit = sizeof(gBootGDT) - 1;
-	gdt_descr.base = gBootGDT;
-
-	asm("lgdt	%0;"
-		: : "m" (gdt_descr));
+	asm("lgdt	%0;" : : "m" (gBootGDTDescriptor));
 
 	asm("pushl  %0; "					// push the cpu number
 		"pushl 	%1;	"					// kernel args
@@ -147,6 +140,9 @@ platform_start_kernel(void)
 	smp_boot_other_cpus(smp_start_kernel);
 
 	dprintf("kernel entry at %x\n", image->elf_header.e_entry);
+
+	// Set up gdt
+	asm("lgdt	%0;" : : "m" (gBootGDTDescriptor));
 
 	asm("movl	%0, %%eax;	"			// move stack out of way
 		"movl	%%eax, %%esp; "

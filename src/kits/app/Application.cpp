@@ -40,6 +40,7 @@
 #include <AutoLocker.h>
 #include <BitmapPrivate.h>
 #include <DraggerPrivate.h>
+#include <InterfacePrivate.h>
 #include <LaunchDaemonDefs.h>
 #include <LaunchRoster.h>
 #include <LooperList.h>
@@ -691,20 +692,9 @@ BApplication::MessageReceived(BMessage* message)
 			be_roster->ActivateApp(Team());
 			break;
 
-		case kMsgAppServerRestarted:
+		case kMsgAppServerStarted:
 			_ReconnectToServer();
 			break;
-
-		case kMsgDeleteServerMemoryArea:
-		{
-			int32 serverArea;
-			if (message->FindInt32("server area", &serverArea) == B_OK) {
-				// The link is not used, but we currently borrow its lock
-				BPrivate::AppServerLink link;
-				fServerAllocator->RemoveArea(serverArea);
-			}
-			break;
-		}
 
 		default:
 			BLooper::MessageReceived(message);
@@ -1097,22 +1087,14 @@ BApplication::DispatchMessage(BMessage* message, BHandler* handler)
 			break;
 		}
 
-		case B_COLORS_UPDATED:
-		{
-			AutoLocker<BLooperList> listLock(gLooperList);
-			if (!listLock.IsLocked())
-				break;
-
-			BWindow* window = NULL;
-			uint32 count = gLooperList.CountLoopers();
-			for (uint32 index = 0; index < count; ++index) {
-				window = dynamic_cast<BWindow*>(gLooperList.LooperAt(index));
-				if (window == NULL || (window != NULL && window->fOffscreen))
-					continue;
-				window->PostMessage(message);
-			}
+		case B_MENU_INFO_UPDATED:
+			_init_menu_info_();
+			_MessageAllWindows(message);
 			break;
-		}
+
+		case B_COLORS_UPDATED:
+			_MessageAllWindows(message);
+			break;
 
 		case _SHOW_DRAG_HANDLES_:
 		{
@@ -1465,6 +1447,12 @@ BApplication::_ConnectToServer()
 void
 BApplication::_ReconnectToServer()
 {
+	team_info dummy;
+	if (get_team_info(fServerLink->TargetTeam(), &dummy) == B_OK) {
+		// We're already connected to the correct server.
+		return;
+	}
+
 	// the sender port belongs to the app_server
 	delete_port(fServerLink->ReceiverPort());
 
@@ -1481,7 +1469,7 @@ BApplication::_ReconnectToServer()
 		if (window == NULL)
 			continue;
 		BMessenger windowMessenger(window);
-		windowMessenger.SendMessage(kMsgAppServerRestarted);
+		windowMessenger.SendMessage(kMsgAppServerStarted);
 	}
 
 	reconnect_bitmaps_to_app_server();
@@ -1670,6 +1658,24 @@ BApplication::_WindowAt(uint32 index, bool includeMenus) const
 	}
 
 	return NULL;
+}
+
+
+void
+BApplication::_MessageAllWindows(BMessage* message) const
+{
+	AutoLocker<BLooperList> listLock(gLooperList);
+	if (!listLock.IsLocked())
+		return;
+
+	BWindow* window = NULL;
+	uint32 count = gLooperList.CountLoopers();
+	for (uint32 index = 0; index < count; ++index) {
+		window = dynamic_cast<BWindow*>(gLooperList.LooperAt(index));
+		if (window == NULL || (window != NULL && window->fOffscreen))
+			continue;
+		window->PostMessage(message);
+	}
 }
 
 

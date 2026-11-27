@@ -5,7 +5,6 @@
 #ifndef _OS_H
 #define _OS_H
 
-/** Kernel specific structures and functions */
 
 #include <limits.h>
 #include <stdarg.h>
@@ -393,6 +392,7 @@ extern status_t		convert_to_pthread(thread_id thread, pthread_t *_thread);
 extern unsigned long real_time_clock(void);
 extern void			set_real_time_clock(unsigned long secsSinceJan1st1970);
 extern bigtime_t	real_time_clock_usecs(void);
+extern void			set_real_time_clock_usecs(bigtime_t usecsSinceJan1st1970);
 extern bigtime_t	system_time(void);
 						/* time since booting in microseconds */
 extern nanotime_t	system_time_nsecs(void);
@@ -412,21 +412,12 @@ extern bigtime_t	set_alarm(bigtime_t when, uint32 flags);
 /* Debugger */
 
 extern void			debugger(const char *message);
-
-/*
-   calling this function with a non-zero value will cause your thread
-   to receive signals for any exceptional conditions that occur (i.e.
-   you'll get SIGSEGV for data access exceptions, SIGFPE for floating
-   point errors, SIGILL for illegal instructions, etc).
-
-   to re-enable the default debugger pass a zero.
-*/
 extern int			disable_debugger(int state);
 
 /* TODO: Remove. Temporary debug helper. */
-extern void			debug_printf(const char *format, ...)
+extern int			debug_printf(const char *format, ...)
 						__attribute__ ((format (__printf__, 1, 2)));
-extern void			debug_vprintf(const char *format, va_list args);
+extern int			debug_vprintf(const char *format, va_list args);
 extern void			ktrace_printf(const char *format, ...)
 						__attribute__ ((format (__printf__, 1, 2)));
 extern void			ktrace_vprintf(const char *format, va_list args);
@@ -518,7 +509,21 @@ enum cpu_vendor {
 	B_CPU_VENDOR_NEC,
 	B_CPU_VENDOR_HYGON,
 	B_CPU_VENDOR_SUN,
-	B_CPU_VENDOR_FUJITSU
+	B_CPU_VENDOR_FUJITSU,
+	B_CPU_VENDOR_ARM,
+	B_CPU_VENDOR_BROADCOM,
+	B_CPU_VENDOR_CAVIUM,
+	B_CPU_VENDOR_DEC,
+	B_CPU_VENDOR_HISILICON,
+	B_CPU_VENDOR_INFINEON,
+	B_CPU_VENDOR_FREESCALE,
+	B_CPU_VENDOR_NVIDIA,
+	B_CPU_VENDOR_APM,
+	B_CPU_VENDOR_QUALCOMM,
+	B_CPU_VENDOR_MARVELL,
+	B_CPU_VENDOR_APPLE,
+	B_CPU_VENDOR_AMPERE,
+	B_CPU_VENDOR_MICROSOFT
 };
 
 typedef struct {

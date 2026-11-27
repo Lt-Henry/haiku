@@ -260,18 +260,14 @@ uselocale(locale_t newLoc)
 }
 
 
-extern "C" locale_t
-__current_locale_t()
+extern "C" const char*
+getlocalename_l(int category, locale_t l)
 {
-	locale_t locale = (locale_t)GetCurrentLocaleInfo();
-	if (locale == NULL) {
-		static LocaleBackendData global_locale_t;
-		global_locale_t.backend = gGlobalLocaleBackend;
-		global_locale_t.databridge = &gGlobalLocaleDataBridge;
-		return (locale_t)&global_locale_t;
-	}
-
-	return locale;
+	LocaleBackend* backend = (l == LC_GLOBAL_LOCALE) ?
+		gGlobalLocaleBackend : (LocaleBackend*)((LocaleBackendData*)l)->backend;
+	if (backend == NULL)
+		return "POSIX";
+	return backend->SetLocale(category, NULL);
 }
 
 
@@ -282,4 +278,24 @@ __posix_locale_t()
 	posix_locale_t.backend = NULL;
 	posix_locale_t.databridge = NULL;
 	return &posix_locale_t;
+}
+
+
+extern "C" locale_t
+__current_locale_t()
+{
+	locale_t locale = (locale_t)GetCurrentLocaleInfo();
+	if (locale == NULL) {
+		// If we're called during initialization, the globals might not have
+		// been set up yet.
+		if (gGlobalLocaleDataBridge.posixLanginfo == NULL)
+			return __posix_locale_t();
+
+		static LocaleBackendData global_locale_t;
+		global_locale_t.backend = gGlobalLocaleBackend;
+		global_locale_t.databridge = &gGlobalLocaleDataBridge;
+		return (locale_t)&global_locale_t;
+	}
+
+	return locale;
 }

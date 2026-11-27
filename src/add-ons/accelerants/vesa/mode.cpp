@@ -231,8 +231,13 @@ vesa_set_display_mode(display_mode* _mode)
 			if (gInfo->current_mode == i)
 				return B_OK;
 			status_t result = ioctl(gInfo->device, VESA_SET_DISPLAY_MODE, &i, sizeof(i));
-			if (result == B_OK)
+			if (result == B_OK) {
+				delete_area(gInfo->frame_buffer_area);
+				gInfo->frame_buffer_area = -1;
+				gInfo->frame_buffer = NULL;
+
 				gInfo->current_mode = i;
+			}
 			return result;
 		}
 	}
@@ -241,6 +246,10 @@ vesa_set_display_mode(display_mode* _mode)
 	status_t result = ioctl(gInfo->device, VESA_SET_CUSTOM_DISPLAY_MODE,
 		&mode, sizeof(display_mode));
 	if (result == B_OK) {
+		delete_area(gInfo->frame_buffer_area);
+		gInfo->frame_buffer_area = -1;
+		gInfo->frame_buffer = NULL;
+
 		gInfo->current_mode = -1;
 	}
 
@@ -274,12 +283,68 @@ vesa_get_edid_info(void* info, size_t size, uint32* _version)
 
 
 status_t
+vesa_set_brightness(float brightness)
+{
+	TRACE(("vesa_set_brightness()\n"));
+
+	if (brightness < 0 || brightness > 1)
+		return B_BAD_VALUE;
+
+	if ((vesa_dpms_capabilities() & B_DPMS_REDUCED_ON) == 0)
+		return B_ENTRY_NOT_FOUND;
+
+	uint32 mode = vesa_dpms_mode();
+	uint32 newMode = mode & ~B_DPMS_REDUCED_ON;
+	if (brightness <= 0.5)
+		newMode |= B_DPMS_REDUCED_ON;
+
+	if (newMode != mode)
+		vesa_set_dpms_mode(newMode);
+
+	return B_OK;
+}
+
+
+status_t
+vesa_get_brightness(float* brightness)
+{
+	TRACE(("vesa_get_brightness()\n"));
+
+	if (brightness == NULL)
+		return B_BAD_VALUE;
+
+	if ((vesa_dpms_capabilities() & B_DPMS_REDUCED_ON) == 0)
+		return B_ENTRY_NOT_FOUND;
+
+	if (vesa_dpms_mode() & B_DPMS_REDUCED_ON) {
+		*brightness = 0.5;
+		return B_OK;
+	} else {
+		*brightness = 1;
+		return B_OK;
+	}
+}
+
+
+status_t
 vesa_get_frame_buffer_config(frame_buffer_config* config)
 {
 	TRACE(("vesa_get_frame_buffer_config()\n"));
 
-	config->frame_buffer = gInfo->shared_info->frame_buffer;
-	config->frame_buffer_dma = gInfo->shared_info->physical_frame_buffer;
+	if (gInfo->frame_buffer == NULL) {
+		// Clone the current framebuffer.
+		area_info info;
+		status_t status = ioctl(gInfo->device, VESA_CLONE_FRAME_BUFFER,
+			&info, sizeof(info));
+		if (status != B_OK)
+			return status;
+
+		gInfo->frame_buffer_area = info.area;
+		gInfo->frame_buffer = info.address;
+	}
+
+	config->frame_buffer = gInfo->frame_buffer;
+	config->frame_buffer_dma = NULL;
 	config->bytes_per_row = gInfo->shared_info->bytes_per_row;
 
 	return B_OK;

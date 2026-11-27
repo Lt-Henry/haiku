@@ -150,8 +150,7 @@ TReplicantTray::TReplicantTray(TBarView* barView)
 		= std::max(gMinReplicantHeight, (float)static_cast<TBarApp*>(be_app)->TeamIconSize());
 	// but not bigger than TabHeight which depends on be_bold_font
 	// TODO this should only apply to mini-mode but we set it once here for all
-	fMaxReplicantHeight = std::min(fMaxReplicantHeight,
-		fBarView->TabHeight() - 4);
+	fMaxReplicantHeight = std::min(fMaxReplicantHeight, fBarView->TabHeight() - 1);
 	// TODO: depends on window size... (so use something like
 	// max(129, height * 3), and restrict the minimum window width for it)
 	// Use bold font because it depends on the window tab height.
@@ -164,7 +163,7 @@ TReplicantTray::TReplicantTray(TBarView* barView)
 	}
 
 	// Create the time view
-	fTime = new TTimeView(fMinimumTrayWidth, fMaxReplicantHeight - 1, fBarView);
+	fTime = new TTimeView(fMinimumTrayWidth, fMaxReplicantHeight + 1, fBarView);
 }
 
 
@@ -267,7 +266,7 @@ TReplicantTray::GetPreferredSize(float* preferredWidth, float* preferredHeight)
 		// if mini-mode set to tab height
 		// else if horizontal mode set to team menu item height
 		if (fBarView->MiniState())
-			height = std::max(fMinTrayHeight, fBarView->TabHeight());
+			height = std::max(fMinTrayHeight, fBarView->TabHeight() - 1);
 		else
 			height = fBarView->TeamMenuItemHeight();
 	}
@@ -1180,7 +1179,7 @@ TReplicantTray::LocationForReplicant(int32 index, float replicantWidth)
 		if (fBarView->Vertical() && !fBarView->Left())
 			loc.x += gDragWidth; // move past dragger on left
 
-		loc.y = floorf((fBarView->TabHeight() - fMaxReplicantHeight) / 2) - 1;
+		loc.y = floorf((fBarView->TabHeight() - 1 - fMaxReplicantHeight) / 2);
 	} else {
 		loc.x -= 2; // keeps everything lined up nicely
 		const int32 iconSize = static_cast<TBarApp*>(be_app)->TeamIconSize();
@@ -1204,11 +1203,14 @@ TReplicantTray::LocationForReplicant(int32 index, float replicantWidth)
 		// try to find free space in every row
 		for (int32 row = 0; ; loc.y += fMaxReplicantHeight + sIconGap, row++) {
 			// determine free space in this row
+			bool emptyRow = true;
 			BRect rowRect(loc.x, loc.y,
 				loc.x + Bounds().Width() - fTrayPadding,
 				loc.y + fMaxReplicantHeight);
-			if (row == 0 && !fTime->IsHidden(fTime))
+			if (row == 0 && !fTime->IsHidden(fTime)) {
 				rowRect.right -= fClockMargin + fTime->Frame().Width();
+				emptyRow = false;
+			}
 
 			BRect replicantRect = rowRect;
 			for (int32 i = 0; i < index; i++) {
@@ -1217,6 +1219,7 @@ TReplicantTray::LocationForReplicant(int32 index, float replicantWidth)
 				if (view == NULL || view->Frame().top != rowRect.top)
 					continue;
 
+				emptyRow = false;
 				// push this replicant placement past the last one
 				replicantRect.left = view->Frame().right + sIconGap + 1;
 			}
@@ -1228,6 +1231,17 @@ TReplicantTray::LocationForReplicant(int32 index, float replicantWidth)
 			// check if replicant fits in this row
 			if (replicantRect.right < rowRect.right) {
 				// replicant fits in this row
+				loc = replicantRect.LeftTop();
+				break;
+			}
+
+			if (emptyRow) {
+				// this row is EMPTY: if it doesn't fit there it won't fit anywhere!
+				// Probably due to error in advertised max replicant width.
+				// Anyway, don't loop forever looking for a row which will NEVER
+				// be large enough.
+				// Even if it means this replicant will be clipped, it's better than
+				// a frozen Deskbar eating CPU like crazy in search for unobtainium.
 				loc = replicantRect.LeftTop();
 				break;
 			}
@@ -1561,7 +1575,7 @@ TDragRegion::SwitchModeForRegion(BPoint where, BRegion region,
 		return true;
 	}
 
-	fBarView->ChangeState(newState, newVertical, newLeft, newTop, true);
+	fBarView->ChangeState(newVertical, newLeft, newTop, newState, true);
 
 	return true;
 }

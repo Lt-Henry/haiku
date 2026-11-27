@@ -10,8 +10,9 @@
 
 
 #include <setjmp.h>
+#include <util/DoublyLinkedList.h>
 
-#include <int.h>
+#include <interrupts.h>
 #include <smp.h>
 #include <timer.h>
 #include <arch/cpu.h>
@@ -50,9 +51,11 @@ typedef struct cpu_topology_node {
 
 typedef struct CACHE_LINE_ALIGN cpu_ent {
 	int				cpu_num;
+	bool			disabled;
 
-	// thread.c: used to force a reschedule at quantum expiration time
+	// used to force a reschedule at quantum expiration time
 	bool			preempted;
+	uint8			reschedule_disabled;
 	timer			quantum_timer;
 
 	// keeping track of CPU activity
@@ -63,6 +66,7 @@ typedef struct CACHE_LINE_ALIGN cpu_ent {
 	bigtime_t		last_kernel_time;
 	bigtime_t		last_user_time;
 
+	struct smp_msg* cpu_msg;
 	int32			ici_counter;
 
 	// used in the kernel debugger
@@ -72,15 +76,14 @@ typedef struct CACHE_LINE_ALIGN cpu_ent {
 
 	Thread*			running_thread;
 	Thread*			previous_thread;
-	bool			invoke_scheduler;
-	bool			disabled;
+	int32			invoke_scheduler;
 
 	// CPU topology information
 	int				topology_id[CPU_TOPOLOGY_LEVELS];
 	int				cache_id[CPU_MAX_CACHE_LEVEL];
 
 	// IRQs assigned to this CPU
-	struct list		irqs;
+	DoublyLinkedList<irq_assignment, DoublyLinkedListCLink<irq_assignment> > irqs;
 	spinlock		irqs_lock;
 
 	// arch-specific stuff

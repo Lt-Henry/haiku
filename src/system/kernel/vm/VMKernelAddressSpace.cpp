@@ -92,7 +92,7 @@ VMKernelAddressSpace::InitObject()
 		return B_NO_MEMORY;
 
 	fRangesObjectCache = create_object_cache("kernel address ranges",
-		sizeof(Range), 0);
+		sizeof(Range), CACHE_NO_DEPOT);
 	if (fRangesObjectCache == NULL)
 		return B_NO_MEMORY;
 
@@ -177,7 +177,7 @@ VMKernelAddressSpace::FindClosestArea(addr_t address, bool less) const
 {
 	Range* range = fRangeTree.FindClosest(address, less);
 	while (range != NULL && range->type != Range::RANGE_AREA)
-		range = fRangeTree.Next(range);
+		range = less ? fRangeTree.Previous(range) : fRangeTree.Next(range);
 
 	return range != NULL ? range->area : NULL;
 }
@@ -196,6 +196,7 @@ VMKernelAddressSpace::InsertArea(VMArea* _area, size_t size,
 	TRACE("VMKernelAddressSpace::InsertArea(%p, %" B_PRIu32 ", %#" B_PRIxSIZE
 		", %p \"%s\")\n", addressRestrictions->address,
 		addressRestrictions->address_specification, size, _area, _area->name);
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 
 	VMKernelArea* area = static_cast<VMKernelArea*>(_area);
 
@@ -227,6 +228,7 @@ void
 VMKernelAddressSpace::RemoveArea(VMArea* _area, uint32 allocationFlags)
 {
 	TRACE("VMKernelAddressSpace::RemoveArea(%p)\n", _area);
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 
 	VMKernelArea* area = static_cast<VMKernelArea*>(_area);
 
@@ -267,6 +269,7 @@ VMKernelAddressSpace::ResizeArea(VMArea* _area, size_t newSize,
 {
 	TRACE("VMKernelAddressSpace::ResizeArea(%p, %#" B_PRIxSIZE ")\n", _area,
 		newSize);
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 
 	VMKernelArea* area = static_cast<VMKernelArea*>(_area);
 	Range* range = area->Range();
@@ -335,6 +338,7 @@ VMKernelAddressSpace::ShrinkAreaHead(VMArea* _area, size_t newSize,
 {
 	TRACE("VMKernelAddressSpace::ShrinkAreaHead(%p, %#" B_PRIxSIZE ")\n", _area,
 		newSize);
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 
 	VMKernelArea* area = static_cast<VMKernelArea*>(_area);
 	Range* range = area->Range();
@@ -392,6 +396,7 @@ VMKernelAddressSpace::ReserveAddressRange(size_t size,
 	TRACE("VMKernelAddressSpace::ReserveAddressRange(%p, %" B_PRIu32 ", %#"
 		B_PRIxSIZE ", %#" B_PRIx32 ")\n", addressRestrictions->address,
 		addressRestrictions->address_specification, size, flags);
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 
 	// Don't allow range reservations, if the address space is about to be
 	// deleted.
@@ -423,6 +428,7 @@ VMKernelAddressSpace::UnreserveAddressRange(addr_t address, size_t size,
 {
 	TRACE("VMKernelAddressSpace::UnreserveAddressRange(%#" B_PRIxADDR ", %#"
 		B_PRIxSIZE ")\n", address, size);
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
 
 	// Don't allow range unreservations, if the address space is about to be
 	// deleted. UnreserveAllAddressRanges() must be used.
@@ -456,6 +462,8 @@ VMKernelAddressSpace::UnreserveAddressRange(addr_t address, size_t size,
 void
 VMKernelAddressSpace::UnreserveAllAddressRanges(uint32 allocationFlags)
 {
+	ASSERT_WRITE_LOCKED_RW_LOCK(&fLock);
+
 	Range* range = fRangeList.Head();
 	while (range != NULL) {
 		// Get the next range for the iteration -- we need to skip free ranges,
@@ -596,8 +604,10 @@ VMKernelAddressSpace::_AllocateRange(
 	switch (addressRestrictions->address_specification) {
 		case B_EXACT_ADDRESS:
 		{
-			if (address % B_PAGE_SIZE != 0)
+			if ((address % B_PAGE_SIZE) != 0) {
+				KDEBUG_ONLY(panic("address not page-aligned: %" B_PRIxADDR, address));
 				return B_BAD_VALUE;
+			}
 			break;
 		}
 
@@ -618,6 +628,7 @@ VMKernelAddressSpace::_AllocateRange(
 			break;
 
 		default:
+			ASSERT(false);
 			return B_BAD_VALUE;
 	}
 

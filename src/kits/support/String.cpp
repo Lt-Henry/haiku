@@ -14,6 +14,10 @@
 
 /*! String class supporting common string operations. */
 
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
+
 #include <String.h>
 
 #include <ctype.h>
@@ -1167,41 +1171,21 @@ BString::FindFirst(const char* string, int32 fromOffset) const
 int32
 BString::FindFirst(char c) const
 {
-	const char* start = String();
-	const char* end = String() + Length();
-
-	// Scans the string until we found the
-	// character, or we reach the string's start
-	while (start != end && *start != c) {
-		start++;
-	}
-
-	if (start == end)
-		return B_ERROR;
-
-	return start - String();
+	return FindFirst(c, 0);
 }
 
 
 int32
 BString::FindFirst(char c, int32 fromOffset) const
 {
-	if (fromOffset < 0)
+	if (fromOffset < 0 || fromOffset >= Length())
 		return B_ERROR;
 
-	const char* start = String() + min_clamp0(fromOffset, Length());
-	const char* end = String() + Length();
-
-	// Scans the string until we found the
-	// character, or we reach the string's start
-	while (start < end && *start != c) {
-		start++;
-	}
-
-	if (start >= end)
+	const void* start = memchr(String() + fromOffset, c, Length() - fromOffset);
+	if (start == NULL)
 		return B_ERROR;
 
-	return start - String();
+	return (const char*)start - String();
 }
 
 
@@ -2278,6 +2262,9 @@ BString::BString(char* privateData, PrivateDataTag tag)
 status_t
 BString::_MakeWritable()
 {
+	if (fPrivateData == NULL)
+		return B_NO_INIT;
+
 	if (atomic_get(&_ReferenceCount()) > 1) {
 		// It might be shared, and this requires special treatment
 		char* newData = _Clone(fPrivateData, Length());
@@ -2303,7 +2290,7 @@ BString::_MakeWritable(int32 length, bool copy)
 {
 	char* newData = NULL;
 
-	if (atomic_get(&_ReferenceCount()) > 1) {
+	if (fPrivateData != NULL && atomic_get(&_ReferenceCount()) > 1) {
 		// we might share our data with someone else
 		if (copy)
 			newData = _Clone(fPrivateData, length);
@@ -2542,13 +2529,27 @@ int32
 BString::_FindBefore(const char* string, int32 offset, int32 length) const
 {
 	if (fPrivateData != NULL) {
-		const char* ptr = fPrivateData + offset - length;
+#ifdef __HAIKU__
+		const char* end = fPrivateData + offset - (length - 1);
+		while (end >= fPrivateData) {
+			const char* ptr = (const char*)memrchr(fPrivateData,
+				string[0], end - fPrivateData);
+			if (ptr == NULL)
+				break;
 
+			if (memcmp(ptr, string, length) == 0)
+				return ptr - fPrivateData;
+
+			end = ptr;
+		}
+#else
+		const char* ptr = fPrivateData + offset - length;
 		while (ptr >= fPrivateData) {
 			if (!memcmp(ptr, string, length))
 				return ptr - fPrivateData;
 			ptr--;
 		}
+#endif
 	}
 	return B_ERROR;
 }

@@ -182,7 +182,7 @@ Volume::Volume(fs_volume* fsVolume)
 Volume::~Volume()
 {
 	// remove the packages from the node tree
-	{
+	if (fPackageFSRoot != NULL) {
 		VolumeWriteLocker systemVolumeLocker(_SystemVolumeIfNotSelf());
 		VolumeWriteLocker volumeLocker(this);
 		for (PackageFileNameHashTable::Iterator it = fPackages.GetIterator();
@@ -450,6 +450,7 @@ Volume::Mount(const char* parameterString)
 void
 Volume::Unmount()
 {
+	PutVNode(fRootDirectory->ID());
 }
 
 

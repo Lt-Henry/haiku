@@ -1,7 +1,5 @@
-1	korean	x-vnd.Haiku-ShowImage	2453396430
-ShowImage	System name		ShowImage
+1	korean	x-vnd.Haiku-ShowImage	2499375787
 Page setup…	Menus		페이지 설정...
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		문서 '%s' (페이지 %d)이(가) 변경되었습니다. 문서를 닫으시겠습니까?
 Previous file	Menus		이전 파일
 View	Menus		보기
 Leave full screen	Menus		전체 화면 나가기
@@ -27,7 +25,6 @@ Last page	Menus		마지막 페이지
 Cancel	ClosePrompt		취소
 Attributes	Menus		속성
 High-quality zooming	Menus		고품질 확대/축소
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		문서 '%s'이(가) 변경되었습니다. 문서를 닫으시겠습니까?
 Close	Menus		닫기
 Selection mode	Menus		선택 모드
 Reset rating	Menus		평가 재설정
@@ -46,14 +43,12 @@ Stretch to window	Menus		창에 맞게 늘이기
 Job setup	PrintOptionsWindow		작업 설정
 Clear selection	Menus		선택 해제
 Rotate clockwise	Menus		시계방향으로 회전
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		이미지를 불러올 수 없습니다! 파일이 존재하지 않거나 알맞은 이미지 변환기가 없습니다.
 Open with…	Menus		다음으로 열기…
 Rotate counterclockwise	Menus		반시계방향으로 회전
 Previous page	Menus		이전 페이지
 Fit to window	Menus		창에 맞추기
 Go to page	Menus		페이지 찾아가기
 Browse	Menus		찾아보기
-Progress monitor	ProgressWindow		진행 모니터
 Edit	Menus		편집
 Move to Trash	Menus		쓰레기통에 버리기
 Use as background…	Menus		배경으로 사용…

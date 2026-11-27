@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2007, Axel Dörfler, axeld@pinc-software.de.
+ * Copyright 2002-2026, Axel Dörfler, axeld@pinc-software.de.
  * This file may be used under the terms of the MIT License.
  */
 
@@ -26,6 +26,10 @@
 // differentiate between the two here.
 #ifdef _BOOT_MODE
 #	undef _KERNEL_MODE
+#endif
+
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
 #endif
 
 #include <BeBuild.h>
@@ -57,9 +61,6 @@
 #include <fcntl.h>
 #include <ctype.h>
 
-#ifndef B_BUFFER_OVERFLOW
-#	define B_BUFFER_OVERFLOW B_ERROR
-#endif
 
 #define SETTINGS_DIRECTORY "/kernel/drivers/"
 #define SETTINGS_MAGIC		'DrvS'
@@ -178,10 +179,8 @@ get_word(char **_pos, char **_word, int32 assignmentMode, bool allowNewLine)
 			|| (!allowNewLine && (pos[0] == '\t' || pos[0] == ' '))
 			|| (assignmentMode == ALLOW_ASSIGNMENT && pos[0] == '='))) {
 		// skip any comment lines
-		if (pos[0] == '#') {
-			while (pos[0] && pos[0] != '\n')
-				pos++;
-		}
+		if (pos[0] == '#')
+			pos = strchrnul(pos, '\n');
 		pos++;
 	}
 
@@ -444,7 +443,7 @@ load_driver_settings_from_file(int file, const char *driverName)
 	if (fstat(file, &stat) < B_OK)
 		return NULL;
 
-	if (stat.st_size > B_OK && stat.st_size < MAX_SETTINGS_SIZE) {
+	if (stat.st_size >= 0 && stat.st_size < MAX_SETTINGS_SIZE) {
 		char *text = (char *)malloc(stat.st_size + 1);
 		if (text != NULL && read(file, text, stat.st_size) == stat.st_size) {
 			settings_handle *handle;
@@ -468,11 +467,10 @@ load_driver_settings_from_file(int file, const char *driverName)
 
 
 static bool
-put_string(char **_buffer, ssize_t *_bufferSize, char *string)
+put_string(char **_buffer, size_t *_bufferSize, char *string)
 {
 	size_t length, reserved, quotes;
 	char *buffer = *_buffer, c;
-	bool quoted;
 
 	if (string == NULL)
 		return true;
@@ -483,15 +481,20 @@ put_string(char **_buffer, ssize_t *_bufferSize, char *string)
 		else if (is_word_break(c))
 			reserved++;
 	}
-	quoted = reserved || quotes;
+
+	bool quoted = reserved || quotes;
+	if (quoted)
+		length += 2 + quotes;
+
+	if (*_bufferSize <= length) {
+		*_bufferSize = 0;
+		return false;
+	}
 
 	// update _bufferSize in any way, so that we can chain several
 	// of these calls without having to check the return value
 	// everytime
-	*_bufferSize -= length + (quoted ? 2 + quotes : 0);
-
-	if (*_bufferSize <= 0)
-		return false;
+	*_bufferSize -= length;
 
 	if (quoted)
 		*(buffer++) = '"';
@@ -516,7 +519,7 @@ put_string(char **_buffer, ssize_t *_bufferSize, char *string)
 
 
 static bool
-put_chars(char **_buffer, ssize_t *_bufferSize, const char *chars)
+put_chars(char **_buffer, size_t *_bufferSize, const char *chars)
 {
 	char *buffer = *_buffer;
 	size_t length;
@@ -525,11 +528,12 @@ put_chars(char **_buffer, ssize_t *_bufferSize, const char *chars)
 		return true;
 
 	length = strlen(chars);
-	*_bufferSize -= length;
-
-	if (*_bufferSize <= 0)
+	if (*_bufferSize <= length) {
+		*_bufferSize = 0;
 		return false;
+	}
 
+	*_bufferSize -= length;
 	memcpy(buffer, chars, length);
 	buffer += length;
 	buffer[0] = '\0';
@@ -542,15 +546,16 @@ put_chars(char **_buffer, ssize_t *_bufferSize, const char *chars)
 
 
 static bool
-put_char(char **_buffer, ssize_t *_bufferSize, char c)
+put_char(char **_buffer, size_t *_bufferSize, char c)
 {
 	char *buffer = *_buffer;
 
-	*_bufferSize -= 1;
-
-	if (*_bufferSize <= 0)
+	if (*_bufferSize <= 1) {
+		*_bufferSize = 0;
 		return false;
+	}
 
+	*_bufferSize -= 1;
 	buffer[0] = c;
 	buffer[1] = '\0';
 
@@ -562,7 +567,7 @@ put_char(char **_buffer, ssize_t *_bufferSize, char c)
 
 
 static void
-put_level_space(char **_buffer, ssize_t *_bufferSize, int32 level)
+put_level_space(char **_buffer, size_t *_bufferSize, int32 level)
 {
 	while (level-- > 0)
 		put_char(_buffer, _bufferSize, '\t');
@@ -570,7 +575,7 @@ put_level_space(char **_buffer, ssize_t *_bufferSize, int32 level)
 
 
 static void
-put_parameter(char **_buffer, ssize_t *_bufferSize,
+put_parameter(char **_buffer, size_t *_bufferSize,
 	struct driver_parameter *parameter, int32 level, bool flat)
 {
 	int32 i;
@@ -857,11 +862,11 @@ parse_driver_settings_string(const char *settingsString)
 	the "buffer" parameter is NULL, B_BAD_VALUE is returned.
 */
 status_t
-get_driver_settings_string(void *_handle, char *buffer, ssize_t *_bufferSize,
+get_driver_settings_string(void *_handle, char *buffer, size_t *_bufferSize,
 	bool flat)
 {
 	settings_handle *handle = (settings_handle *)_handle;
-	ssize_t bufferSize = *_bufferSize;
+	size_t bufferSize = *_bufferSize;
 	int32 i;
 
 	if (!check_handle(handle) || !buffer || *_bufferSize == 0)
@@ -872,8 +877,7 @@ get_driver_settings_string(void *_handle, char *buffer, ssize_t *_bufferSize,
 			0, flat);
 	}
 
-	*_bufferSize -= bufferSize;
-	return bufferSize >= 0 ? B_OK : B_BUFFER_OVERFLOW;
+	return bufferSize > 0 ? B_OK : B_BUFFER_OVERFLOW;
 }
 
 

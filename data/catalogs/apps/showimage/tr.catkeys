@@ -1,7 +1,6 @@
-1	turkish	x-vnd.Haiku-ShowImage	2453396430
-ShowImage	System name		Görsel Görüntüleyicisi
+1	turkish	x-vnd.Haiku-ShowImage	549474543
+ShowImage	System name		ShowImage
 Page setup…	Menus		Sayfa yapısı…
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		“%s” belgesi (sayfa %d) değiştirildi. Belgeyi kapatmak istiyor musunuz?
 Previous file	Menus		Önceki dosya
 View	Menus		Görüntü
 Leave full screen	Menus		Tam ekrandan çık
@@ -13,6 +12,7 @@ Height: 	PrintOptionsWindow		Yükseklik:
 Next file	Menus		Sonraki dosya
 Slide show	Menus		Slayt gösterisi
 Original size	Menus		Özgün boyut
+The document '%filename%' has been changed. Do you want to close the document?	ClosePrompt		“%filename%” belgesi değiştirildi. Belgeyi kapatmak istiyor musunuz?
 Width:	PrintOptionsWindow		Genişlik:
 Resize to (in 1/72 inches):	PrintOptionsWindow		Yeniden boyutlandır (1/72 inç):
 Zoom factor in %:	PrintOptionsWindow		% olarak yakınlaştırma derecesi:
@@ -26,8 +26,8 @@ Zoom in	Menus		Yakınlaştır
 Last page	Menus		Son sayfa
 Cancel	ClosePrompt		Vazgeç
 Attributes	Menus		Öznitelikler
+Show boundaries marks	Menus		Sınır imlerini göster
 High-quality zooming	Menus		Yüksek kalite yakınlaştırma
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		“%s” belgesi değiştirildi. Belgeyi kapatmak istiyor musunuz?
 Close	Menus		Kapat
 Selection mode	Menus		Seçim kipi
 Reset rating	Menus		Derecelendirmeyi sıfırla
@@ -46,14 +46,13 @@ Stretch to window	Menus		Pencereye gerdir
 Job setup	PrintOptionsWindow		İş yapısı
 Clear selection	Menus		Seçimi temizle
 Rotate clockwise	Menus		Saat yönünde döndür
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		Görsel yüklenemedi. Bu dosya için gerekli çözücü büyük olasılıkla yok.
 Open with…	Menus		Birlikte aç…
 Rotate counterclockwise	Menus		Saat yönünün tersine döndür
+The document '%filename%' (page %number%) has been changed. Do you want to close the document?	ClosePrompt		“%filename%” (%number%. sayfa) belgesi değiştirildi. Belgeyi kapatmak istiyor musunuz?
 Previous page	Menus		Önceki sayfa
 Fit to window	Menus		Pencereye sığdır
 Go to page	Menus		Sayfaya git
 Browse	Menus		Göz at
-Progress monitor	ProgressWindow		İlerleme monitörü
 Edit	Menus		Düzen
 Move to Trash	Menus		Çöpe at
 Use as background…	Menus		Arka plan olarak kullan…

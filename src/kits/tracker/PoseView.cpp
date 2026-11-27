@@ -56,8 +56,6 @@ All rights reserved.
 #include <Dragger.h>
 #include <fs_attr.h>
 #include <fs_info.h>
-#include <Screen.h>
-#include <Query.h>
 #include <List.h>
 #include <Locale.h>
 #include <LongAndDragTrackingFilter.h>
@@ -65,12 +63,14 @@ All rights reserved.
 #include <NodeMonitor.h>
 #include <Path.h>
 #include <PopUpMenu.h>
+#include <Query.h>
+#include <Screen.h>
 #include <StopWatch.h>
 #include <String.h>
 #include <SymLink.h>
 #include <TextView.h>
-#include <VolumeRoster.h>
 #include <Volume.h>
+#include <VolumeRoster.h>
 #include <Window.h>
 
 #include <PathMonitor.h>
@@ -84,6 +84,7 @@ All rights reserved.
 #include "DeskWindow.h"
 #include "DesktopPoseView.h"
 #include "FSClipboard.h"
+#include "FSUndoRedo.h"
 #include "FSUtils.h"
 #include "FilePanelPriv.h"
 #include "FunctionObject.h"
@@ -109,8 +110,6 @@ const float kDoubleClickTresh = 6;
 const uint32 kAddNewPoses = 'Tanp';
 const uint32 kAddPosesCompleted = 'Tapc';
 const int32 kMaxAddPosesChunk = 50;
-const uint32 kMsgMouseDragged = 'Mdrg';
-const uint32 kMsgMouseLongDown = 'Mold';
 
 const int32 kRoomForLine = 2;
 
@@ -137,7 +136,8 @@ enum {
 	kInsertAfter
 };
 
-const BPoint kTransparentDragThreshold(256, 192);
+const BPoint kTransparentDragThreshold(be_control_look->ComposeIconSize(256).Width(),
+	be_control_look->ComposeIconSize(256).Width());
 	// maximum size of the transparent drag bitmap, use a drag rect
 	// if larger in any direction
 
@@ -199,14 +199,11 @@ OneMatches(BPose* pose, BPoseView*, void* castToPose)
 
 
 static void
-CopySelectionListToEntryRefList(const PoseList* original,
-	BObjectList<entry_ref, true>* copy)
+CopySelectionListToEntryRefList(const PoseList* original, BObjectList<entry_ref, true>* copy)
 {
-	int32 count = original->CountItems();
-	for (int32 index = 0; index < count; index++) {
-		copy->AddItem(new entry_ref(*(original->ItemAt(
-			index)->TargetModel()->EntryRef())));
-	}
+	int32 selectionCount = original->CountItems();
+	for (int32 index = 0; index < selectionCount; index++)
+		copy->AddItem(new entry_ref(*(original->ItemAt(index)->TargetModel()->EntryRef())));
 }
 
 
@@ -216,13 +213,7 @@ CopySelectionListToEntryRefList(const PoseList* original,
 BPoseView::BPoseView(Model* model, uint32 viewMode)
 	:
 	BView("PoseView", B_WILL_DRAW | B_PULSE_NEEDED),
-	fIsDrawingSelectionRect(false),
 	fViewState(new BViewState),
-	fStateNeedsSaving(false),
-	fSavePoseLocations(true),
-	fMultipleSelection(true),
-	fDragEnabled(true),
-	fDropEnabled(true),
 	fSelectionHandler(be_app),
 	fPoseList(new PoseList(40, true)),
 	fHScrollBar(NULL),
@@ -237,9 +228,9 @@ BPoseView::BPoseView(Model* model, uint32 viewMode)
 	fZombieList(new BObjectList<Model, true>(10)),
 	fColumnList(new BObjectList<BColumn, true>(4)),
 	fBrokenLinks(new BObjectList<Model>(10)),
-	fMimeTypeListIsDirty(false),
 	fCountView(NULL),
-	fListElemHeight(0.0f),
+	fListElemHeight(ceilf(be_plain_font->Size() * 1.65f)),
+	fListOffset(ceilf(be_control_look->DefaultLabelSpacing() * 3.3f)),
 	fIconPoseHeight(0.0f),
 	fDropTarget(NULL),
 	fAlreadySelectedDropTarget(NULL),
@@ -251,10 +242,28 @@ BPoseView::BPoseView(Model* model, uint32 viewMode)
 	fRefFilter(NULL),
 	fAutoScrollInc(20),
 	fAutoScrollState(kAutoScrollOff),
-	fWidgetTextOutline(false),
 	fSelectionPivotPose(NULL),
 	fRealPivotPose(NULL),
 	fKeyRunner(NULL),
+	fDragMessage(NULL),
+	fCachedTypesList(NULL),
+	fFilterStrings(4),
+	fLastFilterStringCount(1),
+	fLastFilterStringLength(0),
+	fStartFrame(0, 0, 0, 0),
+	fLastKeyTime(0),
+	fLastDeskbarFrameCheckTime(LONGLONG_MIN),
+	fDeskbarFrame(0, 0, -1, -1),
+	fTextWidgetToCheck(NULL),
+	fActiveTextWidget(NULL),
+	fCachedIconSizeFrom(0),
+	fStateNeedsSaving(false),
+	fSavePoseLocations(true),
+	fMultipleSelection(true),
+	fDragEnabled(true),
+	fDropEnabled(true),
+	fMimeTypeListIsDirty(false),
+	fWidgetTextOutline(false),
 	fTrackRightMouseUp(false),
 	fTrackMouseUp(false),
 	fSelectionVisible(true),
@@ -269,23 +278,12 @@ BPoseView::BPoseView(Model* model, uint32 viewMode)
 	fHasPosesInClipboard(false),
 	fCursorCheck(false),
 	fTypeAheadFiltering(false),
-	fFilterStrings(4),
-	fLastFilterStringCount(1),
-	fLastFilterStringLength(0),
-	fLastKeyTime(0),
-	fLastDeskbarFrameCheckTime(LONGLONG_MIN),
-	fDeskbarFrame(0, 0, -1, -1),
-	fTextWidgetToCheck(NULL),
-	fActiveTextWidget(NULL),
-	fCachedIconSizeFrom(0)
+	fShowSelectionWhenInactive(TrackerSettings().ShowSelectionWhenInactive()),
+	fIsDrawingSelectionRect(false),
+	fTransparentSelection(TrackerSettings().TransparentSelection()),
+	fWaitingForRefs(false)
 {
-	fListElemHeight = ceilf(be_plain_font->Size() * 1.65f);
-	fListOffset = ceilf(be_control_look->DefaultLabelSpacing() * 3.3f);
-
 	fViewState->SetViewMode(viewMode);
-	fShowSelectionWhenInactive
-		= TrackerSettings().ShowSelectionWhenInactive();
-	fTransparentSelection = TrackerSettings().TransparentSelection();
 	fFilterStrings.AddItem(new BString());
 }
 
@@ -302,6 +300,8 @@ BPoseView::~BPoseView()
 	delete fModel;
 	delete fKeyRunner;
 	delete fBrokenLinks;
+	delete fDragMessage;
+	delete fCachedTypesList;
 
 	IconCache::sIconCache->Deleting(this);
 }
@@ -343,6 +343,12 @@ BPoseView::InitCommon()
 
 	PinPointToValidRange(origin);
 
+	// static - init just once
+	if (sFontHeight == -1) {
+		be_plain_font->GetHeight(&sFontInfo);
+		sFontHeight = ceilf(sFontInfo.ascent + sFontInfo.descent) + 1;
+	}
+
 	// init things related to laying out items
 	SetIconPoseHeight();
 	GetLayoutInfo(ViewMode(), &fGrid, &fOffset);
@@ -362,6 +368,33 @@ BPoseView::InitCommon()
 		AddTrashPoses();
 	else
 		AddPoses(TargetModel());
+}
+
+
+void
+BPoseView::AdoptSystemColors()
+{
+	if (!TargetVolumeIsReadOnly())
+		SetViewUIColor(B_DOCUMENT_BACKGROUND_COLOR);
+	else
+		SetViewUIColor(B_DOCUMENT_BACKGROUND_COLOR, ReadOnlyTint(B_DOCUMENT_BACKGROUND_COLOR));
+	SetLowUIColor(ViewUIColor());
+
+	SetHighUIColor(B_DOCUMENT_TEXT_COLOR);
+}
+
+
+bool
+BPoseView::HasSystemColors() const
+{
+	float tint = B_NO_TINT;
+	float readOnlyTint = ReadOnlyTint(B_DOCUMENT_BACKGROUND_COLOR);
+
+	return ViewUIColor(&tint) == B_DOCUMENT_BACKGROUND_COLOR
+		&& (tint == B_NO_TINT || tint == readOnlyTint)
+		&& LowUIColor(&tint) == B_DOCUMENT_BACKGROUND_COLOR
+		&& (tint == B_NO_TINT || tint == readOnlyTint)
+		&& HighUIColor(&tint) == B_DOCUMENT_TEXT_COLOR && tint == B_NO_TINT;
 }
 
 
@@ -395,12 +428,12 @@ BPoseView::RestoreColumnState(AttributeStreamNode* node)
 			columnsAttrForeign = kAttrColumnsForeign;
 		}
 
-		bool wrongEndianness = false;
+		bool wrongEndian = false;
 		const char* name = columnsAttr;
 		size_t size = (size_t)node->Contains(name, B_RAW_TYPE);
 		if (size == 0) {
 			name = columnsAttrForeign;
-			wrongEndianness = true;
+			wrongEndian = true;
 			size = (size_t)node->Contains(name, B_RAW_TYPE);
 		}
 
@@ -420,8 +453,7 @@ BPoseView::RestoreColumnState(AttributeStreamNode* node)
 				// for overlaps below.
 				BObjectList<BColumn> tempSortedList;
 				for (;;) {
-					BColumn* column = BColumn::InstantiateFromStream(&stream,
-						wrongEndianness);
+					BColumn* column = BColumn::InstantiateFromStream(&stream, wrongEndian);
 					if (column == NULL)
 						break;
 					tempSortedList.AddItem(column);
@@ -508,20 +540,15 @@ BPoseView::RestoreState(AttributeStreamNode* node)
 		const char* viewStateAttr;
 		const char* viewStateAttrForeign;
 
-		if (TargetModel() != NULL && TargetModel()->IsRoot()) {
-			viewStateAttr = kAttrDisksViewState;
-			viewStateAttrForeign = kAttrDisksViewStateForeign;
-		} else {
-			viewStateAttr = ViewStateAttributeName();
-			viewStateAttrForeign = ForeignViewStateAttributeName();
-		}
+		viewStateAttr = ViewStateAttributeName();
+		viewStateAttrForeign = ForeignViewStateAttributeName();
 
-		bool wrongEndianness = false;
+		bool wrongEndian = false;
 		const char* name = viewStateAttr;
 		size_t size = (size_t)node->Contains(name, B_RAW_TYPE);
 		if (!size) {
 			name = viewStateAttrForeign;
-			wrongEndianness = true;
+			wrongEndian = true;
 			size = (size_t)node->Contains(name, B_RAW_TYPE);
 		}
 
@@ -534,19 +561,17 @@ BPoseView::RestoreState(AttributeStreamNode* node)
 				BMallocIO stream;
 				stream.WriteAt(0, buffer, size);
 				stream.Seek(0, SEEK_SET);
-				BViewState* viewstate
-					= BViewState::InstantiateFromStream(&stream,
-						wrongEndianness);
-				if (viewstate) {
+				BViewState* state = BViewState::InstantiateFromStream(&stream, wrongEndian);
+				if (state != NULL) {
 					delete fViewState;
-					fViewState = viewstate;
+					fViewState = state;
 				}
 			}
 			delete[] buffer;
 		}
 	}
 
-	if (IsDesktop() && ViewMode() == kListMode) {
+	if (IsDesktopView() && ViewMode() == kListMode) {
 		// recover if desktop window view state set wrong
 		fViewState->SetViewMode(kIconMode);
 	}
@@ -558,13 +583,13 @@ BPoseView::RestoreState(const BMessage &message)
 {
 	RestoreColumnState(message);
 
-	BViewState* viewstate = BViewState::InstantiateFromMessage(message);
-	if (viewstate != NULL) {
+	BViewState* state = BViewState::InstantiateFromMessage(message);
+	if (state != NULL) {
 		delete fViewState;
-		fViewState = viewstate;
+		fViewState = state;
 	}
 
-	if (IsDesktop() && ViewMode() == kListMode) {
+	if (IsDesktopView() && ViewMode() == kListMode) {
 		// recover if desktop window view state set wrong
 		fViewState->SetViewMode(kIconMode);
 	}
@@ -588,16 +613,16 @@ ClearViewOriginOne(const char* DEBUG_ONLY(name), uint32 type, off_t size,
 	BMallocIO stream;
 	stream.WriteAt(0, viewStateArchive, (size_t)size);
 	stream.Seek(0, SEEK_SET);
-	BViewState* viewstate = BViewState::InstantiateFromStream(&stream, false);
-	if (!viewstate)
+	BViewState* state = BViewState::InstantiateFromStream(&stream, false);
+	if (state == NULL)
 		return false;
 
 	// this is why we are here - zero out
-	viewstate->SetListOrigin(B_ORIGIN);
-	viewstate->SetIconOrigin(B_ORIGIN);
+	state->SetListOrigin(B_ORIGIN);
+	state->SetIconOrigin(B_ORIGIN);
 
 	stream.Seek(0, SEEK_SET);
-	viewstate->ArchiveToStream(&stream);
+	state->ArchiveToStream(&stream);
 	stream.ReadAt(0, viewStateArchive, (size_t)size);
 
 	return true;
@@ -628,15 +653,24 @@ BPoseView::SetupDefaultColumnsIfNeeded()
 const char*
 BPoseView::ViewStateAttributeName() const
 {
-	return IsDesktopView() ? kAttrDesktopViewState : kAttrViewState;
+	if (IsDesktopView())
+		return kAttrDesktopViewState;
+	else if (TargetModel()->IsRoot())
+		return kAttrDisksViewState;
+	else
+		return kAttrViewState;
 }
 
 
 const char*
 BPoseView::ForeignViewStateAttributeName() const
 {
-	return IsDesktopView() ? kAttrDesktopViewStateForeign
-		: kAttrViewStateForeign;
+	if (IsDesktopView())
+		return kAttrDesktopViewStateForeign;
+	else if (TargetModel()->IsRoot())
+		return kAttrDisksViewStateForeign;
+	else
+		return kAttrViewStateForeign;
 }
 
 
@@ -692,13 +726,8 @@ BPoseView::SaveState(AttributeStreamNode* node)
 
 	const char* viewStateAttr;
 	const char* viewStateAttrForeign;
-	if (TargetModel() != NULL && TargetModel()->IsRoot()) {
-		viewStateAttr = kAttrDisksViewState;
-		viewStateAttrForeign = kAttrDisksViewStateForeign;
-	} else {
-		viewStateAttr = ViewStateAttributeName();
-		viewStateAttrForeign = ForeignViewStateAttributeName();
-	}
+	viewStateAttr = ViewStateAttributeName();
+	viewStateAttrForeign = ForeignViewStateAttributeName();
 
 	node->Write(viewStateAttr, viewStateAttrForeign, B_RAW_TYPE,
 		stream.Position(), stream.Buffer());
@@ -757,7 +786,7 @@ BPoseView::SavePoseLocations(BRect* frameIfDesktop)
 		return;
 	}
 
-	bool isDesktop = IsDesktop() && (frameIfDesktop != NULL);
+	bool isDesktop = !IsFilePanel() && IsDesktopView() && (frameIfDesktop != NULL);
 
 	int32 poseCount = fPoseList->CountItems();
 	for (int32 index = 0; index < poseCount; index++) {
@@ -766,10 +795,15 @@ BPoseView::SavePoseLocations(BRect* frameIfDesktop)
 			Model* model = pose->TargetModel();
 			poseInfo.fInvisible = false;
 
-			if (model->IsRoot())
+			// Root and Trash pose are on the Desktop
+			if (model->IsRoot() || (model->IsTrash() && isDesktop))
 				poseInfo.fInitedDirectory = targetModel->NodeRef()->node;
 			else
 				poseInfo.fInitedDirectory = model->EntryRef()->directory;
+
+			// Trash pose should be invisible except on the Desktop
+			if (model->IsTrash() && !IsVolumesRoot())
+				poseInfo.fInvisible = true;
 
 			poseInfo.fLocation = pose->Location(this);
 
@@ -786,8 +820,7 @@ BPoseView::SavePoseLocations(BRect* frameIfDesktop)
 				if (!extendedPoseInfo) {
 					// don't have one yet, allocate one
 					size_t size = ExtendedPoseInfo::Size(1);
-					extendedPoseInfo = (ExtendedPoseInfo*)
-						new char [size];
+					extendedPoseInfo = (ExtendedPoseInfo*) new char[size];
 
 					memset((void*)extendedPoseInfo, 0, size);
 					extendedPoseInfo->fWorkspaces = 0xffffffff;
@@ -795,7 +828,7 @@ BPoseView::SavePoseLocations(BRect* frameIfDesktop)
 					extendedPoseInfo->fShowFromBootOnly = false;
 					extendedPoseInfo->fNumFrames = 0;
 				}
-				ASSERT(extendedPoseInfo);
+				ASSERT(extendedPoseInfo != NULL);
 
 				extendedPoseInfo->SetLocationForFrame(pose->Location(this),
 					*frameIfDesktop);
@@ -807,31 +840,29 @@ BPoseView::SavePoseLocations(BRect* frameIfDesktop)
 				continue;
 			}
 
-			ASSERT(model);
+			ASSERT(model != NULL);
 			ASSERT(model->InitCheck() == B_OK);
 			// special handling for "root" disks icon
 			// and Trash pose on Desktop directory
-			bool isTrash = model->IsTrash() && IsDesktopView();
-			if (model->IsRoot() || isTrash) {
+			if (model->IsRoot() || (model->IsTrash() && isDesktop)) {
 				BDirectory deskDir;
 				if (FSGetDeskDir(&deskDir) == B_OK) {
-					const char* poseInfoAttr = isTrash ? kAttrTrashPoseInfo
-						: kAttrDisksPoseInfo;
-					const char* poseInfoAttrForeign = isTrash
-						? kAttrTrashPoseInfoForeign
-						: kAttrDisksPoseInfoForeign;
+					const char* poseInfoAttr = model->IsTrash()
+						? kAttrTrashPoseInfo : kAttrDisksPoseInfo;
+					const char* poseInfoAttrForeign = model->IsTrash()
+						? kAttrTrashPoseInfoForeign : kAttrDisksPoseInfoForeign;
 					if (deskDir.WriteAttr(poseInfoAttr, B_RAW_TYPE, 0,
 						&poseInfo, sizeof(poseInfo)) == sizeof(poseInfo)) {
 						// nuke opposite endianness
 						deskDir.RemoveAttr(poseInfoAttrForeign);
 					}
 
-					if (!isTrash && isDesktop
-						&& deskDir.WriteAttr(kAttrExtendedDisksPoseInfo,
-						B_RAW_TYPE, 0, extendedPoseInfo, extendedPoseInfoSize)
+					if (isDesktop && !model->IsTrash()
+						&& deskDir.WriteAttr(kAttrExtendedDisksPoseInfo, B_RAW_TYPE, 0,
+								extendedPoseInfo, extendedPoseInfoSize)
 							== (ssize_t)extendedPoseInfoSize) {
 						// nuke opposite endianness
-						deskDir.RemoveAttr(kAttrExtendedDisksPoseInfoForegin);
+						deskDir.RemoveAttr(kAttrExtendedDisksPoseInfoForeign);
 					}
 				}
 			} else {
@@ -841,7 +872,7 @@ BPoseView::SavePoseLocations(BRect* frameIfDesktop)
 
 				if (isDesktop) {
 					model->WriteAttrKillForeign(kAttrExtendedPoseInfo,
-						kAttrExtendedPoseInfoForegin,
+						kAttrExtendedPoseInfoForeign,
 						B_RAW_TYPE, 0, extendedPoseInfo,
 						extendedPoseInfoSize);
 				}
@@ -940,8 +971,7 @@ BPoseView::Pulse()
 		}
 	}
 
-	// do we have a TextWidget waiting for expiracy of its double-click
-	// check?
+	// Do we have a TextWidget waiting for its double-click check to expire?
 	if (fTextWidgetToCheck != NULL)
 		fTextWidgetToCheck->CheckExpiration();
 }
@@ -950,47 +980,37 @@ BPoseView::Pulse()
 void
 BPoseView::ScrollTo(BPoint where)
 {
+	// never scroll Desktop
+	if (IsDesktopView())
+		return;
+
 	_inherited::ScrollTo(where);
 
 	// keep the view state in sync
 	if (ViewMode() == kListMode)
 		fViewState->SetListOrigin(LeftTop());
 	else
-		fViewState->SetIconOrigin(LeftTop());
+		fViewState->SetIconOrigin(Extent().LeftTop());
 }
 
 
 void
 BPoseView::AttachedToWindow()
 {
-	fIsDesktop = dynamic_cast<BDeskWindow*>(Window()) != NULL;
-	if (fIsDesktop)
-		AddFilter(new TPoseViewFilter(this));
-	else
-		ApplyBackgroundColor();
+	AdoptSystemColors();
 
-	AddFilter(new ShortcutFilter(B_RETURN, B_OPTION_KEY, kOpenSelection,
-		this));
+	AddFilter(new ShortcutFilter(B_RETURN, B_OPTION_KEY, kOpenSelection, this));
 		// add Option-Return as a shortcut filter because AddShortcut
 		// doesn't allow us to have shortcuts without Command yet
 	AddFilter(new ShortcutFilter(B_ESCAPE, 0, B_CANCEL, this));
 		// Escape key, used to abort an on-going clipboard cut or filtering
-	AddFilter(new ShortcutFilter(B_ESCAPE, B_SHIFT_KEY,
-		kCancelSelectionToClipboard, this));
+	AddFilter(new ShortcutFilter(B_ESCAPE, B_SHIFT_KEY, kCancelSelectionToClipboard, this));
 		// Escape + SHIFT will remove current selection from clipboard,
 		// or all poses from current folder if 0 selected
 
-	AddFilter(new LongAndDragTrackingFilter(kMsgMouseLongDown,
-		kMsgMouseDragged));
+	AddFilter(new LongAndDragTrackingFilter(kMsgMouseLongDown, kMsgMouseDragged));
 
 	fLastLeftTop = LeftTop();
-
-	// static - init just once
-	if (sFontHeight == -1) {
-		be_plain_font->GetHeight(&sFontInfo);
-		sFontHeight = sFontInfo.ascent + sFontInfo.descent
-			+ sFontInfo.leading;
-	}
 
 	TTracker* tracker = dynamic_cast<TTracker*>(be_app);
 	if (tracker != NULL && tracker->Lock()) {
@@ -1003,6 +1023,8 @@ BPoseView::AttachedToWindow()
 	}
 
 	FSClipboardStartWatch(this);
+
+	_inherited::AttachedToWindow();
 }
 
 
@@ -1023,12 +1045,12 @@ BPoseView::SetIconPoseHeight()
 	switch (ViewMode()) {
 		case kIconMode:
 			// IconSize should already be set in MessageReceived()
-			fIconPoseHeight = ceilf(IconSizeInt() + sFontHeight + 1);
+			fIconPoseHeight = IconSizeInt() + sFontHeight;
 			break;
 
 		case kMiniIconMode:
 			fViewState->SetIconSize(B_MINI_ICON);
-			fIconPoseHeight = std::max((float)IconSizeInt(), sFontHeight + 1);
+			fIconPoseHeight = std::max((float)IconSizeInt(), sFontHeight);
 			break;
 
 		case kListMode:
@@ -1147,22 +1169,22 @@ BPoseView::SetActivePose(BPose* pose)
 void
 BPoseView::CommitActivePose(bool saveChanges)
 {
-	BPose* activePose = ActivePose();
-	if (activePose != NULL) {
-		int32 index = fPoseList->IndexOf(ActivePose());
-		if (IsFiltering())
-			index = fFilteredPoseList->IndexOf(ActivePose());
+	if (ActivePose() == NULL)
+		return;
 
-		BPoint loc(0, index * fListElemHeight);
-		if (ViewMode() != kListMode)
-			loc = ActivePose()->Location(this);
+	int32 index = CurrentPoseList()->IndexOf(fActivePose);
 
-		activePose->Commit(saveChanges, loc, this, index);
-		BPose* pose = fActivePose;
-		fActivePose = NULL;
-		if (IsFiltering() && !FilterPose(pose))
-			RemoveFilteredPose(pose, index);
-	}
+	BPoint poseLoc;
+	if (ViewMode() == kListMode)
+		poseLoc = BPoint(0, index * fListElemHeight);
+	else
+		poseLoc = fActivePose->Location(this);
+
+	fActivePose->Commit(saveChanges, poseLoc, this, index);
+	BPose* activePose = fActivePose;
+	fActivePose = NULL;
+	if (IsFiltering() && !FilterPose(activePose))
+		RemoveFilteredPose(activePose, index);
 }
 
 
@@ -1194,8 +1216,8 @@ BPoseView::InitDirentIterator(const entry_ref* ref)
 		return NULL;
 	}
 
-	TTracker::WatchNode(sourceModel.NodeRef(), B_WATCH_DIRECTORY
-		| B_WATCH_NAME | B_WATCH_STAT | B_WATCH_ATTR, this);
+	TTracker::WatchNode(sourceModel.NodeRef(), B_WATCH_DIRECTORY | B_WATCH_CHILDREN
+		| B_WATCH_NAME | B_WATCH_STAT | B_WATCH_INTERIM_STAT | B_WATCH_ATTR, this);
 
 	return entryList;
 }
@@ -1211,7 +1233,8 @@ BPoseView::ReturnDirentIterator(EntryListBase* iterator)
 uint32
 BPoseView::WatchNewNodeMask()
 {
-	return B_WATCH_STAT | B_WATCH_INTERIM_STAT | B_WATCH_ATTR;
+	// For regular directories, B_WATCH_CHILDREN suffices.
+	return 0;
 }
 
 
@@ -1225,6 +1248,9 @@ BPoseView::WatchNewNode(const node_ref* item)
 status_t
 BPoseView::WatchNewNode(const node_ref* item, uint32 mask, BMessenger messenger)
 {
+	if (mask == 0)
+		return B_OK;
+
 	status_t result = TTracker::WatchNode(item, mask, messenger);
 
 #if DEBUG
@@ -1234,6 +1260,17 @@ BPoseView::WatchNewNode(const node_ref* item, uint32 mask, BMessenger messenger)
 
 	return result;
 }
+
+
+status_t
+BPoseView::StopWatchingNode(const node_ref* item)
+{
+	if (WatchNewNodeMask() == 0)
+		return B_OK;
+
+	return watch_node(item, B_STOP_WATCHING, this);
+}
+
 
 
 struct AddPosesParams {
@@ -1254,16 +1291,15 @@ BPoseView::AddPoses(Model* model)
 {
 	// if model is zero, PoseView has other means of iterating through all
 	// the entries that it adds
-	if (model != NULL) {
-		TrackerSettings settings;
-		if (model->IsRoot()) {
-			AddRootPoses(true, settings.MountSharedVolumesOntoDesktop());
-			return;
-		} else if (IsDesktopView()
-			&& (settings.MountVolumesOntoDesktop() || settings.ShowDisksIcon()
-				|| (IsFilePanel() && settings.DesktopFilePanelRoot())))
-			AddRootPoses(true, settings.MountSharedVolumesOntoDesktop());
-	}
+
+	// Desktop poses are added either in FilePanelPriv or DesktopPoseView
+
+	// adding volumes is all there is to do for root directory
+	if (TargetModel()->IsRoot()) {
+		AddVolumePoses();
+		return;
+	} else if (IsVolumesRoot())
+		AddVolumePoses();
 
 	ShowBarberPole();
 
@@ -1331,7 +1367,7 @@ class AutoLockingMessenger {
 			if (hasLock) {
 				BLooper* looper;
 				messenger.Target(&looper);
-				ASSERT(looper);
+				ASSERT(looper != NULL);
 				looper->Unlock();
 				hasLock = false;
 			}
@@ -1561,8 +1597,11 @@ BPoseView::AddPosesTask(void* castToParams)
 
 
 void
-BPoseView::AddRootPoses(bool watchIndividually, bool mountShared)
+BPoseView::AddVolumePoses()
 {
+	if (Window() == NULL)
+		return;
+
 	BVolumeRoster roster;
 	roster.Rewind();
 	BVolume volume;
@@ -1580,18 +1619,18 @@ BPoseView::AddRootPoses(bool watchIndividually, bool mountShared)
 			monitorMsg.AddInt64("node", model.NodeRef()->node);
 			monitorMsg.AddInt64("directory", model.EntryRef()->directory);
 			monitorMsg.AddString("name", model.EntryRef()->name);
-			if (Window())
-				Window()->PostMessage(&monitorMsg, this);
+
+			Window()->PostMessage(&monitorMsg, this);
 		}
 	} else {
 		while (roster.GetNextVolume(&volume) == B_OK) {
 			if (!volume.IsPersistent())
 				continue;
 
-	 		if (volume.IsShared() && !mountShared)
+			if (volume.IsShared() && !TrackerSettings().MountSharedVolumesOntoDesktop())
 				continue;
 
-			CreateVolumePose(&volume, watchIndividually);
+			CreateVolumePose(&volume);
 		}
 	}
 
@@ -1602,7 +1641,7 @@ BPoseView::AddRootPoses(bool watchIndividually, bool mountShared)
 
 
 void
-BPoseView::RemoveRootPoses()
+BPoseView::RemoveVolumePoses()
 {
 	int32 index;
 	int32 poseCount = fPoseList->CountItems();
@@ -1627,6 +1666,25 @@ BPoseView::RemoveRootPoses()
 
 
 void
+BPoseView::ToggleDisksVolumes()
+{
+	if (IsVolumesRoot() && LockLooper()) {
+		SavePoseLocations();
+
+		if (TrackerSettings().MountVolumesOntoDesktop()) {
+			RemoveRootPose();
+			AddVolumePoses();
+		} else {
+			RemoveVolumePoses();
+			CreateRootPose();
+		}
+
+		UnlockLooper();
+	}
+}
+
+
+void
 BPoseView::AddTrashPoses()
 {
 	// the trash window needs to display a union of all the
@@ -1635,7 +1693,7 @@ BPoseView::AddTrashPoses()
 	volRoster.Rewind();
 	BVolume volume;
 	while (volRoster.GetNextVolume(&volume) == B_OK) {
-		if (!volume.IsPersistent())
+		if (!volume.IsPersistent() || volume.Capacity() == 0)
 			continue;
 
 		BDirectory trashDir;
@@ -1669,16 +1727,43 @@ BPoseView::AddPosesCompleted()
 	// above the top of the view (leaving you with an empty window)
 	if (ViewMode() == kListMode) {
 		BRect bounds(Bounds());
-		float lastItemTop = (CurrentPoseList()->CountItems() - 1)
-			* fListElemHeight;
+		float lastItemTop = (CurrentPoseList()->CountItems() - 1) * fListElemHeight;
 		if (bounds.top > lastItemTop)
-			BView::ScrollTo(bounds.left, std::max(lastItemTop, 0.0f));
+			_inherited::ScrollTo(bounds.left, std::max(lastItemTop, 0.0f));
+
+		SortPoses();
+		Invalidate();
 	}
 }
 
 
 void
-BPoseView::CreateVolumePose(BVolume* volume, bool watchIndividually)
+BPoseView::CreateTrashPose()
+{
+	BPath path;
+	if (find_directory(B_TRASH_DIRECTORY, &path) != B_OK)
+		return;
+
+	BDirectory trashDir(path.Path());
+	BEntry entry;
+	if (trashDir.GetEntry(&entry) != B_OK)
+		return;
+
+	// redraw Trash icon when attribute changes
+	node_ref nref;
+	if (entry.GetNodeRef(&nref) == B_OK)
+		WatchNewNode(&nref, B_WATCH_ATTR, BMessenger(this));
+
+	Model* trashModel = new Model(&entry);
+	PoseInfo poseInfo;
+	ReadPoseInfo(trashModel, &poseInfo);
+
+	CreatePose(trashModel, &poseInfo, false, NULL, NULL, true);
+}
+
+
+void
+BPoseView::CreateVolumePose(BVolume* volume)
 {
 	if (volume->InitCheck() != B_OK || !volume->IsPersistent()) {
 		// We never want to create poses for those volumes; the file
@@ -1710,9 +1795,9 @@ BPoseView::CreateVolumePose(BVolume* volume, bool watchIndividually)
 	dirNode.node = ref.directory;
 
 	BPose* pose = EntryCreated(&dirNode, &itemNode, ref.name, 0);
-	if (pose != NULL && watchIndividually) {
-		// make sure volume names still get watched, even though
-		// they are on the desktop which is not their physical parent
+	if (pose != NULL && !TargetModel()->IsRoot()) {
+		// When placing a volume pose onto the Desktop where unlike in the
+		// Root window it will not be watched by the folder.
 		pose->TargetModel()->WatchVolumeAndMountPoint(B_WATCH_NAME
 			| B_WATCH_STAT | B_WATCH_ATTR, this);
 	}
@@ -1720,23 +1805,32 @@ BPoseView::CreateVolumePose(BVolume* volume, bool watchIndividually)
 
 
 void
-BPoseView::CreateTrashPose()
+BPoseView::CreateRootPose()
 {
-	BVolume volume;
-	if (BVolumeRoster().GetBootVolume(&volume) == B_OK) {
-		BDirectory trash;
-		BEntry entry;
-		node_ref ref;
-		if (FSGetTrashDir(&trash, volume.Device()) == B_OK
-			&& trash.GetEntry(&entry) == B_OK
-			&& entry.GetNodeRef(&ref) == B_OK) {
-			WatchNewNode(&ref);
-			Model* model = new Model(&entry);
-			PoseInfo info;
-			ReadPoseInfo(model, &info);
-			CreatePose(model, &info, false, NULL, NULL, true);
-		}
+	BEntry entry("/");
+	Model* model = new Model(&entry);
+	if (model == NULL || model->InitCheck() != B_OK) {
+		delete model;
+		return;
 	}
+
+	PoseInfo info;
+	ReadPoseInfo(model, &info);
+	CreatePose(model, &info, true, NULL, NULL, true);
+}
+
+
+void
+BPoseView::RemoveRootPose()
+{
+	BEntry entry("/");
+	node_ref nref;
+	if (entry.GetNodeRef(&nref) != B_OK)
+		return;
+
+	DeletePose(&nref);
+
+	Invalidate();
 }
 
 
@@ -1884,7 +1978,7 @@ BPoseView::AddPoseToList(PoseList* list, bool visibleList, bool insertionSort,
 			poseBounds = CalcPoseRectList(pose, poseIndex);
 
 		if (viewBounds.Intersects(poseBounds))
- 			SynchronousUpdate(poseBounds);
+			SynchronousUpdate(poseBounds);
 	}
 
 	if (indexPtr)
@@ -1913,9 +2007,8 @@ BPoseView::CreatePoses(Model** models, PoseInfo* poseInfoArray, int32 count,
 		Model* model = models[modelIndex];
 
 		// pose adopts model and deletes it when done
-		if (fInsertedNodes.Contains(*(model->NodeRef()))
-				|| FindZombie(model->NodeRef())) {
-			watch_node(model->NodeRef(), B_STOP_WATCHING, this);
+		if (fInsertedNodes.Contains(*(model->NodeRef())) || FindZombie(model->NodeRef())) {
+			StopWatchingNode(model->NodeRef());
 			delete model;
 			if (resultingPoses)
 				resultingPoses[modelIndex] = NULL;
@@ -1924,8 +2017,8 @@ BPoseView::CreatePoses(Model** models, PoseInfo* poseInfoArray, int32 count,
 		} else
 			fInsertedNodes.Add(*(model->NodeRef()));
 
-		if ((clipboardMode = FSClipboardFindNodeMode(model, !clipboardLocked,
-				true)) != 0 && !HasPosesInClipboard()) {
+		if ((clipboardMode = FSClipboardFindNodeMode(model, !clipboardLocked, true)) != 0
+			&& !HasPosesInClipboard()) {
 			SetHasPosesInClipboard(true);
 		}
 
@@ -2031,23 +2124,6 @@ BPoseView::PoseVisible(const Model* model, const PoseInfo* poseInfo)
 }
 
 
-bool
-BPoseView::ShouldShowPose(const Model* model, const PoseInfo* poseInfo)
-{
-	if (!PoseVisible(model, poseInfo))
-		return false;
-
-	// check filter before adding item
-	if (fRefFilter == NULL)
-		return true;
-
-	struct stat_beos stat;
-	convert_to_stat_beos(model->StatBuf(), &stat);
-
-	return fRefFilter->Filter(model->EntryRef(), model->Node(), &stat, model->MimeType());
-}
-
-
 const char*
 BPoseView::MimeTypeAt(int32 index)
 {
@@ -2100,8 +2176,7 @@ BPoseView::RefreshMimeTypeList()
 
 
 void
-BPoseView::InsertPoseAfter(BPose* pose, int32* index, int32 orientation,
-	BRect* invalidRect)
+BPoseView::InsertPoseAfter(BPose* pose, int32* index, int32 orientation, BRect* invalidRect)
 {
 	if (orientation == kInsertAfter) {
 		// TODO: get rid of this
@@ -2198,12 +2273,10 @@ BPoseView::MessageReceived(BMessage* message)
 			AddPosesCompleted();
 			break;
 
-		case kRestoreBackgroundImage:
-			ContainerWindow()->UpdateBackgroundImage();
-			break;
-
 		case B_META_MIME_CHANGED:
 			NoticeMetaMimeChanged(message);
+			if (Window() != NULL)
+				Window()->MessageReceived(message);
 			break;
 
 		case B_NODE_MONITOR:
@@ -2394,8 +2467,19 @@ BPoseView::MessageReceived(BMessage* message)
 			break;
 
 		case kMoveSelectionToTrash:
-			DoMoveToTrash();
+		{
+			BView* view = Window()->CurrentFocus();
+			if (dynamic_cast<BTextView*>(view) != NULL) {
+				// send B_DELETE to BTextView
+				char bytes[1];
+				bytes[0] = B_DELETE;
+				view->KeyDown(bytes, 1);
+			} else {
+				// send file to Trash
+				DoMoveToTrash();
+			}
 			break;
+		}
 
 		case kCleanupAll:
 			Cleanup(true);
@@ -2440,14 +2524,20 @@ BPoseView::MessageReceived(BMessage* message)
 
 		case kEditName:
 		{
-			if (ActivePose())
+			if (ActivePose() != NULL)
 				break;
 
 			BPose* pose = fSelectionList->FirstItem();
-			if (pose != NULL) {
-				BPoint where(0, CurrentPoseList()->IndexOf(pose) * fListElemHeight);
-				pose->EditFirstWidget(where, this);
-			}
+			if (pose == NULL)
+				break;
+
+			BPoint poseLoc;
+			if (ViewMode() == kListMode)
+				poseLoc = BPoint(0, CurrentPoseList()->IndexOf(pose) * fListElemHeight);
+			else
+				poseLoc = pose->Location(this);
+
+			pose->EditFirstWidget(poseLoc, this);
 			break;
 		}
 
@@ -2486,7 +2576,7 @@ BPoseView::MessageReceived(BMessage* message)
 					if (data->FindData("application/tracker-columns",
 							B_MIME_TYPE, &buffer, &size) == B_OK) {
 						BMessage state;
-						if (state.Unflatten((const char*)buffer) == B_OK) {
+						if (state.Unflatten(buffer, size) == B_OK) {
 							// remove all current columns (one always stays)
 							BColumn* old;
 							while ((old = ColumnAt(0)) != NULL) {
@@ -2636,8 +2726,7 @@ BPoseView::MessageReceived(BMessage* message)
 						if (message->FindBool("TransparentSelection",
 								&transparentSelection) == B_OK) {
 							fTransparentSelection = transparentSelection;
-							TrackerSettings().SetTransparentSelection(
-								fTransparentSelection);
+							TrackerSettings().SetTransparentSelection(fTransparentSelection);
 						}
 						break;
 					}
@@ -2648,8 +2737,7 @@ BPoseView::MessageReceived(BMessage* message)
 							bool sortFolderNamesFirst;
 							if (message->FindBool("SortFolderNamesFirst",
 								&sortFolderNamesFirst) == B_OK) {
-								settings.SetSortFolderNamesFirst(
-									sortFolderNamesFirst);
+								settings.SetSortFolderNamesFirst(sortFolderNamesFirst);
 							}
 							NameAttributeText::SetSortFolderNamesFirst(
 								settings.SortFolderNamesFirst());
@@ -2818,8 +2906,8 @@ BPoseView::AddColumn(BColumn* newColumn, const BColumn* after)
 	for (int32 index = afterColumnIndex + 2; index < count; index++) {
 		BColumn* column = ColumnAt(index);
 		ASSERT(newColumn != column);
-		column->SetOffset(column->Offset() + (attrWidth
-			+ kTitleColumnExtraMargin));
+
+		column->SetOffset(column->Offset() + attrWidth + kTitleColumnExtraMargin);
 	}
 
 	rect.left = offset;
@@ -2910,22 +2998,18 @@ BPoseView::ReadPoseInfo(Model* model, PoseInfo* poseInfo)
 	ReadAttrResult result = kReadAttrFailed;
 	BEntry entry;
 	model->GetEntry(&entry);
-	bool isTrash = model->IsTrash() && IsDesktopView();
 
 	// special case the "root" disks icon
-	// as well as the trash on desktop
-	if (model->IsRoot() || isTrash) {
-		BDirectory dir;
-		if (FSGetDeskDir(&dir) == B_OK) {
-			const char* poseInfoAttr = isTrash
-				? kAttrTrashPoseInfo
-				: kAttrDisksPoseInfo;
-			const char* poseInfoAttrForeign = isTrash
-				? kAttrTrashPoseInfoForeign
-				: kAttrDisksPoseInfoForeign;
-			result = ReadAttr(&dir, poseInfoAttr, poseInfoAttrForeign,
-				B_RAW_TYPE, 0, poseInfo, sizeof(*poseInfo),
-				&PoseInfo::EndianSwap);
+	// as well as the Trash on Desktop
+	if (model->IsRoot() || (model->IsTrash() && IsVolumesRoot())) {
+		BDirectory desktopDir;
+		if (FSGetDeskDir(&desktopDir) == B_OK) {
+			const char* poseInfoAttr = model->IsTrash()
+				? kAttrTrashPoseInfo : kAttrDisksPoseInfo;
+			const char* poseInfoAttrForeign = model->IsTrash()
+				? kAttrTrashPoseInfoForeign : kAttrDisksPoseInfoForeign;
+			result = ReadAttr(&desktopDir, poseInfoAttr, poseInfoAttrForeign,
+				B_RAW_TYPE, 0, poseInfo, sizeof(*poseInfo), &PoseInfo::EndianSwap);
 		}
 	} else {
 		ASSERT(model->IsNodeOpen());
@@ -2935,9 +3019,8 @@ BPoseView::ReadPoseInfo(Model* model, PoseInfo* poseInfo)
 			if (model->Node() == NULL)
 				break;
 
-			result = ReadAttr(model->Node(), kAttrPoseInfo,
-				kAttrPoseInfoForeign, B_RAW_TYPE, 0, poseInfo,
-				sizeof(*poseInfo), &PoseInfo::EndianSwap);
+			result = ReadAttr(model->Node(), kAttrPoseInfo, kAttrPoseInfoForeign,
+				B_RAW_TYPE, 0, poseInfo, sizeof(*poseInfo), &PoseInfo::EndianSwap);
 
 			if (result != kReadAttrFailed) {
 				// got it, bail
@@ -2966,8 +3049,7 @@ BPoseView::ReadPoseInfo(Model* model, PoseInfo* poseInfo)
 		poseInfo->fInvisible = false;
 	} else if (TargetModel() == NULL
 		|| (poseInfo->fInitedDirectory != model->EntryRef()->directory
-			&& (poseInfo->fInitedDirectory
-				!= TargetModel()->NodeRef()->node))) {
+			&& (poseInfo->fInitedDirectory != TargetModel()->NodeRef()->node))) {
 		// info was read properly but it's not for this directory
 		poseInfo->fInitedDirectory = -1LL;
 	} else if (poseInfo->fLocation.x < -kSanePoseLocation
@@ -2997,12 +3079,12 @@ BPoseView::ReadExtendedPoseInfo(Model* model)
 		BDirectory dir;
 		if (FSGetDeskDir(&dir) == B_OK) {
 			extendedPoseInfoAttrName = kAttrExtendedDisksPoseInfo;
-			extendedPoseInfoAttrForeignName = kAttrExtendedDisksPoseInfoForegin;
+			extendedPoseInfoAttrForeignName = kAttrExtendedDisksPoseInfoForeign;
 		} else
 			return NULL;
 	} else {
 		extendedPoseInfoAttrName = kAttrExtendedPoseInfo;
-		extendedPoseInfoAttrForeignName = kAttrExtendedPoseInfoForegin;
+		extendedPoseInfoAttrForeignName = kAttrExtendedPoseInfoForeign;
 	}
 
 	type_code type;
@@ -3037,9 +3119,9 @@ BPoseView::SetViewMode(uint32 newMode)
 	uint32 oldMode = ViewMode();
 	uint32 lastIconSize = fViewState->LastIconSize();
 
-	if (newMode == oldMode
-		&& (newMode != kIconMode || lastIconSize == fViewState->IconSize())) {
-		return;
+	if (newMode == oldMode) {
+		if (newMode != kIconMode || lastIconSize == fViewState->IconSize())
+			return;
 	}
 
 	ASSERT(!IsFilePanel());
@@ -3047,7 +3129,7 @@ BPoseView::SetViewMode(uint32 newMode)
 	uint32 lastIconMode = fViewState->LastIconMode();
 	if (newMode != kListMode) {
 		fViewState->SetLastIconMode(newMode);
-		if (oldMode == kIconMode)
+		if (newMode == kIconMode)
 			fViewState->SetLastIconSize(fViewState->IconSize());
 	}
 
@@ -3057,7 +3139,7 @@ BPoseView::SetViewMode(uint32 newMode)
 	// if we are the desktop.
 	BPoint scaleOffset(0, 0);
 	bool iconSizeChanged = newMode == kIconMode && oldMode == kIconMode;
-	if (!IsDesktop() && iconSizeChanged) {
+	if (!IsDesktopView() && iconSizeChanged) {
 		// definitely changing the icon size, so we will need to scroll
 		BRect bounds(Bounds());
 		BPoint center(bounds.LeftTop());
@@ -3102,7 +3184,7 @@ BPoseView::SetViewMode(uint32 newMode)
 	}
 
 	// check if we need to re-place poses when they are out of view
-	bool checkLocations = IsDesktop() && iconSizeChanged;
+	bool checkLocations = IsDesktopView() && iconSizeChanged;
 
 	BPoint oldOffset;
 	BPoint oldGrid;
@@ -3274,7 +3356,7 @@ BPoseView::UpdatePosesClipboardModeFromClipboard(BMessage* clipboardReport)
 			index, (const void**)&clipNode, &size) == B_OK; index++) {
 		BPose* pose = fPoseList->FindPose(&clipNode->node, &foundNodeIndex);
 		if (pose == NULL)
-			continue;
+			break;
 
 		if (clipNode->moveMode != pose->ClipboardMode() || pose->IsSelected()) {
 			pose->SetClipboardMode(clipNode->moveMode);
@@ -3350,7 +3432,7 @@ BPoseView::NewFileFromTemplate(const BMessage* message)
 	Model* targetModel = TargetModel();
 	ThrowOnAssert(targetModel != NULL);
 
-	entry_ref destEntryRef;
+	entry_ref fileRef, templateRef;
 	node_ref destNodeRef;
 
 	BDirectory destDir(targetModel->NodeRef());
@@ -3360,63 +3442,68 @@ BPoseView::NewFileFromTemplate(const BMessage* message)
 	// TODO: Localise this
 	char fileName[B_FILE_NAME_LENGTH] = "New ";
 	strlcat(fileName, message->FindString("name"), sizeof(fileName));
-	FSMakeOriginalName(fileName, &destDir, " copy");
+	BString suffix(" ");
+	suffix << B_TRANSLATE_COMMENT("copy", "filename copy");
+	FSMakeOriginalName(fileName, &destDir, suffix);
 
-	entry_ref srcRef;
-	message->FindRef("refs_template", &srcRef);
+	message->FindRef("refs_template", &templateRef);
+	BDirectory templateDir(&templateRef);
 
-	BDirectory dir(&srcRef);
-
-	if (dir.InitCheck() == B_OK) {
+	if (templateDir.InitCheck() == B_OK) {
 		// special handling of directories
-		if (FSCreateNewFolderIn(targetModel->NodeRef(), &destEntryRef,
-				&destNodeRef) == B_OK) {
-			BEntry destEntry(&destEntryRef);
+		entry_ref destRef;
+		if (FSCreateNewFolderIn(targetModel->NodeRef(), &destRef, &destNodeRef) == B_OK) {
+			BEntry destEntry(&destRef);
 			destEntry.Rename(fileName);
 		}
 	} else {
-		BFile srcFile(&srcRef, B_READ_ONLY);
+		BFile templateFile(&templateRef, B_READ_ONLY);
 		BFile destFile(&destDir, fileName, B_READ_WRITE | B_CREATE_FILE);
 
 		// copy the data from the template file
-		char* buffer = new char[1024];
-		ssize_t result;
+		char buffer[1024];
+		ssize_t readResult, writeResult;
 		do {
-			result = srcFile.Read(buffer, 1024);
-
-			if (result > 0) {
-				ssize_t written = destFile.Write(buffer, (size_t)result);
-				if (written != result)
-					result = written < B_OK ? written : B_ERROR;
+			readResult = templateFile.Read(buffer, 1024);
+			if (readResult > 0) {
+				writeResult = destFile.Write(buffer, (size_t)readResult);
+				if (writeResult != readResult)
+					readResult = writeResult < B_OK ? writeResult : B_ERROR;
 			}
-		} while (result > 0);
-		delete[] buffer;
+		} while (readResult > 0);
 	}
 
-	// todo: create an UndoItem
-
 	// copy the attributes from the template file
-	BNode srcNode(&srcRef);
+	BNode templateNode(&templateRef);
 	BNode destNode(&destDir, fileName);
-	FSCopyAttributesAndStats(&srcNode, &destNode, false);
+	FSCopyAttributesAndStats(&templateNode, &destNode, false);
 
-	BEntry entry(&destDir, fileName);
-	entry.GetRef(&destEntryRef);
+	BEntry fileEntry(&destDir, fileName);
+	fileEntry.GetRef(&fileRef);
+
+	// create the UndoItem
+	NewFileTemplateUndo undo(fileRef, templateRef);
 
 	// try to place new item at click point or under mouse if possible
-	PlaceFolder(&destEntryRef, message);
+	PlaceFolder(&fileRef, message);
 
 	// start renaming the entry
 	int32 index;
-	BPose* pose = EntryCreated(targetModel->NodeRef(), &destNodeRef,
-		destEntryRef.name, &index);
+	BPose* pose = EntryCreated(targetModel->NodeRef(), &destNodeRef, fileRef.name, &index);
 
 	if (pose != NULL) {
 		WatchNewNode(pose->TargetModel()->NodeRef());
 		UpdateScrollRange();
 		CommitActivePose();
 		SelectPose(pose, index);
-		pose->EditFirstWidget(BPoint(0, index * fListElemHeight), this);
+
+		BPoint poseLoc;
+		if (ViewMode() == kListMode)
+			poseLoc = BPoint(0, index * fListElemHeight);
+		else
+			poseLoc = pose->Location(this);
+
+		pose->EditFirstWidget(poseLoc, this);
 	}
 }
 
@@ -3436,8 +3523,7 @@ BPoseView::NewFolder(const BMessage* message)
 		PlaceFolder(&ref, message);
 
 		int32 index;
-		BPose* pose = EntryCreated(targetModel->NodeRef(), &nodeRef, ref.name,
-			&index);
+		BPose* pose = EntryCreated(targetModel->NodeRef(), &nodeRef, ref.name, &index);
 
 		if (IsFiltering()) {
 			if (fFilteredPoseList->FindPose(&nodeRef, &index) == NULL) {
@@ -3451,7 +3537,14 @@ BPoseView::NewFolder(const BMessage* message)
 			UpdateScrollRange();
 			CommitActivePose();
 			SelectPose(pose, index);
-			pose->EditFirstWidget(BPoint(0, index * fListElemHeight), this);
+
+			BPoint poseLoc;
+			if (ViewMode() == kListMode)
+				poseLoc = BPoint(0, index * fListElemHeight);
+			else
+				poseLoc = pose->Location(this);
+
+			pose->EditFirstWidget(poseLoc, this);
 		}
 	}
 }
@@ -3526,8 +3619,7 @@ BPoseView::Cleanup(bool doAll)
 				BRect oldBounds(pose->CalcRect(this));
 				BRect poseBounds(oldBounds);
 				pose->MoveTo(newLocation, this);
-				if (SlotOccupied(oldBounds, viewBounds)
-					|| intersectsDesktopElements) {
+				if (SlotOccupied(oldBounds, viewBounds) || intersectsDesktopElements) {
 					ResetPosePlacementHint();
 					PlacePose(pose, viewBounds);
 					poseBounds = pose->CalcRect(this);
@@ -3536,9 +3628,9 @@ BPoseView::Cleanup(bool doAll)
 				AddToVSList(pose);
 				AddToExtent(poseBounds);
 
- 				if (viewBounds.Intersects(poseBounds))
+				if (viewBounds.Intersects(poseBounds))
 					Invalidate(poseBounds);
- 				if (viewBounds.Intersects(oldBounds))
+				if (viewBounds.Intersects(oldBounds))
 					Invalidate(oldBounds);
 			}
 		}
@@ -3557,7 +3649,7 @@ BPoseView::PlacePose(BPose* pose, BRect &viewBounds)
 	// make pose rect a little bigger to ensure space between poses
 	rect.InsetBy(-3, 0);
 
-	bool checkValidLocation = IsDesktop();
+	bool checkValidLocation = IsDesktopView();
 
 	// find an empty slot to put pose into
 	while (SlotOccupied(rect, viewBounds)
@@ -3586,7 +3678,7 @@ BPoseView::PlacePose(BPose* pose, BRect &viewBounds)
 bool
 BPoseView::IsValidLocation(const BPose* pose)
 {
-	if (!IsDesktop())
+	if (!IsDesktopView())
 		return true;
 
 	BRect rect(pose->CalcRect(this));
@@ -3598,7 +3690,7 @@ BPoseView::IsValidLocation(const BPose* pose)
 bool
 BPoseView::IsValidLocation(const BRect& rect)
 {
-	if (!IsDesktop())
+	if (!IsDesktopView())
 		return true;
 
 	// on the desktop, don't allow icons outside of the view bounds
@@ -3676,11 +3768,11 @@ BPoseView::CheckAutoPlacedPoses()
 void
 BPoseView::CheckPoseVisibility(BRect* newFrame)
 {
-	bool desktop = IsDesktop() && newFrame != 0;
+	bool desktop = IsDesktopView() && newFrame != 0;
 
 	BRect deskFrame;
 	if (desktop) {
-		ASSERT(newFrame);
+		ASSERT(newFrame != NULL);
 		deskFrame = *newFrame;
 	}
 
@@ -3954,8 +4046,7 @@ BPoseView::MoveOrChangePoseSelection(int32 to)
 	PoseList* poseList = CurrentPoseList();
 	BPose* first = fSelectionList->FirstItem();
 
-	if (first != NULL && fMultipleSelection
-		&& (modifiers() & B_SHIFT_KEY) != 0) {
+	if (first != NULL && fMultipleSelection && (modifiers() & B_SHIFT_KEY) != 0) {
 		// Extend selection
 		BPose* target = poseList->ItemAt(to);
 		BPose* last = fSelectionList->LastItem();
@@ -3992,7 +4083,7 @@ BPoseView::ScrollIntoView(BPose* pose, int32 index)
 void
 BPoseView::ScrollIntoView(BRect poseRect)
 {
-	if (IsDesktop())
+	if (IsDesktopView())
 		return;
 
 	BPoint oldPos = Bounds().LeftTop(), newPos = oldPos;
@@ -4240,8 +4331,7 @@ BPoseView::CanHandleDragSelection(const Model* target,
 	if (!lock)
 		return false;
 
-	BStringList* mimeTypeList
-		= srcWindow->PoseView()->MimeTypesInSelection();
+	BStringList* mimeTypeList = srcWindow->PoseView()->MimeTypesInSelection();
 	if (mimeTypeList->IsEmpty()) {
 		PoseList* selectionList = srcWindow->PoseView()->SelectionList();
 		if (!selectionList->IsEmpty()) {
@@ -4250,12 +4340,11 @@ BPoseView::CanHandleDragSelection(const Model* target,
 
 			for (int32 index = 0; index < selectCount; index++) {
 				// get the mime type of the model, following a possible symlink
-				BEntry entry(selectionList->ItemAt(
-					index)->TargetModel()->EntryRef(), true);
+				BEntry entry(selectionList->ItemAt(index)->TargetModel()->EntryRef(), true);
 				if (entry.InitCheck() != B_OK)
 					continue;
 
- 				BFile file(&entry, O_RDONLY);
+				BFile file(&entry, O_RDONLY);
 				BNodeInfo mime(&file);
 
 				if (mime.InitCheck() != B_OK)
@@ -4290,8 +4379,7 @@ BPoseView::TrySettingPoseLocation(BNode* node, BPoint point)
 	ASSERT(targetModel != NULL);
 
 	if (targetModel != NULL && targetModel->NodeRef() != NULL
-		&& FSSetPoseLocation(targetModel->NodeRef()->node, node, point)
-			== B_OK) {
+		&& FSSetPoseLocation(targetModel->NodeRef()->node, node, point) == B_OK) {
 		// get rid of opposite endianness attribute
 		node->RemoveAttr(kAttrPoseInfoForeign);
 	}
@@ -4311,7 +4399,7 @@ BPoseView::CreateClippingFile(BPoseView* poseView, BFile &result,
 	else
 		strcpy(resultingName, fallbackName);
 
-	FSMakeOriginalName(resultingName, directory, "");
+	FSMakeOriginalName(resultingName, directory, "", 0);
 
 	// create a clipping file
 	status_t error = directory->CreateFile(resultingName, &result, true);
@@ -4326,8 +4414,7 @@ BPoseView::CreateClippingFile(BPoseView* poseView, BFile &result,
 
 
 static int32
-RunMimeTypeDestinationMenu(const char* actionText,
-	const BStringList* types,
+RunMimeTypeDestinationMenu(const char* actionText, const BStringList* types,
 	const BStringList* specificItems, BPoint where)
 {
 	int32 count;
@@ -4406,7 +4493,7 @@ BPoseView::HandleMessageDropped(BMessage* message)
 		return false;
 
 	BContainerWindow* window = dynamic_cast<BContainerWindow*>(Window());
-	if (window != NULL && message->HasData("RGBColor", 'RGBC')) {
+	if (window != NULL && message->HasData("RGBColor", B_RGB_COLOR_TYPE)) {
 		// do not handle roColor-style drops here, pass them on to the desktop
 		BMessenger((BHandler*)window).SendMessage(message);
 
@@ -4431,8 +4518,7 @@ BPoseView::HandleMessageDropped(BMessage* message)
 	if (targetPose != NULL) {
 		targetModel = targetPose->TargetModel();
 		if (targetModel->IsSymLink()
-			&& tmpTarget.SetTo(targetPose->TargetModel()->EntryRef(),
-				true, true) == B_OK) {
+			&& tmpTarget.SetTo(targetPose->TargetModel()->EntryRef(), true, true) == B_OK) {
 			targetModel = &tmpTarget;
 		}
 	}
@@ -4442,10 +4528,11 @@ BPoseView::HandleMessageDropped(BMessage* message)
 
 
 bool
-BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
-	BPose* targetPose, BView* view, BPoint dropPoint)
+BPoseView::HandleDropCommon(BMessage* message, Model* targetModel, BPose* targetPose,
+	BView* view, BPoint dropPoint)
 {
 	uint32 buttons = (uint32)message->FindInt32("buttons");
+	uint32 moveMode = 0;
 
 	BContainerWindow* window = NULL;
 	BPoseView* poseView = dynamic_cast<BPoseView*>(view);
@@ -4493,10 +4580,8 @@ BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
 				BStringList actionSpecifiers(10);
 				for (int32 index = 0; ; index++) {
 					const char* string;
-					if (message->FindString("be:actionspecifier", index,
-							&string) != B_OK) {
+					if (message->FindString("be:actionspecifier", index, &string) != B_OK)
 						break;
-					}
 
 					ASSERT(string != NULL);
 					actionSpecifiers.Add(string);
@@ -4507,17 +4592,14 @@ BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
 				BStringList typeNames(10);
 				for (int32 index = 0; ; index++) {
 					const char* string;
-					if (message->FindString("be:filetypes", index, &string)
-							!= B_OK) {
+					if (message->FindString("be:filetypes", index, &string) != B_OK)
 						break;
-					}
 
 					ASSERT(string != NULL);
 					types.Add(string);
 
 					const char* typeName = "";
-					message->FindString("be:type_descriptions", index,
-						&typeName);
+					message->FindString("be:type_descriptions", index, &typeName);
 					typeNames.Add(typeName);
 				}
 
@@ -4525,12 +4607,10 @@ BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
 				int32 specificActionIndex = -1;
 
 				// if control down, run a popup menu
-				if (canCopy
-					&& SecondaryMouseButtonDown(modifiers(), buttons)) {
+				if (canCopy && SecondaryMouseButtonDown(modifiers(), buttons)) {
 					if (actionSpecifiers.CountStrings() > 0) {
-						specificActionIndex = RunMimeTypeDestinationMenu(NULL,
-							NULL, &actionSpecifiers,
-							view->ConvertToScreen(dropPoint));
+						specificActionIndex = RunMimeTypeDestinationMenu(NULL, NULL,
+							&actionSpecifiers, view->ConvertToScreen(dropPoint));
 
 						if (specificActionIndex == -1)
 							return false;
@@ -4547,9 +4627,8 @@ BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
 
 				char name[B_FILE_NAME_LENGTH];
 				BFile file;
-				if (CreateClippingFile(poseView, file, name, &targetDirectory,
-						message, B_TRANSLATE("Untitled clipping"),
-						targetPose == NULL, dropPoint) != B_OK) {
+				if (CreateClippingFile(poseView, file, name, &targetDirectory, message,
+					B_TRANSLATE("Untitled clipping"), targetPose == NULL, dropPoint) != B_OK) {
 					return false;
 				}
 
@@ -4561,8 +4640,7 @@ BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
 				reply.AddString("be:types", B_FILE_MIME_TYPE);
 				if (specificTypeIndex != -1) {
 					// we had the user pick a specific type from a menu, use it
-					reply.AddString("be:filetypes",
-						types.StringAt(specificTypeIndex).String());
+					reply.AddString("be:filetypes", types.StringAt(specificTypeIndex).String());
 
 					if (typeNames.StringAt(specificTypeIndex).Length()) {
 						reply.AddString("be:type_descriptions",
@@ -4588,10 +4666,9 @@ BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
 				// support
 				for (int32 index = 0; ; index++) {
 					const char* type;
-					if (message->FindString("be:filetypes", index, &type)
-							!= B_OK) {
+					if (message->FindString("be:filetypes", index, &type) != B_OK)
 						break;
-					}
+
 					reply.AddString("be:filetypes", type);
 				}
 
@@ -4605,8 +4682,7 @@ BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
 			// look for specific command or bring up popup
 			// Unify this with local drag&drop
 
-			if (!targetModel->IsDirectory()
-				&& !targetModel->IsVirtualDirectory()) {
+			if (!targetModel->IsDirectory() && !targetModel->IsVirtualDirectory()) {
 				// bail if we are not a directory
 				return false;
 			}
@@ -4641,7 +4717,6 @@ BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
 					canCopy = true;
 			}
 
-			uint32 moveMode;
 			if (canCopy)
 				moveMode = kCopySelectionTo;
 			else if (canMove)
@@ -4656,14 +4731,13 @@ BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
 			}
 
 			// handle refs by performing a copy
-			BObjectList<entry_ref, true>* entryList
-				= new BObjectList<entry_ref, true>(10);
-
+			BObjectList<entry_ref, true>* entryList = new BObjectList<entry_ref, true>(10);
 			for (int32 index = 0; ; index++) {
 				// copy all enclosed refs into a list
 				entry_ref ref;
 				if (message->FindRef("refs", index, &ref) != B_OK)
 					break;
+
 				entryList->AddItem(new entry_ref(ref));
 			}
 
@@ -4677,11 +4751,9 @@ BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
 					// force the the icons to lay out in 5 columns
 					for (int32 index = 0; count; index++) {
 						for (int32 j = 0; count && j < 4; j++, count--) {
-							BPoint point(
-								dropPoint + BPoint(j * poseView->fGrid.x,
+							BPoint point(dropPoint + BPoint(j * poseView->fGrid.x,
 								index * poseView->fGrid.y));
-							pointList->AddItem(
-								new BPoint(poseView->PinToGrid(point,
+							pointList->AddItem(new BPoint(poseView->PinToGrid(point,
 								poseView->fGrid, poseView->fOffset)));
 						}
 					}
@@ -4767,12 +4839,9 @@ BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
 			}
 
 			BMessage embeddedBitmap;
-			if (message->FindMessage(kBitmapMimeType, &embeddedBitmap)
-					!= B_OK
-				&& message->FindMessage(kLargeIconType, &embeddedBitmap)
-					!= B_OK
-				&& message->FindMessage(kMiniIconType, &embeddedBitmap)
-					!= B_OK) {
+			if (message->FindMessage(kBitmapMimeType, &embeddedBitmap) != B_OK
+				&& message->FindMessage(kLargeIconType, &embeddedBitmap) != B_OK
+				&& message->FindMessage(kMiniIconType, &embeddedBitmap) != B_OK) {
 				return false;
 			}
 
@@ -4840,8 +4909,7 @@ BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
 	if (targetModel != NULL && window != NULL) {
 		// TODO: pick files to drop/launch on a case by case basis
 		if (targetModel->IsDirectory() || targetModel->IsVirtualDirectory()) {
-			MoveSelectionInto(targetModel, srcWindow, window, buttons,
-				dropPoint, false);
+			MoveSelectionInto(targetModel, srcWindow, window, buttons, dropPoint, false);
 			wasHandled = true;
 		} else if (CanHandleDragSelection(targetModel, message, ignoreTypes)) {
 			LaunchAppWithSelection(targetModel, message, !ignoreTypes);
@@ -4849,11 +4917,9 @@ BPoseView::HandleDropCommon(BMessage* message, Model* targetModel,
 		}
 	}
 
-	if (poseView != NULL && !wasHandled) {
-		BPoint clickPoint = message->FindPoint("click_pt");
-		// TODO: removed check for root here need to do that, possibly at a
-		// different level
-		poseView->MoveSelectionTo(dropPoint, clickPoint, srcWindow);
+	if (!wasHandled && poseView != NULL) {
+		BPoint where = message->GetPoint("click_pt", B_ORIGIN);
+		poseView->MoveSelectionTo(targetModel, dropPoint, srcWindow, where, moveMode);
 	}
 
 	if (poseView != NULL && poseView->fEnsurePosesVisible)
@@ -4878,10 +4944,9 @@ AddOneToLaunchMessage(BPose* pose, BPoseView*, void* castToParams)
 	ThrowOnAssert(pose != NULL);
 	ThrowOnAssert(pose->TargetModel() != NULL);
 
-	if (params->app->IsDropTarget(params->checkTypes
-			? pose->TargetModel() : NULL, true)) {
+	Model* model = params->checkTypes ? pose->TargetModel() : NULL;
+	if (params->app->IsDropTarget(model, true))
 		params->refsMessage->AddRef("refs", pose->TargetModel()->EntryRef());
-	}
 
 	return false;
 }
@@ -4922,39 +4987,98 @@ BPoseView::DragSelectionContains(const BPose* target,
 }
 
 
+/* MoveTo/CopyTo/LinkTo menu version of MoveSelectionInto()
+ *
+ * The mouse cursor location is not helpful here since we're navigating
+ * menus potentially on a different view. Find the next available slot
+ * to move/copy/link the poses to.
+ */
 void
 BPoseView::MoveSelectionInto(Model* destFolder, BContainerWindow* srcWindow,
 	bool forceCopy, bool forceMove, bool createLink, bool relativeLink)
 {
+	BPoint where;
 	uint32 buttons;
-	BPoint loc;
-	GetMouse(&loc, &buttons);
-	MoveSelectionInto(destFolder, srcWindow,
-		dynamic_cast<BContainerWindow*>(Window()), buttons, loc, forceCopy,
-		forceMove, createLink, relativeLink);
+	GetMouse(&where, &buttons);
+
+	int32 end = 0;
+	BPoint dropPoint(where);
+		// drop point is valid but not very helpful right now
+
+	// get destination view drop point in view coordinates if we can
+	BContainerWindow* destWindow = NULL;
+	TTracker* tracker = dynamic_cast<TTracker*>(be_app);
+	if (tracker != NULL) {
+		destWindow = tracker->FindContainerWindow(destFolder->NodeRef());
+		if (destWindow != NULL && destWindow->LockLooper()) {
+			BPoseView* destPoseView = destWindow->PoseView();
+			if (destPoseView != NULL && destPoseView->ViewMode() != kListMode) {
+				BRect destViewBounds(destPoseView->Bounds());
+				PoseList* poseList = destPoseView->CurrentPoseList();
+				// find an empty slot to put the new pose
+				if (poseList != NULL && poseList->ItemAt(0) != NULL) {
+					end = poseList->CountItems();
+					BRect slotRect(poseList->ItemAt(0)->CalcRect(destPoseView));
+					for (int32 i = 0; i < end && SlotOccupied(slotRect, destViewBounds); i++)
+						NextSlot(poseList->ItemAt(i), slotRect, destViewBounds);
+					// set the drop point to the next empty slot
+					dropPoint = slotRect.LeftTop();
+				} else {
+					// empty folder, set drop point to top left of view offset by a bit
+					dropPoint = destViewBounds.OffsetByCopy(20, 20).LeftTop();
+				}
+				// translate coordinates from dest view to view
+				dropPoint = ConvertFromScreen(destPoseView->ConvertToScreen(dropPoint));
+			}
+			destWindow->UnlockLooper();
+		}
+	}
+
+	MoveSelectionInto(destFolder, srcWindow, destWindow, buttons, dropPoint,
+		forceCopy, forceMove, createLink, relativeLink, where - dropPoint);
+
+	// auto-place new poses
+	if (destWindow != NULL && destWindow->LockLooper()) {
+		BPoseView* destPoseView = destWindow->PoseView();
+		if (destPoseView != NULL && destPoseView->ViewMode() != kListMode) {
+			int32 start = end;
+			PoseList* poseList = destPoseView->CurrentPoseList();
+			if (poseList != NULL) {
+				end = poseList->CountItems();
+				for (int32 i = start; i < end; i++) {
+					BPose* pose = poseList->ItemAt(i);
+					if (pose != NULL)
+						pose->SetAutoPlaced(true);
+				}
+			}
+			if (end > start)
+				destPoseView->CheckAutoPlacedPoses();
+		}
+		destWindow->UnlockLooper();
+	}
 }
 
 
 void
 BPoseView::MoveSelectionInto(Model* destFolder, BContainerWindow* srcWindow,
-	BContainerWindow* destWindow, uint32 buttons, BPoint loc, bool forceCopy,
-	bool forceMove, bool createLink, bool relativeLink, BPoint clickPoint,
-	bool dropOnGrid)
+	BContainerWindow* destWindow, uint32 buttons, BPoint dropPoint, bool forceCopy,
+	bool forceMove, bool createLink, bool createRelativeLink, BPoint dragStart, bool pinToGrid)
 {
+	ASSERT(srcWindow != NULL);
+	ASSERT(srcWindow->PoseView() != NULL);
+	ASSERT(srcWindow->PoseView()->TargetModel() != NULL);
+
 	AutoLock<BWindow> lock(srcWindow);
 	if (!lock)
 		return;
 
-	ASSERT(srcWindow->PoseView()->TargetModel() != NULL);
-
-	if (srcWindow->PoseView()->CountSelected() == 0)
+	BPoseView* sourceView = srcWindow->PoseView();
+	if (sourceView->CountSelected() == 0)
 		return;
 
-	bool createRelativeLink = relativeLink;
-	if (SecondaryMouseButtonDown(modifiers(), buttons)
-		&& destWindow != NULL) {
-		switch (destWindow->ShowDropContextMenu(loc,
-				srcWindow != NULL ? srcWindow->PoseView() : NULL)) {
+	if (destWindow != NULL && SecondaryMouseButtonDown(modifiers(), buttons)) {
+		BPoseView* poseView = (srcWindow != NULL ? sourceView : NULL);
+		switch (destWindow->ShowDropContextMenu(dropPoint, poseView)) {
 			case kCreateRelativeLink:
 				createRelativeLink = true;
 				break;
@@ -4978,47 +5102,43 @@ BPoseView::MoveSelectionInto(Model* destFolder, BContainerWindow* srcWindow,
 		}
 	}
 
-	// make sure source and destination folders are different
-	if (!createLink && !createRelativeLink
-		&& (*srcWindow->PoseView()->TargetModel()->NodeRef()
-			== *destFolder->NodeRef())) {
-		BPoseView* targetView = srcWindow->PoseView();
+	// same folder and not creating a link
+	if (*sourceView->TargetModel()->NodeRef() == *destFolder->NodeRef()
+		&& !(createLink || createRelativeLink)) {
 		if (forceCopy) {
-			targetView->DuplicateSelection(&clickPoint, &loc);
+			sourceView->DuplicateSelection(&dragStart, &dropPoint);
 			return;
 		}
 
-		if (targetView->ViewMode() == kListMode) {
+		if (sourceView->ViewMode() == kListMode) {
 			// can't move in list view
 			return;
 		}
 
-		BPoint delta = loc - clickPoint;
-		int32 selectCount = targetView->CountSelected();
+		BPoint delta = dropPoint - dragStart;
+		int32 selectCount = sourceView->CountSelected();
 		for (int32 index = 0; index < selectCount; index++) {
-			BPose* pose = targetView->SelectionList()->ItemAt(index);
+			BPose* pose = sourceView->SelectionList()->ItemAt(index);
 
 			// remove pose from VSlist before changing location
 			// so that we "find" the correct pose to remove
 			// need to do this because bsearch uses top of pose
 			// to locate pose to remove
-			targetView->RemoveFromVSList(pose);
-			BPoint location(pose->Location(targetView) + delta);
-			BRect oldBounds(pose->CalcRect(targetView));
-			if (dropOnGrid) {
-				location = targetView->PinToGrid(location, targetView->fGrid,
-					targetView->fOffset);
-			}
+			sourceView->RemoveFromVSList(pose);
+			BPoint loc(pose->Location(sourceView) + delta);
+			BRect oldBounds(pose->CalcRect(sourceView));
+			if (pinToGrid)
+				loc = sourceView->PinToGrid(loc, sourceView->fGrid, sourceView->fOffset);
 
 			// TODO: don't drop poses under desktop elements
 			//		 ie: replicants, deskbar
-			pose->MoveTo(location, targetView);
+			pose->MoveTo(loc, sourceView);
 
-			targetView->RemoveFromExtent(oldBounds);
-			targetView->AddToExtent(pose->CalcRect(targetView));
+			sourceView->RemoveFromExtent(oldBounds);
+			sourceView->AddToExtent(pose->CalcRect(sourceView));
 
 			// remove and reinsert pose to keep VSlist sorted
-			targetView->AddToVSList(pose);
+			sourceView->AddToVSList(pose);
 		}
 
 		return;
@@ -5077,12 +5197,20 @@ BPoseView::MoveSelectionInto(Model* destFolder, BContainerWindow* srcWindow,
 
 	if (okToMove) {
 		PoseList* selectionList = srcWindow->PoseView()->SelectionList();
-		BList* pointList = destWindow->PoseView()->GetDropPointList(clickPoint,
-			loc, selectionList, srcWindow->PoseView()->ViewMode() == kListMode,
-			dropOnGrid);
-		int32 selectionSize = selectionList->CountItems();
-		BObjectList<entry_ref, true>* srcList
-			= new BObjectList<entry_ref, true>(selectionSize);
+		BList* pointList = NULL;
+		if (destWindow != NULL && destWindow->LockLooper()) {
+			// destination window is available e.g. drag and drop
+			pointList = destWindow->PoseView()->GetDropPointList(dragStart, dropPoint,
+				selectionList, srcWindow->PoseView(), pinToGrid);
+			destWindow->UnlockLooper();
+		} else {
+			// destination window is closed e.g. Move to/Copy to/Link to
+			// pose positions will be offset by their position in the source window
+			pointList = srcWindow->PoseView()->GetDropPointList(dragStart, dropPoint,
+				selectionList, srcWindow->PoseView(), pinToGrid);
+		}
+		int32 selectionSize = srcWindow->PoseView()->CountSelected();
+		BObjectList<entry_ref, true>* srcList = new BObjectList<entry_ref, true>(selectionSize);
 
 		if (srcWindow->TargetModel()->IsVirtualDirectory()) {
 			// resolve symlink and add the resulting entry_ref to the list
@@ -5110,6 +5238,12 @@ BPoseView::MoveSelectionInto(Model* destFolder, BContainerWindow* srcWindow,
 		else
 			moveMode = kMoveSelectionTo;
 
+		// move will replace current selection
+		if (moveMode == kMoveSelectionTo && destWindow != NULL && destWindow->LockLooper()) {
+			destWindow->PoseView()->ClearSelection();
+			destWindow->UnlockLooper();
+		}
+
 		FSMoveToFolder(srcList, destEntry, moveMode, pointList);
 		return;
 	}
@@ -5119,8 +5253,8 @@ BPoseView::MoveSelectionInto(Model* destFolder, BContainerWindow* srcWindow,
 
 
 void
-BPoseView::MoveSelectionTo(BPoint dropPoint, BPoint clickPoint,
-	BContainerWindow* srcWindow)
+BPoseView::MoveSelectionTo(Model* model, BPoint dropPoint, BContainerWindow* srcWindow,
+	BPoint dragStart, uint32 moveMode)
 {
 	// Moves selection from srcWindow into this window, copying if necessary.
 
@@ -5128,23 +5262,32 @@ BPoseView::MoveSelectionTo(BPoint dropPoint, BPoint clickPoint,
 	if (window == NULL)
 		return;
 
-	ASSERT(window->PoseView() != NULL);
-	ASSERT(TargetModel() != NULL);
+	if (model == NULL)
+		model = TargetModel();
+
+	ASSERT(model != NULL);
+
+	// use this directory unless we were passed a directory
+	if (!(model->IsDirectory() || model->IsVirtualDirectory()))
+		model = TargetModel();
 
 	// make sure this window is a legal drop target
-	if (srcWindow != window && !TargetModel()->IsDropTarget())
+	if (srcWindow != window && !model->IsDropTarget())
 		return;
 
-	uint32 buttons = (uint32)window->CurrentMessage()->FindInt32("buttons");
+	ASSERT(window->CurrentMessage() != NULL);
+
+	uint32 buttons = (uint32)window->CurrentMessage()->GetInt32("buttons", 0);
 	bool pinToGrid = (modifiers() & B_COMMAND_KEY) != 0;
-	MoveSelectionInto(TargetModel(), srcWindow, window, buttons, dropPoint,
-		false, false, false, false, clickPoint, pinToGrid);
+
+	MoveSelectionInto(model, srcWindow, window, buttons, dropPoint, false, false,
+		moveMode == kCreateLink, moveMode == kCreateRelativeLink, dragStart, pinToGrid);
 }
 
 
 inline void
-UpdateWasBrokenSymlinkBinder(BPose* pose, Model* model, int32 index,
-	BPoseView* poseView, BObjectList<Model>* fBrokenLinks)
+UpdateWasBrokenSymlinkBinder(BPose* pose, Model* model, int32 index, BPoseView* poseView,
+	BObjectList<Model>* fBrokenLinks)
 {
 	if (!model->IsSymLink())
 		return;
@@ -5166,8 +5309,7 @@ BPoseView::TryUpdatingBrokenLinks()
 	BObjectList<Model>* brokenLinksCopy = new BObjectList<Model>(*fBrokenLinks);
 
 	// try fixing broken symlinks, and detecting broken ones.
-	EachPoseAndModel(fPoseList, &UpdateWasBrokenSymlinkBinder, this,
-		fBrokenLinks);
+	EachPoseAndModel(fPoseList, &UpdateWasBrokenSymlinkBinder, this, fBrokenLinks);
 
 	for (int i = brokenLinksCopy->CountItems() - 1; i >= 0; i--) {
 		if (!fBrokenLinks->HasItem(brokenLinksCopy->ItemAt(i)))
@@ -5193,8 +5335,7 @@ BPoseView::PoseHandleDeviceUnmounted(BPose* pose, Model* model, int32 index,
 
 
 static void
-OneMetaMimeChanged(BPose* pose, Model* model, int32 index,
-	BPoseView* poseView, const char* type)
+OneMetaMimeChanged(BPose* pose, Model* model, int32 index, BPoseView* poseView, const char* type)
 {
 	ASSERT(model != NULL);
 
@@ -5321,8 +5462,9 @@ BPoseView::FSNotification(const BMessage* message)
 	node_ref itemNode;
 	dev_t device;
 	Model* targetModel = TargetModel();
+	TrackerSettings settings;
 
-	switch (message->FindInt32("opcode")) {
+	switch (message->GetInt32("opcode", 0)) {
 		case B_ENTRY_CREATED:
 		{
 			ASSERT(targetModel != NULL);
@@ -5338,14 +5480,14 @@ BPoseView::FSNotification(const BMessage* message)
 			// Query windows can get notices on different dirNodes
 			// The Disks window can too
 			// So can the Desktop, as long as the integrate flag is on
-			TrackerSettings settings;
 			if (targetModel != NULL && dirNode != *targetModel->NodeRef()
 				&& !targetModel->IsQuery()
 				&& !targetModel->IsVirtualDirectory()
 				&& !targetModel->IsRoot()
-				&& (!settings.ShowDisksIcon() || !IsDesktopView())) {
+				&& (!settings.ShowDisksIcon() || !IsVolumesRoot())) {
 				if (count == 0)
 					break;
+
 				createPose = false;
 			}
 
@@ -5378,8 +5520,8 @@ BPoseView::FSNotification(const BMessage* message)
 							createdPath.Length()) == 0) {
 							if (pathStr[createdPath.Length()] != '/')
 								break;
-							StopWatchingParentsOf(fBrokenLinks->ItemAt(i)
-								->EntryRef());
+
+							StopWatchingParentsOf(fBrokenLinks->ItemAt(i)->EntryRef());
 							watch_node(&itemNode, B_WATCH_DIRECTORY, this);
 							break;
 						}
@@ -5452,16 +5594,19 @@ BPoseView::FSNotification(const BMessage* message)
 			if (message->FindInt32("new device", &device) != B_OK)
 				break;
 
-			if (targetModel != NULL && targetModel->IsRoot()) {
-				BVolume volume(device);
-				if (volume.InitCheck() == B_OK)
-					CreateVolumePose(&volume, false);
-			} else if (TargetModel()->IsTrash()) {
-				// add trash items from newly mounted volume
+			BVolume volume(device);
+			if (volume.InitCheck() != B_OK)
+				break;
 
+			ASSERT(targetModel != NULL);
+			if (targetModel->IsRoot() // always create volume poses on root
+				|| ((IsVolumesRoot() && settings.MountVolumesOntoDesktop())
+					&& ((!volume.IsShared() || settings.MountSharedVolumesOntoDesktop())))) {
+				CreateVolumePose(&volume);
+			} else if (targetModel->IsTrash()) {
+				// add trash items from newly mounted volume
 				BDirectory trashDir;
 				BEntry entry;
-				BVolume volume(device);
 				if (FSGetTrashDir(&trashDir, volume.Device()) == B_OK
 					&& trashDir.GetEntry(&entry) == B_OK) {
 					Model model(&entry);
@@ -5470,7 +5615,7 @@ BPoseView::FSNotification(const BMessage* message)
 				}
 			}
 			TaskLoop* taskLoop = ContainerWindow()->DelayedTaskLoop();
-			ASSERT(taskLoop);
+			ASSERT(taskLoop != NULL);
 			taskLoop->RunLater(NewMemberFunctionObject(
 				&BPoseView::TryUpdatingBrokenLinks, this), 500000);
 				// delay of 500000: wait for volumes to properly finish mounting
@@ -5483,14 +5628,19 @@ BPoseView::FSNotification(const BMessage* message)
 
 		case B_DEVICE_UNMOUNTED:
 			if (message->FindInt32("device", &device) == B_OK) {
-				if (targetModel != NULL
-					&& targetModel->NodeRef()->device == device) {
-					// close the window from a volume that is gone
-					DisableSaveLocation();
-					Window()->Close();
-				} else if (targetModel != NULL) {
-					EachPoseAndModel(fPoseList, &PoseHandleDeviceUnmounted,
-						this, device);
+				ASSERT(targetModel != NULL);
+				if (targetModel->NodeRef()->device == device) {
+					if (IsFilePanel()) {
+						// reset location to home directory
+						BMessage message(kSwitchToHome);
+						Window()->PostMessage(&message, this);
+					} else {
+						// close the window from a volume that is gone
+						DisableSaveLocation();
+						Window()->Close();
+					}
+				} else {
+					EachPoseAndModel(fPoseList, &PoseHandleDeviceUnmounted, this, device);
 				}
 			}
 			break;
@@ -5560,7 +5710,7 @@ BPoseView::EntryCreated(const node_ref* dirNode, const node_ref* itemNode,
 	ReadPoseInfo(model, &poseInfo);
 
 	if (!PoseVisible(model, &poseInfo)) {
-		watch_node(model->NodeRef(), B_STOP_WATCHING, this);
+		StopWatchingNode(model->NodeRef());
 		delete model;
 		return NULL;
 	}
@@ -5568,7 +5718,7 @@ BPoseView::EntryCreated(const node_ref* dirNode, const node_ref* itemNode,
 	// model is a symlink, cache up the symlink target or scrap
 	// everything if target is invisible
 	if (model->IsSymLink() && !CreateSymlinkPoseTarget(model)) {
-		watch_node(model->NodeRef(), B_STOP_WATCHING, this);
+		StopWatchingNode(model->NodeRef());
 		delete model;
 		return NULL;
 	}
@@ -5647,14 +5797,6 @@ BPoseView::EntryMoved(const BMessage* message)
 			Model* poseModel = pose->TargetModel();
 			ASSERT(poseModel != NULL);
 			poseModel->UpdateEntryRef(&dirNode, name);
-			// for queries we check for move to trash and remove item if so
-			if (targetModel->IsQuery()) {
-				PoseInfo poseInfo;
-				ReadPoseInfo(poseModel, &poseInfo);
-				if (!ShouldShowPose(poseModel, &poseInfo))
-					return DeletePose(&itemNode, pose, index);
-				return true;
-			}
 
 			BPoint loc(0, index * fListElemHeight);
 			// if we get a rename then we need to assume that we might
@@ -5690,7 +5832,11 @@ BPoseView::EntryMoved(const BMessage* message)
 	} else if (oldDir == thisDirNode.node) {
 		DeletePose(&itemNode);
 	} else if (dirNode.node == thisDirNode.node) {
-		EntryCreated(&dirNode, &itemNode, name);
+		BPose* pose = EntryCreated(&dirNode, &itemNode, name);
+
+		// select new pose
+		if (pose != NULL)
+			AddPoseToSelection(pose, IndexOfPose(pose), false);
 	}
 
 	TryUpdatingBrokenLinks();
@@ -5777,6 +5923,9 @@ BPoseView::StopWatchingParentsOf(const entry_ref* ref)
 bool
 BPoseView::AttributeChanged(const BMessage* message)
 {
+	ASSERT(ContainerWindow() != NULL);
+	ASSERT(CurrentPoseList() != NULL);
+
 	node_ref itemNode;
 	message->FindInt32("device", &itemNode.device);
 	message->FindInt64("node", (int64*)&itemNode.node);
@@ -5786,14 +5935,14 @@ BPoseView::AttributeChanged(const BMessage* message)
 		attrName = NULL;
 
 	Model* targetModel = TargetModel();
-	if (targetModel != NULL && *targetModel->NodeRef() == itemNode
-		&& targetModel->IsNodeOpen()
+	if (ContainerWindow()->ShouldHaveDraggableFolderIcon() && targetModel != NULL
+		&& *targetModel->NodeRef() == itemNode && targetModel->IsNodeOpen()
 		&& targetModel->AttrChanged(attrName)) {
 		// the icon of our target has changed, update drag icon
 		// TODO: make this simpler (i.e. store the icon with the window)
 		BView* view = Window()->FindView("MenuBar");
 		if (view != NULL) {
-			view = view->FindView("ThisContainer");
+			view = view->FindView("DraggableContainerIcon");
 			if (view != NULL) {
 				IconCache::sIconCache->IconChanged(targetModel);
 				view->Invalidate();
@@ -5803,7 +5952,7 @@ BPoseView::AttributeChanged(const BMessage* message)
 
 	int32 index;
 	attr_info info;
-	PoseList* posesFound = fPoseList->FindAllPoses(&itemNode);
+	PoseList* posesFound = CurrentPoseList()->FindAllPoses(&itemNode);
 	int32 posesCount = posesFound->CountItems();
 	for (int i = 0; i < posesCount; i++) {
 		BPose* pose = posesFound->ItemAt(i);
@@ -5822,8 +5971,7 @@ BPoseView::AttributeChanged(const BMessage* message)
 			if (result == B_OK || result != B_BUSY)
 				break;
 
-			PRINT(("poseModel %s busy, retrying in a bit\n",
-				poseModel->Name()));
+			PRINT(("poseModel %s busy, retrying in a bit\n", poseModel->Name()));
 			snooze(10000);
 		}
 		if (result != B_OK) {
@@ -5831,59 +5979,64 @@ BPoseView::AttributeChanged(const BMessage* message)
 			continue;
 		}
 
-		bool visible = fPoseList->FindPose(poseModel->NodeRef(), &index) != NULL;
+		bool visible = CurrentPoseList()->FindPose(poseModel->NodeRef(), &index) != NULL;
 		int32 poseListIndex = index;
 
-		if (IsFiltering())
-			visible = fFilteredPoseList->FindPose(poseModel->NodeRef(), &index) != NULL;
+		BPoint poseLoc;
+		if (ViewMode() == kListMode)
+			poseLoc.Set(0, index * fListElemHeight);
+		else
+			poseLoc = pose->Location(this);
 
-		BPoint loc(0, index * fListElemHeight);
-		if (attrName != NULL && poseModel->Node() != NULL) {
+		if (attrName != NULL) {
+			status_t infoStatus = B_ERROR;
 			memset(&info, 0, sizeof(attr_info));
-			// the call below might fail if the attribute has been removed
-			poseModel->Node()->GetAttrInfo(attrName, &info);
-			pose->UpdateWidgetAndModel(poseModel, attrName, info.type, index, loc, this, visible);
+			if (poseModel->IconAttrChanged(attrName)) {
+				// set icon type manually in case attribute was removed
+				if (strcmp(attrName, kAttrIcon) == 0)
+					info.type = B_VECTOR_ICON_TYPE;
+				else if (strcmp(attrName, kAttrLargeIcon) == 0)
+					info.type = 'ICON';
+				else if (strcmp(attrName, kAttrMiniIcon) == 0)
+					info.type = 'MICN';
+				else if (strcmp(attrName, kAttrThumbnail) == 0)
+					info.type = B_RAW_TYPE;
+
+				info.size = 0;
+					// old size not needed, writing new attr
+				infoStatus = B_OK;
+			} else if (poseModel->Node() != NULL) {
+				// the call below might fail if the attribute has been removed
+				infoStatus = poseModel->Node()->GetAttrInfo(attrName, &info);
+			}
+
+			// update attr
+			pose->UpdateWidgetAndModel(attrName, infoStatus == B_OK ? info.type : 0,
+				index, poseLoc, this, visible);
 			if (strcmp(attrName, kAttrMIMEType) == 0)
 				RefreshMimeTypeList();
 		} else {
-			pose->UpdateWidgetAndModel(poseModel, 0, 0, index, loc, this, visible);
+			// update stat
+			pose->UpdateWidgetAndModel(0, 0, index, poseLoc, this, visible);
 		}
 		poseModel->CloseNode();
-		if (IsFiltering()) {
-			if (!visible && FilterPose(pose)) {
-				visible = true;
-				float scrollBy = 0;
-				BRect bounds = Bounds();
-				AddPoseToList(fFilteredPoseList, true, true, pose, bounds, scrollBy, true);
-				continue;
-			} else if (visible && !FilterPose(pose)) {
-				RemoveFilteredPose(pose, index);
-				continue;
-			}
-		}
 
 		if (attrName != NULL) {
 			// note: the following code is wrong, because this sort of hashing
 			// may overlap and we get aliasing
 			uint32 attrHash = AttrHashString(attrName, info.type);
-			if (attrHash == PrimarySort() || attrHash == SecondarySort()) {
-				_CheckPoseSortOrder(fPoseList, pose, poseListIndex);
-				if (IsFiltering() && visible)
-					_CheckPoseSortOrder(fFilteredPoseList, pose, index);
-			}
+			if (attrHash == PrimarySort() || attrHash == SecondarySort())
+				_CheckPoseSortOrder(CurrentPoseList(), pose, poseListIndex);
 		} else {
 			int32 fields;
 			if (message->FindInt32("fields", &fields) != B_OK)
 				continue;
 
-			for (int i = sizeof(sAttrColumnMap) / sizeof(attr_column_relation);
-					i--;) {
-				if (sAttrColumnMap[i].attrHash == PrimarySort()
-					|| sAttrColumnMap[i].attrHash == SecondarySort()) {
+			for (int i = sizeof(sAttrColumnMap) / sizeof(attr_column_relation); i--;) {
+				uint32 attrHash = sAttrColumnMap[i].attrHash;
+				if (attrHash == PrimarySort() || attrHash == SecondarySort()) {
 					if ((fields & sAttrColumnMap[i].fieldMask) != 0) {
-						_CheckPoseSortOrder(fPoseList, pose, poseListIndex);
-						if (IsFiltering() && visible)
-							_CheckPoseSortOrder(fFilteredPoseList, pose, index);
+						_CheckPoseSortOrder(CurrentPoseList(), pose, poseListIndex);
 						break;
 					}
 				}
@@ -5929,6 +6082,8 @@ BPoseView::UpdateIcon(BPose* pose)
 
 		if (!found)
 			return;
+	} else {
+		location = pose->Location(this);
 	}
 
 	pose->UpdateIcon(location, this);
@@ -5945,37 +6100,47 @@ BPoseView::ConvertZombieToPose(Model* zombie, int32 index)
 
 	PoseInfo poseInfo;
 	ReadPoseInfo(zombie, &poseInfo);
-
-	if (ShouldShowPose(zombie, &poseInfo)) {
+	if (PoseVisible(zombie, &poseInfo)) {
 		// TODO: handle symlinks here
 		return CreatePose(zombie, &poseInfo);
 	}
 
 	delete zombie;
-
 	return NULL;
 }
 
 
 BList*
-BPoseView::GetDropPointList(BPoint dropStart, BPoint dropEnd, const PoseList* poses,
-	bool sourceInListMode, bool dropOnGrid) const
+BPoseView::GetDropPointList(BPoint dropStart, BPoint dropEnd, const PoseList* poseList,
+	BPoseView* sourcePoseView, bool pinToGrid) const
 {
-	if (ViewMode() == kListMode)
-		return NULL;
+	ASSERT(poseList != NULL);
+	ASSERT(sourcePoseView != NULL);
 
-	int32 poseCount = poses->CountItems();
+	int32 poseCount = poseList->CountItems();
 	BList* pointList = new BList(poseCount);
 	for (int32 index = 0; index < poseCount; index++) {
-		BPose* pose = poses->ItemAt(index);
-		BPoint poseLoc;
-		if (sourceInListMode)
-			poseLoc = dropEnd + BPoint(0, index * (IconPoseHeight() + 3));
-		else
-			poseLoc = dropEnd + (pose->Location(this) - dropStart);
+		BPose* pose = poseList->ItemAt(index);
+		if (pose == NULL)
+			break;
 
-		if (dropOnGrid)
-			poseLoc = PinToGrid(poseLoc, fGrid, fOffset);
+		BPoint poseLoc;
+		if (ViewMode() == kListMode) {
+			// drop poses at the end of the list
+			poseLoc = dropEnd + BPoint(0, index * fListElemHeight);
+		} else {
+			if (pose->HasLocation()) {
+				// copy the source location
+				poseLoc = dropEnd + (pose->Location(sourcePoseView) - dropStart);
+			} else {
+				// no source location, auto-place the pose in the destination
+				BRect destViewBounds(Bounds());
+				const_cast<BPoseView*>(this)->PlacePose(pose, destViewBounds);
+				poseLoc = dropEnd + (pose->Location(this) - dropStart);
+			}
+			if (pinToGrid)
+				poseLoc = PinToGrid(poseLoc, fGrid, fOffset);
+		}
 
 		pointList->AddItem(new BPoint(poseLoc));
 	}
@@ -6011,16 +6176,14 @@ BPoseView::DuplicateSelection(BPoint* dropStart, BPoint* dropEnd)
 
 	// create entry_ref list from selection
 	if (!fSelectionList->IsEmpty()) {
-		BObjectList<entry_ref, true>* srcList
-			= new BObjectList<entry_ref, true>(CountSelected());
+		BObjectList<entry_ref, true>* srcList = new BObjectList<entry_ref, true>(CountSelected());
 		CopySelectionListToEntryRefList(fSelectionList, srcList);
 
-		BList* dropPoints;
+		BList* dropPoints = NULL;
 		if (dropStart) {
-			dropPoints = GetDropPointList(*dropStart, *dropEnd, fSelectionList,
-				ViewMode() == kListMode, (modifiers() & B_COMMAND_KEY) != 0);
-		} else
-			dropPoints = NULL;
+			bool pinToGrid = (modifiers() & B_COMMAND_KEY) != 0;
+			dropPoints = GetDropPointList(*dropStart, *dropEnd, fSelectionList, this, pinToGrid);
+		}
 
 		// perform asynchronous duplicate
 		FSDuplicate(srcList, dropPoints);
@@ -6050,13 +6213,10 @@ BPoseView::MoveListToTrash(BObjectList<entry_ref, true>* list, bool selectNext,
 		// new owning list of tasks
 
 	// first move selection to trash,
-	if (deleteDirectly) {
-		taskList->AddItem(NewFunctionObject(FSDeleteRefList, list,
-			false, true));
-	} else {
-		taskList->AddItem(NewFunctionObject(FSMoveToTrash, list,
-			(BList*)NULL, false));
-	}
+	if (deleteDirectly)
+		taskList->AddItem(NewFunctionObject(FSDeleteRefList, list, false, true));
+	else
+		taskList->AddItem(NewFunctionObject(FSMoveToTrash, list, (BList*)NULL, false));
 
 	if (selectNext && ViewMode() == kListMode) {
 		// next, if in list view mode try selecting the next item after
@@ -6509,8 +6669,7 @@ BPoseView::SelectMatchingEntries(const BMessage* message)
 		regExpression.SetTo(expression);
 
 		if (regExpression.InitCheck() != B_OK) {
-			BString message(
-				B_TRANSLATE("Error in regular expression:\n\n'%errstring'"));
+			BString message(B_TRANSLATE("Error in regular expression:\n\n'%errstring'"));
 			message.ReplaceFirst("%errstring", regExpression.ErrorString());
 			BAlert* alert = new BAlert("", message.String(), B_TRANSLATE("OK"),
 				NULL, NULL,	B_WIDTH_AS_USUAL, B_STOP_ALERT);
@@ -6527,8 +6686,7 @@ BPoseView::SelectMatchingEntries(const BMessage* message)
 	for (int32 index = 0; index < poseCount; index++) {
 		BPose* pose = poseList->ItemAt(index);
 		name = pose->TargetModel()->Name();
-		if (name.Matches(expression.String(), !ignoreCase, expressionType)
-				^ invertSelection) {
+		if (name.Matches(expression.String(), !ignoreCase, expressionType) ^ invertSelection) {
 			matchCount++;
 			AddPoseToSelection(pose, index);
 		}
@@ -6613,8 +6771,7 @@ BPoseView::KeyDown(const char* bytes, int32 count)
 		case B_PAGE_UP:
 			if (ViewMode() == kListMode) {
 				// Select first visible pose
-				int32 firstIndex = CurrentPoseList()->IndexOf(
-					fSelectionList->FirstItem());
+				int32 firstIndex = CurrentPoseList()->IndexOf(fSelectionList->FirstItem());
 				int32 index;
 				BPose* first = FirstVisiblePose(&index);
 				if (first != NULL) {
@@ -6631,8 +6788,7 @@ BPoseView::KeyDown(const char* bytes, int32 count)
 		case B_PAGE_DOWN:
 			if (ViewMode() == kListMode) {
 				// Select last visible pose
-				int32 lastIndex = CurrentPoseList()->IndexOf(
-					fSelectionList->LastItem());
+				int32 lastIndex = CurrentPoseList()->IndexOf(fSelectionList->LastItem());
 				int32 index;
 				BPose* last = LastVisiblePose(&index);
 				if (last != NULL) {
@@ -6661,8 +6817,7 @@ BPoseView::KeyDown(const char* bytes, int32 count)
 				}
 
 				bool reverse
-					= (Window()->CurrentMessage()->FindInt32("modifiers")
-						& B_SHIFT_KEY) != 0;
+					= (Window()->CurrentMessage()->FindInt32("modifiers") & B_SHIFT_KEY) != 0;
 				int32 index;
 				BPose* pose = FindNextMatch(&index, reverse);
 				if (pose == NULL) {
@@ -6893,7 +7048,7 @@ LinesIntersect(float s1, float e1, float s2, float e2)
 BPose*
 BPoseView::FindNearbyPose(char arrowKey, int32* poseIndex)
 {
-	int32 resultingIndex = -1;
+	int32 resultIndex = -1;
 	BPose* poseToSelect = NULL;
 	BPose* selectedPose = fSelectionList->LastItem();
 
@@ -6904,14 +7059,14 @@ BPoseView::FindNearbyPose(char arrowKey, int32* poseIndex)
 			case B_UP_ARROW:
 			case B_LEFT_ARROW:
 				if (selectedPose) {
-					resultingIndex = poseList->IndexOf(selectedPose) - 1;
-					poseToSelect = poseList->ItemAt(resultingIndex);
+					resultIndex = poseList->IndexOf(selectedPose) - 1;
+					poseToSelect = poseList->ItemAt(resultIndex);
 					if (poseToSelect == NULL && arrowKey == B_LEFT_ARROW) {
-						resultingIndex = poseList->CountItems() - 1;
+						resultIndex = poseList->CountItems() - 1;
 						poseToSelect = poseList->LastItem();
 					}
 				} else {
-					resultingIndex = poseList->CountItems() - 1;
+					resultIndex = poseList->CountItems() - 1;
 					poseToSelect = poseList->LastItem();
 				}
 				break;
@@ -6919,19 +7074,19 @@ BPoseView::FindNearbyPose(char arrowKey, int32* poseIndex)
 			case B_DOWN_ARROW:
 			case B_RIGHT_ARROW:
 				if (selectedPose) {
-					resultingIndex = poseList->IndexOf(selectedPose) + 1;
-					poseToSelect = poseList->ItemAt(resultingIndex);
+					resultIndex = poseList->IndexOf(selectedPose) + 1;
+					poseToSelect = poseList->ItemAt(resultIndex);
 					if (poseToSelect == NULL && arrowKey == B_RIGHT_ARROW) {
-						resultingIndex = 0;
+						resultIndex = 0;
 						poseToSelect = poseList->FirstItem();
 					}
 				} else {
-					resultingIndex = 0;
+					resultIndex = 0;
 					poseToSelect = poseList->FirstItem();
 				}
 				break;
 		}
-		*poseIndex = resultingIndex;
+		*poseIndex = resultIndex;
 
 		return poseToSelect;
 	}
@@ -6980,8 +7135,7 @@ BPoseView::FindNearbyPose(char arrowKey, int32* poseIndex)
 				if (LinesIntersect(poseRect.top, poseRect.bottom,
 						selectionRect.top, selectionRect.bottom)
 					&& poseRect.left < selectionRect.left
-					&& (poseRect.left > bestRect.left
-						|| !bestRect.IsValid())) {
+					&& (poseRect.left > bestRect.left || !bestRect.IsValid())) {
 					bestRect = poseRect;
 					poseToSelect = pose;
 				}
@@ -7038,20 +7192,22 @@ BPoseView::ShowContextMenu(BPoint where)
 
 	// handle pose selection
 	int32 index;
-	BPose* pose = FindPose(where, &index);
-	if (pose != NULL) {
-		if (!pose->IsSelected()) {
+	BPose* clickedPose = FindPose(where, &index);
+	if (clickedPose != NULL) {
+		if (!clickedPose->IsSelected()) {
 			ClearSelection();
-			pose->Select(true);
-			fSelectionList->AddItem(pose);
-			DrawPose(pose, index, false);
+			clickedPose->Select(true);
+			fSelectionList->AddItem(clickedPose);
+			DrawPose(clickedPose, index, false);
 		}
-	} else
+	} else {
 		ClearSelection();
+	}
 
 	window->Activate();
 	window->UpdateIfNeeded();
-	window->ShowContextMenu(where, pose == NULL ? NULL : pose->TargetModel()->EntryRef());
+	const entry_ref* ref = (clickedPose == NULL ? NULL : clickedPose->TargetModel()->EntryRef());
+	window->ShowContextMenu(where, ref);
 
 	if (fSelectionChangedHook)
 		window->SelectionChanged();
@@ -7071,7 +7227,7 @@ BPoseView::_BeginSelectionRect(const BPoint& point, bool shouldExtend)
 	}
 
 	fSelectionRectInfo.lastRect = fSelectionRectInfo.rect;
-	fSelectionRectInfo.selection = new BList;
+	fSelectionRectInfo.selection = new BList(CurrentPoseList()->CountItems());
 	fSelectionRectInfo.startPoint = point;
 	fSelectionRectInfo.lastPoint = point;
 	fSelectionRectInfo.isDragging = true;
@@ -7094,70 +7250,67 @@ AddIfPoseSelected(BPose* pose, PoseList* list)
 void
 BPoseView::_UpdateSelectionRect(const BPoint& point)
 {
-	if (point != fSelectionRectInfo.lastPoint) {
-		fSelectionRectInfo.lastPoint = point;
+	if (point == fSelectionRectInfo.lastPoint)
+		return;
 
-		// erase last rect
-		if (!fTransparentSelection) {
-			SetDrawingMode(B_OP_INVERT);
-			StrokeRect(fSelectionRectInfo.rect, B_MIXED_COLORS);
-			SetDrawingMode(B_OP_OVER);
-		}
+	fSelectionRectInfo.lastPoint = point;
 
-		fSelectionRectInfo.rect.top = std::min(point.y,
-			fSelectionRectInfo.startPoint.y);
-		fSelectionRectInfo.rect.left = std::min(point.x,
-			fSelectionRectInfo.startPoint.x);
-		fSelectionRectInfo.rect.bottom = std::max(point.y,
-			fSelectionRectInfo.startPoint.y);
-		fSelectionRectInfo.rect.right = std::max(point.x,
-			fSelectionRectInfo.startPoint.x);
+	// erase last rect
+	if (!fTransparentSelection) {
+		SetDrawingMode(B_OP_INVERT);
+		StrokeRect(fSelectionRectInfo.rect, B_MIXED_COLORS);
+		SetDrawingMode(B_OP_OVER);
+	}
 
-		fIsDrawingSelectionRect = true;
+	fSelectionRectInfo.rect.top = std::min(point.y, fSelectionRectInfo.startPoint.y);
+	fSelectionRectInfo.rect.left = std::min(point.x, fSelectionRectInfo.startPoint.x);
+	fSelectionRectInfo.rect.bottom = std::max(point.y, fSelectionRectInfo.startPoint.y);
+	fSelectionRectInfo.rect.right = std::max(point.x, fSelectionRectInfo.startPoint.x);
 
-		// use current selection rectangle to scan poses
-		SelectPoses(fSelectionRectInfo.rect,
-			&fSelectionRectInfo.selection);
+	fIsDrawingSelectionRect = true;
 
-		Window()->UpdateIfNeeded();
+	// use current selection rectangle to scan poses
+	SelectPoses(fSelectionRectInfo.rect, &fSelectionRectInfo.selection);
 
-		// draw new rect
-		if (!fTransparentSelection) {
-			SetDrawingMode(B_OP_INVERT);
-			StrokeRect(fSelectionRectInfo.rect, B_MIXED_COLORS);
-			SetDrawingMode(B_OP_OVER);
-		} else {
-			BRegion updateRegion1;
-			BRegion updateRegion2;
+	Window()->UpdateIfNeeded();
 
-			bool sameWidth = fSelectionRectInfo.rect.Width()
-				== fSelectionRectInfo.lastRect.Width();
-			bool sameHeight = fSelectionRectInfo.rect.Height()
-				== fSelectionRectInfo.lastRect.Height();
+	// draw new rect
+	if (!fTransparentSelection) {
+		SetDrawingMode(B_OP_INVERT);
+		StrokeRect(fSelectionRectInfo.rect, B_MIXED_COLORS);
+		SetDrawingMode(B_OP_OVER);
+	} else {
+		BRegion updateRegion1;
+		BRegion updateRegion2;
 
-			updateRegion1.Include(fSelectionRectInfo.rect);
-			updateRegion1.Exclude(fSelectionRectInfo.lastRect.InsetByCopy(
-				sameWidth ? 0 : 1, sameHeight ? 0 : 1));
-			updateRegion2.Include(fSelectionRectInfo.lastRect);
-			updateRegion2.Exclude(fSelectionRectInfo.rect.InsetByCopy(
-				sameWidth ? 0 : 1, sameHeight ? 0 : 1));
-			updateRegion1.Include(&updateRegion2);
-			BRect unionRect = fSelectionRectInfo.rect
-				& fSelectionRectInfo.lastRect;
-			updateRegion1.Exclude(unionRect
-				& BRect(-2000, fSelectionRectInfo.startPoint.y, 2000,
+		bool sameWidth = fSelectionRectInfo.rect.Width()
+			== fSelectionRectInfo.lastRect.Width();
+		bool sameHeight = fSelectionRectInfo.rect.Height()
+			== fSelectionRectInfo.lastRect.Height();
+
+		updateRegion1.Include(fSelectionRectInfo.rect);
+		updateRegion1.Exclude(fSelectionRectInfo.lastRect.InsetByCopy(
+			sameWidth ? 0 : 1, sameHeight ? 0 : 1));
+		updateRegion2.Include(fSelectionRectInfo.lastRect);
+		updateRegion2.Exclude(fSelectionRectInfo.rect.InsetByCopy(
+			sameWidth ? 0 : 1, sameHeight ? 0 : 1));
+		updateRegion1.Include(&updateRegion2);
+
+		BRect unionRect = fSelectionRectInfo.rect & fSelectionRectInfo.lastRect;
+		updateRegion1.Exclude(unionRect
+			& BRect(-2000, fSelectionRectInfo.startPoint.y, 2000,
 				fSelectionRectInfo.startPoint.y));
-			updateRegion1.Exclude(unionRect
-				& BRect(fSelectionRectInfo.startPoint.x, -2000,
+		updateRegion1.Exclude(unionRect
+			& BRect(fSelectionRectInfo.startPoint.x, -2000,
 				fSelectionRectInfo.startPoint.x, 2000));
 
-			fSelectionRectInfo.lastRect = fSelectionRectInfo.rect;
+		fSelectionRectInfo.lastRect = fSelectionRectInfo.rect;
 
-			Invalidate(&updateRegion1);
-			Window()->UpdateIfNeeded();
-		}
-		Flush();
+		Invalidate(&updateRegion1);
+		Window()->UpdateIfNeeded();
 	}
+
+	Flush();
 }
 
 
@@ -7188,7 +7341,7 @@ BPoseView::_EndSelectionRect()
 	fSelectionList->MakeEmpty();
 	fMimeTypesInSelectionCache.MakeEmpty();
 
-	fPoseList->EachListItem(AddIfPoseSelected, fSelectionList);
+	CurrentPoseList()->EachListItem(AddIfPoseSelected, fSelectionList);
 
 	// and now make sure that the pivot point is in sync
 	if (fSelectionPivotPose && !fSelectionList->HasItem(fSelectionPivotPose))
@@ -7211,8 +7364,8 @@ BPoseView::MouseMoved(BPoint where, uint32 transit, const BMessage* dragMessage)
 	if (window == NULL)
 		return;
 
-	if (!window->Dragging())
-		window->DragStart(dragMessage);
+	if (!IsDragging())
+		DragStart(dragMessage);
 
 	switch (transit) {
 		case B_INSIDE_VIEW:
@@ -7227,12 +7380,11 @@ BPoseView::MouseMoved(BPoint where, uint32 transit, const BMessage* dragMessage)
 
 		case B_EXITED_VIEW:
 			DragStop();
-			// reset cursor in case we set it to the copy cursor
-			// in UpdateDropTarget
+			// reset cursor in case we set it to the copy cursor in UpdateDropTarget
 			SetViewCursor(B_CURSOR_SYSTEM_DEFAULT);
 			fCursorCheck = false;
 			// TODO: autoscroll here
-			if (!window->ContextMenu()) {
+			if (window->ContextMenu() != NULL) {
 				HiliteDropTarget(false);
 				fDropTarget = NULL;
 			}
@@ -7257,13 +7409,12 @@ BPoseView::MouseDragged(const BMessage* message)
 		return;
 	}
 
-	bool extendSelection = (modifiers() & B_COMMAND_KEY) != 0
-		&& fMultipleSelection;
+	bool extendSelection = (modifiers() & B_COMMAND_KEY) != 0 && fMultipleSelection;
 
 	int32 index;
-	BPose* pose = FindPose(where, &index);
-	if (pose != NULL)
-		DragSelectedPoses(pose, where);
+	BPose* clickedPose = FindPose(where, &index);
+	if (clickedPose != NULL)
+		DragSelectedPoses(clickedPose, where, buttons);
 	else if (buttons == B_PRIMARY_MOUSE_BUTTON)
 		_BeginSelectionRect(where, extendSelection);
 }
@@ -7292,16 +7443,15 @@ BPoseView::MouseIdle(const BMessage* message)
 		// We could retrieve 'where' from the incoming
 		// message but we need the buttons state anyway
 		// and B_MOUSE_IDLE message doesn't pass it
-	BContainerWindow* window = ContainerWindow();
 
-	if (buttons == 0 || window == NULL || !window->Dragging())
+	if (buttons == 0 || !IsDragging())
 		return;
 
 	if (fDropTarget != NULL) {
 		FrameForPose(fDropTarget, true, &fStartFrame);
 		ShowContextMenu(where);
 	} else
-		window->Activate();
+		Window()->Activate();
 }
 
 
@@ -7310,11 +7460,12 @@ BPoseView::MouseDown(BPoint where)
 {
 	// handle disposing of drag data lazily
 	DragStop();
+
 	BContainerWindow* window = ContainerWindow();
 	if (window == NULL)
 		return;
 
-	if (IsDesktop()) {
+	if (IsDesktopView()) {
 		BScreen screen(Window());
 		rgb_color color = screen.DesktopColor();
 		SetLowColor(color);
@@ -7323,37 +7474,34 @@ BPoseView::MouseDown(BPoint where)
 
 	MakeFocus();
 
-	uint32 buttons = (uint32)window->CurrentMessage()->FindInt32("buttons");
-	uint32 modifierKeys = modifiers();
-	bool secondaryMouseButtonDown
-		= SecondaryMouseButtonDown(modifierKeys, buttons);
+	uint32 buttons = (uint32)window->CurrentMessage()->GetInt32("buttons", 0);
+	uint32 mods = modifiers();
+	bool secondaryMouseButtonDown = SecondaryMouseButtonDown(mods, buttons);
 	fTrackRightMouseUp = secondaryMouseButtonDown;
 	fTrackMouseUp = !secondaryMouseButtonDown;
-	bool extendSelection = (modifierKeys & B_COMMAND_KEY) != 0
-		&& fMultipleSelection;
+	bool extendSelection = ExtendSelection();
 
 	CommitActivePose();
 
 	int32 index;
-	BPose* pose = FindPose(where, &index);
-	if (pose != NULL) {
-		if (!pose->IsSelected() || !secondaryMouseButtonDown)
-			AddRemoveSelectionRange(where, extendSelection, pose);
+	BPose* clickedPose = FindPose(where, &index);
+	if (clickedPose != NULL) {
+		if (!clickedPose->IsSelected() || !secondaryMouseButtonDown)
+			AddRemoveSelectionRange(where, extendSelection, clickedPose);
 
 		if (fTextWidgetToCheck != NULL
-			&& (pose != fLastClickedPose || secondaryMouseButtonDown)) {
+			&& (clickedPose != fLastClickedPose || secondaryMouseButtonDown)) {
 			fTextWidgetToCheck->CancelWait();
 		}
 
-		if (!extendSelection && WasDoubleClick(pose, where, buttons)
-			&& buttons == B_PRIMARY_MOUSE_BUTTON
-			&& fLastClickButtons == B_PRIMARY_MOUSE_BUTTON
-			&& (modifierKeys & B_CONTROL_KEY) == 0) {
+		if (!extendSelection && WasDoubleClick(clickedPose, where)
+			&& buttons == B_PRIMARY_MOUSE_BUTTON && fLastClickButtons == B_PRIMARY_MOUSE_BUTTON
+			&& (mods & B_CONTROL_KEY) == 0) {
 			fTrackRightMouseUp = false;
 			fTrackMouseUp = false;
 			// special handling for path field double-clicks
-			if (!WasClickInPath(pose, index, where))
-				OpenSelection(pose, &index);
+			if (!WasClickInPath(clickedPose, index, where))
+				OpenSelection(clickedPose, &index);
 		}
 	} else {
 		// click was not in any pose
@@ -7369,7 +7517,7 @@ BPoseView::MouseDown(BPoint where)
 			ClearSelection();
 
 		// show desktop context menu
-		if (SecondaryMouseButtonDown(modifierKeys, buttons))
+		if (SecondaryMouseButtonDown(mods, buttons))
 			ShowContextMenu(where);
 	}
 
@@ -7389,32 +7537,55 @@ BPoseView::SetTextWidgetToCheck(BTextWidget* widget, BTextWidget* old)
 void
 BPoseView::MouseUp(BPoint where)
 {
-	if (fSelectionRectInfo.isDragging)
+	ASSERT(Window() != NULL);
+	ASSERT(Window()->CurrentMessage() != NULL);
+
+	bool wasDragging = fDragMessage != NULL;
+	bool wasRectSelecting = fSelectionRectInfo.isDragging;
+	if (wasRectSelecting)
 		_EndSelectionRect();
 
-	int32 index;
-	BPose* pose = FindPose(where, &index);
-	uint32 lastButtons = Window()->CurrentMessage()->FindInt32("last_buttons");
-	if (pose != NULL && fLastClickedPose != NULL && fAllowPoseEditing
-		&& !fTrackRightMouseUp) {
-		// This handy field has been added by the tracking filter.
-		// we need lastButtons for right button mouse-up tracking,
-		// because there's currently no way to know wich buttons were
-		// released in BView::MouseUp (unlike BView::KeyUp)
-		pose->MouseUp(BPoint(0, index * fListElemHeight), this, where, index);
-	}
+	// dispose of drag data from previous drag lazily
+	DragStop();
 
-	// Showing the pose context menu is done on mouse up (or long click)
-	// to make right button dragging possible
-	if (pose != NULL && fTrackRightMouseUp
-		&& (SecondaryMouseButtonDown(modifiers(), lastButtons))) {
-		if (!pose->IsSelected()) {
-			ClearSelection();
-			pose->Select(true);
-			fSelectionList->AddItem(pose);
-			DrawPose(pose, index, false);
+	int32 index;
+	BPose* clickedPose = FindPose(where, &index);
+	if (clickedPose != NULL && fLastClickedPose != NULL) {
+		// This handy field has been added by the tracking filter.
+		// We need to know last buttons for context-click mouse up tracking,
+		// because there is no way to know which buttons were released in
+		// BView::MouseUp() (unlike BView::KeyUp()).
+		uint32 lastButtons = Window()->CurrentMessage()->FindInt32("last_buttons");
+
+		if (!fTrackRightMouseUp) {
+			bool wasSelected = clickedPose->IsSelected();
+
+			BPoint poseLoc;
+			if (ViewMode() == kListMode)
+				poseLoc = BPoint(0, index * fListElemHeight);
+			else
+				poseLoc = clickedPose->Location(this);
+
+			// do not check for double-click or rename after dragging
+			if (!wasDragging)
+				clickedPose->DoMouseUp(this, poseLoc, where);
+
+			// reselect clicked pose
+			bool shouldSelect = wasSelected && !ExtendSelection();
+			bool dragging = wasDragging || wasRectSelecting;
+			if (shouldSelect && !dragging)
+				SelectPose(clickedPose, index);
+		} else if (SecondaryMouseButtonDown(modifiers(), lastButtons)) {
+			// Showing the pose context menu is done on mouse up (or long click)
+			// to make context-click (right-click) drag and drop possible.
+			if (!clickedPose->IsSelected()) {
+				ClearSelection();
+				clickedPose->Select(true);
+				fSelectionList->AddItem(clickedPose);
+				DrawPose(clickedPose, index, false);
+			}
+			ShowContextMenu(where);
 		}
-		ShowContextMenu(where);
 	}
 
 	if (fTrackMouseUp)
@@ -7426,15 +7597,14 @@ BPoseView::MouseUp(BPoint where)
 
 
 bool
-BPoseView::WasClickInPath(const BPose* pose, int32 index,
-	BPoint mouseLocation) const
+BPoseView::WasClickInPath(const BPose* pose, int32 index, BPoint where) const
 {
 	if (pose == NULL || (ViewMode() != kListMode))
 		return false;
 
 	BPoint loc(0, index * fListElemHeight);
 	BTextWidget* widget;
-	if (!pose->PointInPose(loc, this, mouseLocation, &widget) || !widget)
+	if (!pose->PointInPose(loc, this, where, &widget) || widget == NULL)
 		return false;
 
 	// note: the following code is wrong, because this sort of hashing
@@ -7459,16 +7629,19 @@ BPoseView::WasClickInPath(const BPose* pose, int32 index,
 
 
 bool
-BPoseView::WasDoubleClick(const BPose* pose, BPoint point, int32 buttons)
+BPoseView::WasDoubleClick(const BPose* pose, BPoint where)
 {
-	// check proximity
-	BPoint delta = point - fLastClickPoint;
-	int32 clicks = Window()->CurrentMessage()->FindInt32("clicks");
+	ASSERT(Window() != NULL);
+	ASSERT(Window()->CurrentMessage() != NULL);
 
-	if (clicks == 2
-		&& fabs(delta.x) < kDoubleClickTresh
-		&& fabs(delta.y) < kDoubleClickTresh
-		&& pose == fLastClickedPose) {
+	// check proximity
+	BPoint delta = where - fLastClickPoint;
+	int32 buttons = Window()->CurrentMessage()->GetInt32("buttons", 0);
+	int32 clicks = Window()->CurrentMessage()->GetInt32("clicks", 0);
+	bool xGood = fabs(delta.x) < kDoubleClickTresh;
+	bool yGood = fabs(delta.y) < kDoubleClickTresh;
+
+	if (clicks == 2 && pose == fLastClickedPose && xGood && yGood) {
 		fLastClickPoint.Set(INT32_MAX, INT32_MAX);
 		fLastClickedPose = NULL;
 		if (fTextWidgetToCheck != NULL)
@@ -7477,7 +7650,7 @@ BPoseView::WasDoubleClick(const BPose* pose, BPoint point, int32 buttons)
 		return buttons == fLastClickButtons;
 	}
 
-	fLastClickPoint = point;
+	fLastClickPoint = where;
 	fLastClickedPose = pose;
 	fLastClickButtons = buttons;
 
@@ -7506,12 +7679,12 @@ AddPoseRefToMessage(Model* model, BMessage* message)
 
 
 void
-BPoseView::DragSelectedPoses(const BPose* pose, BPoint clickPoint)
+BPoseView::DragSelectedPoses(const BPose* pose, BPoint where, uint32 buttons)
 {
-	if (!fDragEnabled)
+	if (!fDragEnabled || buttons == 0)
 		return;
 
-	ASSERT(pose);
+	ASSERT(pose != NULL);
 
 	// make sure pose is selected, it could have been deselected as part of
 	// a click during selection extention
@@ -7521,7 +7694,7 @@ BPoseView::DragSelectedPoses(const BPose* pose, BPoint clickPoint)
 	// setup tracking rect by unioning all selected pose rects
 	BMessage message(B_SIMPLE_DATA);
 	message.AddPointer("src_window", Window());
-	message.AddPoint("click_pt", clickPoint);
+	message.AddPoint("click_pt", where);
 
 	// add Tracker token so that refs received recipients can script us
 	message.AddMessenger("TrackerViewToken", BMessenger(this));
@@ -7529,59 +7702,69 @@ BPoseView::DragSelectedPoses(const BPose* pose, BPoint clickPoint)
 	// cannot use EachPoseAndModel here, because that iterates the selected
 	// poses in reverse order
 	int32 selectCount = CountSelected();
-	for (int32 index = 0; index < selectCount; index++) {
-		AddPoseRefToMessage(fSelectionList->ItemAt(index)->TargetModel(),
-			&message);
-	}
+	for (int32 index = 0; index < selectCount; index++)
+		AddPoseRefToMessage(fSelectionList->ItemAt(index)->TargetModel(), &message);
 
-	// make sure button is still down
-	uint32 buttons;
-	BPoint tempLoc;
-	GetMouse(&tempLoc, &buttons);
-	if (buttons != 0) {
-		int32 index = CurrentPoseList()->IndexOf(pose);
-		message.AddInt32("buttons", (int32)buttons);
-		BRect dragRect(GetDragRect(index));
-		BBitmap* dragBitmap = NULL;
-		BPoint offset;
-#ifdef DRAG_FRAME
-		if (dragRect.Width() < kTransparentDragThreshold.x
-			&& dragRect.Height() < kTransparentDragThreshold.y) {
-			dragBitmap = MakeDragBitmap(dragRect, clickPoint, index, offset);
-		}
-#else
-		// The bitmap is now always created (if DRAG_FRAME is not defined)
-		dragBitmap = MakeDragBitmap(dragRect, clickPoint, index, offset);
-#endif
-		if (dragBitmap != NULL) {
-			DragMessage(&message, dragBitmap, B_OP_ALPHA, offset);
-				// this DragMessage supports alpha blending
-		} else
-			DragMessage(&message, dragRect);
+	int32 index = CurrentPoseList()->IndexOf(pose);
+	message.AddInt32("buttons", (int32)buttons);
+	BRect dragRect(GetDragRect(index));
+	BBitmap* dragBitmap = NULL;
+	BPoint offset;
+	dragBitmap = MakeDragBitmap(dragRect, where, index, offset);
+	if (dragBitmap != NULL)
+		_inherited::DragMessage(&message, dragBitmap, B_OP_ALPHA, offset);
+	else
+		_inherited::DragMessage(&message, dragRect);
 
-		// turn on auto scrolling
-		fAutoScrollState = kWaitForTransition;
-		Window()->SetPulseRate(100000);
-	}
+	// turn on auto scrolling
+	fAutoScrollState = kWaitForTransition;
+	Window()->SetPulseRate(100000);
 }
 
 
 BBitmap*
-BPoseView::MakeDragBitmap(BRect dragRect, BPoint clickedPoint,
-	int32 clickedPoseIndex, BPoint &offset)
+BPoseView::MakeDragBitmap(BRect dragRect, BPoint where, int32 poseIndex, BPoint& offset)
 {
-	BRect inner(clickedPoint.x - kTransparentDragThreshold.x / 2,
-		clickedPoint.y - kTransparentDragThreshold.y / 2,
-		clickedPoint.x + kTransparentDragThreshold.x / 2,
-		clickedPoint.y + kTransparentDragThreshold.y / 2);
+	BRect bounds(Bounds());
 
-	// (BRect & BRect) doesn't work correctly if the rectangles don't intersect
-	// this catches a bug that is produced somewhere before this function is
-	// called
+	int32 startIndex;
+	if (ViewMode() == kListMode)
+		startIndex = (int32)(bounds.top / fListElemHeight);
+	else
+		startIndex = FirstIndexAtOrBelow((int32)(bounds.top - IconPoseHeight()));
+
+	const PoseList* poseList = CurrentPoseList();
+	if (poseList == NULL)
+		return NULL;
+
+	int32 poseCount = poseList->CountItems();
+	if (poseCount == 0)
+		return NULL;
+
+	// Create a drag rectangle of the maximum drag size, centered around the cursor.
+	BRect inner(where.x - roundf(kTransparentDragThreshold.x / 2),
+		where.y - roundf(kTransparentDragThreshold.y / 2),
+		where.x + roundf(kTransparentDragThreshold.x / 2),
+		where.y + roundf(kTransparentDragThreshold.y / 2));
+
+	// This would mean the cursor is outside the selection rectangle, in which case a drag
+	// operation should not have been started.
 	if (!inner.Intersects(dragRect))
 		return NULL;
 
-	inner = inner & dragRect;
+	// Nudge the inner rectangle if it is outside the selection/drag rectangle.
+	// Otherwise, we end up wasting a part of its area for showing nothing at all.
+	if (inner.right > dragRect.right)
+		inner.OffsetBy(dragRect.right - inner.right, 0);
+	if (inner.bottom > dragRect.bottom)
+		inner.OffsetBy(0, dragRect.bottom - inner.bottom);
+	if (inner.left < dragRect.left)
+		inner.OffsetBy(dragRect.left - inner.left, 0);
+	if (inner.top < dragRect.top)
+		inner.OffsetBy(0, dragRect.top - inner.top);
+
+	float fadeWidth = be_control_look->ComposeIconSize(32).Width();
+		// not an icon but make this bigger based on font-size
 
 	// If the selection is bigger than the specified limit, the
 	// contents will fade out when they come near the borders
@@ -7591,34 +7774,34 @@ BPoseView::MakeDragBitmap(BRect dragRect, BPoint clickedPoint,
 	bool fadeRight = false;
 	bool fade = false;
 	if (inner.left > dragRect.left) {
-		inner.left = std::max(inner.left - 32, dragRect.left);
+		inner.left = std::max(inner.left - fadeWidth, dragRect.left);
 		fade = fadeLeft = true;
 	}
 	if (inner.right < dragRect.right) {
-		inner.right = std::min(inner.right + 32, dragRect.right);
+		inner.right = std::min(inner.right + fadeWidth, dragRect.right);
 		fade = fadeRight = true;
 	}
 	if (inner.top > dragRect.top) {
-		inner.top = std::max(inner.top - 32, dragRect.top);
+		inner.top = std::max(inner.top - fadeWidth, dragRect.top);
 		fade = fadeTop = true;
 	}
 	if (inner.bottom < dragRect.bottom) {
-		inner.bottom = std::min(inner.bottom + 32, dragRect.bottom);
+		inner.bottom = std::min(inner.bottom + fadeWidth, dragRect.bottom);
 		fade = fadeBottom = true;
 	}
 
 	// set the offset for the dragged bitmap (for the BView::DragMessage() call)
-	offset = clickedPoint - BPoint(2, 1) - inner.LeftTop();
+	offset = where - BPoint(2, 1) - inner.LeftTop();
 
 	BRect rect(inner);
 	rect.OffsetTo(B_ORIGIN);
 
 	BBitmap* bitmap = new BBitmap(rect, B_RGBA32, true);
 	bitmap->Lock();
-	BView* view = new BView(bitmap->Bounds(), "", B_FOLLOW_NONE, 0);
+	BView* view = new BView(bitmap->Bounds(), "", B_FOLLOW_NONE, B_WILL_DRAW);
 	bitmap->AddChild(view);
 
-	view->SetOrigin(0, 0);
+	view->SetOrigin(B_ORIGIN);
 
 	BRect clipRect(view->Bounds());
 	BRegion newClip;
@@ -7628,48 +7811,38 @@ BPoseView::MakeDragBitmap(BRect dragRect, BPoint clickedPoint,
 	memset(bitmap->Bits(), 0, bitmap->BitsLength());
 
 	view->SetDrawingMode(B_OP_ALPHA);
-	view->SetHighColor(0, 0, 0, uint8(fade ? 164 : 128));
-		// set the level of transparency by value
 	view->SetBlendingMode(B_CONSTANT_ALPHA, B_ALPHA_COMPOSITE);
+	uint8 alpha = fade ? 164 : 192; // set the level of opacity by value
+	if (HighColor().IsDark())
+		view->SetHighColor(0, 0, 0, alpha);
+	else
+		view->SetHighColor(255, 255, 255, alpha);
 
-	BRect bounds(Bounds());
+	BPoint offsetBy = B_ORIGIN;
+	BPoint rowLocation = B_ORIGIN;
+	if (ViewMode() == kListMode)
+		rowLocation = BPoint(0, startIndex * fListElemHeight);
 
-	PoseList* poseList = CurrentPoseList();
-	if (ViewMode() == kListMode) {
-		int32 poseCount = poseList->CountItems();
-		int32 startIndex = (int32)(bounds.top / fListElemHeight);
-		BPoint loc(0, startIndex * fListElemHeight);
+	BPose* pose;
+	BRect poseRect;
+	for (int32 index = startIndex; index < poseCount; index++) {
+		pose = poseList->ItemAt(index);
+		if (pose != NULL && pose->IsSelected()) {
+			if (ViewMode() == kListMode)
+				poseRect = BRect(pose->CalcRect(rowLocation, this, true));
+			else
+				poseRect = BRect(pose->CalcRect(this));
 
-		for (int32 index = startIndex; index < poseCount; index++) {
-			BPose* pose = poseList->ItemAt(index);
-			if (pose->IsSelected()) {
-				BRect poseRect(pose->CalcRect(loc, this, true));
-				if (poseRect.Intersects(inner)) {
-					BPoint offsetBy(-inner.LeftTop().x, -inner.LeftTop().y);
-					pose->Draw(poseRect, poseRect, this, view, true, offsetBy,
-						false);
-				}
+			if (poseRect.Intersects(inner)) {
+				offsetBy = BPoint(-inner.LeftTop().x, -inner.LeftTop().y);
+				pose->Draw(poseRect, poseRect, this, view, true, offsetBy, true);
 			}
-			loc.y += fListElemHeight;
-			if (loc.y > bounds.bottom)
-				break;
 		}
-	} else {
-		// add rects for visible poses only (uses VSList!!)
-		int32 startIndex = FirstIndexAtOrBelow((int32)(bounds.top - IconPoseHeight()));
-		int32 poseCount = fVSPoseList->CountItems();
 
-		for (int32 index = startIndex; index < poseCount; index++) {
-			BPose* pose = fVSPoseList->ItemAt(index);
-			if (pose != NULL && pose->IsSelected()) {
-				BRect poseRect(pose->CalcRect(this));
-				if (!poseRect.Intersects(inner))
-					continue;
-
-				BPoint offsetBy(-inner.LeftTop().x, -inner.LeftTop().y);
-				pose->Draw(poseRect, poseRect, this, view, true, offsetBy,
-					false);
-			}
+		if (ViewMode() == kListMode) {
+			rowLocation.y += fListElemHeight;
+			if (rowLocation.y > bounds.bottom)
+				break;
 		}
 	}
 
@@ -7680,20 +7853,24 @@ BPoseView::MakeDragBitmap(BRect dragRect, BPoint clickedPoint,
 		uint32* bits = (uint32*)bitmap->Bits();
 		int32 width = bitmap->BytesPerRow() / 4;
 
-		if (fadeLeft)
-			FadeRGBA32Horizontal(bits, width, int32(rect.bottom), 0, 64);
-
-		if (fadeRight) {
-			FadeRGBA32Horizontal(bits, width, int32(rect.bottom),
-				int32(rect.right), int32(rect.right) - 64);
+		if (fadeLeft) {
+			FadeRGBA32Horizontal(bits, width, int32(rect.bottom), 0,
+				int32(fadeWidth));
 		}
 
-		if (fadeTop)
-			FadeRGBA32Vertical(bits, width, int32(rect.bottom), 0, 64);
+		if (fadeRight) {
+			FadeRGBA32Horizontal(bits, width, int32(rect.bottom), int32(rect.right),
+				int32(rect.right - fadeWidth));
+		}
+
+		if (fadeTop) {
+			FadeRGBA32Vertical(bits, width, int32(rect.bottom), 0,
+				int32(fadeWidth));
+		}
 
 		if (fadeBottom) {
-			FadeRGBA32Vertical(bits, width, int32(rect.bottom),
-				int32(rect.bottom), int32(rect.bottom) - 64);
+			FadeRGBA32Vertical(bits, width, int32(rect.bottom), int32(rect.bottom),
+				int32(rect.bottom - fadeWidth));
 		}
 	}
 
@@ -7703,16 +7880,17 @@ BPoseView::MakeDragBitmap(BRect dragRect, BPoint clickedPoint,
 
 
 BRect
-BPoseView::GetDragRect(int32 clickedPoseIndex)
+BPoseView::GetDragRect(int32 poseIndex)
 {
-	BRect result;
+	BRect dragRect;
 	BRect bounds(Bounds());
-
 	PoseList* poseList = CurrentPoseList();
-	BPose* pose = poseList->ItemAt(clickedPoseIndex);
+	int32 poseCount = poseList->CountItems();
+	BPose* pose = poseList->ItemAt(poseIndex);
+
 	if (ViewMode() == kListMode) {
 		// get starting rect of clicked pose
-		result = CalcPoseRectList(pose, clickedPoseIndex, true);
+		dragRect = CalcPoseRectList(pose, poseIndex, true);
 
 		// add rects for visible poses only
 		int32 poseCount = poseList->CountItems();
@@ -7721,8 +7899,8 @@ BPoseView::GetDragRect(int32 clickedPoseIndex)
 
 		for (int32 index = startIndex; index < poseCount; index++) {
 			pose = poseList->ItemAt(index);
-			if (pose->IsSelected())
-				result = result | pose->CalcRect(loc, this, true);
+			if (pose != NULL && pose->IsSelected())
+				dragRect = dragRect | pose->CalcRect(loc, this, true);
 
 			loc.y += fListElemHeight;
 			if (loc.y > bounds.bottom)
@@ -7730,16 +7908,14 @@ BPoseView::GetDragRect(int32 clickedPoseIndex)
 		}
 	} else {
 		// get starting rect of clicked pose
-		result = pose->CalcRect(this);
+		dragRect = pose->CalcRect(this);
+		const int32 startIndex = FirstIndexAtOrBelow((int32)(bounds.top - IconPoseHeight()));
 
-		// add rects for visible poses only (uses VSList!!)
-		int32 poseCount = fVSPoseList->CountItems();
-		for (int32 index = FirstIndexAtOrBelow((int32)(bounds.top - IconPoseHeight()));
-				index < poseCount; index++) {
-			BPose* pose = fVSPoseList->ItemAt(index);
+		for (int32 index = startIndex; index < poseCount; index++) {
+			pose = poseList->ItemAt(index);
 			if (pose != NULL) {
 				if (pose->IsSelected())
-					result = result | pose->CalcRect(this);
+					dragRect = dragRect | pose->CalcRect(this);
 
 				if (pose->Location(this).y > bounds.bottom)
 					break;
@@ -7747,7 +7923,7 @@ BPoseView::GetDragRect(int32 clickedPoseIndex)
 		}
 	}
 
-	return result;
+	return dragRect;
 }
 
 
@@ -7758,18 +7934,19 @@ BPoseView::SelectPoses(BRect selectionRect, BList** oldList)
 	// being different for list vs. icon modes. Refactoring needed.
 
 	const bool inListMode = (ViewMode() == kListMode);
+	const PoseList* poseList = CurrentPoseList();
+	const int32 poseCount = poseList->CountItems();
 
 	// collect all the poses which are enclosed inside the selection rect
-	BList* newList = new BList;
+	BList* newList = new BList(poseCount);
 	BRect bounds(Bounds());
 
 	int32 startIndex;
-	if (inListMode) {
+	if (inListMode)
 		startIndex = (int32)(selectionRect.top / fListElemHeight);
-	} else {
-		startIndex = FirstIndexAtOrBelow(
-			(int32)(selectionRect.top - IconPoseHeight()), true);
-	}
+	else
+		startIndex = FirstIndexAtOrBelow((int32)(selectionRect.top - IconPoseHeight()), true);
+
 	if (startIndex < 0)
 		startIndex = 0;
 
@@ -7777,12 +7954,10 @@ BPoseView::SelectPoses(BRect selectionRect, BList** oldList)
 	if (inListMode)
 		listLoc.Set(0, startIndex * fListElemHeight);
 
-	const PoseList* poseList = inListMode ? CurrentPoseList() : fVSPoseList;
-	const int32 poseCount = inListMode ? poseList->CountItems() : fPoseList->CountItems();
 	for (int32 index = startIndex; index < poseCount; index++) {
 		BPose* pose = poseList->ItemAt(index);
 		if (pose == NULL)
-			continue;
+			break;
 
 		BRect poseRect;
 		if (inListMode)
@@ -7797,13 +7972,11 @@ BPoseView::SelectPoses(BRect selectionRect, BList** oldList)
 				// this sucks, need to clean up using a vector class instead
 				// of BList
 
-			if ((selected != pose->IsSelected())
-				&& poseRect.Intersects(bounds)) {
+			if (selected != pose->IsSelected())
 				Invalidate(poseRect);
-			}
 
 			// first Pose selected gets to be the pivot.
-			if ((fSelectionPivotPose == NULL) && (selected == false))
+			if (fSelectionPivotPose == NULL && selected == false)
 				fSelectionPivotPose = pose;
 		}
 
@@ -7846,13 +8019,15 @@ BPoseView::SelectPoses(BRect selectionRect, BList** oldList)
 
 
 void
-BPoseView::AddRemoveSelectionRange(BPoint where, bool extendSelection,
-	BPose* pose)
+BPoseView::AddRemoveSelectionRange(BPoint where, bool extendSelection, BPose* pose)
 {
 	ASSERT(pose != NULL);
 
- 	if (pose == fSelectionPivotPose && !extendSelection)
- 		return;
+	if (pose == fSelectionPivotPose && !extendSelection)
+		return;
+
+	const PoseList* poseList = CurrentPoseList();
+	const int32 poseCount = poseList->CountItems();
 
 	if (fMultipleSelection && (modifiers() & B_SHIFT_KEY) != 0 && fSelectionPivotPose) {
 		// multi pose extend/shrink current selection
@@ -7866,12 +8041,11 @@ BPoseView::AddRemoveSelectionRange(BPoint where, bool extendSelection,
 			// Remember fSelectionPivotPose because ClearSelection() NULLs it
 			// and we need it to be preserved.
 			const BPose* savedPivotPose = fSelectionPivotPose;
- 			ClearSelection();
-	 		fSelectionPivotPose = savedPivotPose;
+			ClearSelection();
+			fSelectionPivotPose = savedPivotPose;
 		}
 
 		if (ViewMode() == kListMode) {
-			const PoseList* poseList = CurrentPoseList();
 			int32 currentSelectedIndex = poseList->IndexOf(pose);
 			int32 lastSelectedIndex = poseList->IndexOf(fSelectionPivotPose);
 
@@ -7908,16 +8082,15 @@ BPoseView::AddRemoveSelectionRange(BPoint where, bool extendSelection,
 
 			ASSERT(selection.IsValid());
 
-			int32 poseCount = fPoseList->CountItems();
 			for (int32 index = poseCount - 1; index >= 0; index--) {
-				BPose* currPose = fPoseList->ItemAt(index);
+				BPose* currPose = poseList->ItemAt(index);
 				// TODO: works only in non-list mode?
 				if (selection.Intersects(currPose->CalcRect(this)))
 					AddRemovePoseFromSelection(currPose, index, select);
 			}
 		}
 	} else {
-		int32 index = CurrentPoseList()->IndexOf(pose);
+		int32 index = poseList->IndexOf(pose);
 		if (!extendSelection) {
 			if (!pose->IsSelected()) {
 				// create new selection
@@ -7945,8 +8118,7 @@ BPoseView::AddRemoveSelectionRange(BPoint where, bool extendSelection,
 
 
 void
-BPoseView::DeleteSymLinkPoseTarget(const node_ref* itemNode, BPose* pose,
-	int32 index)
+BPoseView::DeleteSymLinkPoseTarget(const node_ref* itemNode, BPose* pose, int32 index)
 {
 	ASSERT(pose->TargetModel()->IsSymLink());
 	watch_node(itemNode, B_STOP_WATCHING, this);
@@ -7964,7 +8136,7 @@ BPoseView::DeleteSymLinkPoseTarget(const node_ref* itemNode, BPose* pose,
 bool
 BPoseView::DeletePose(const node_ref* itemNode, BPose* pose, int32 index)
 {
-	watch_node(itemNode, B_STOP_WATCHING, this);
+	StopWatchingNode(itemNode);
 
 	if (pose == NULL)
 		pose = fPoseList->FindPose(itemNode, &index);
@@ -7975,11 +8147,11 @@ BPoseView::DeletePose(const node_ref* itemNode, BPose* pose, int32 index)
 			fBrokenLinks->RemoveItem(pose->TargetModel());
 			StopWatchingParentsOf(pose->TargetModel()->EntryRef());
 			Model* target = pose->TargetModel()->LinkTo();
-			if (target)
+			if (target != NULL)
 				watch_node(target->NodeRef(), B_STOP_WATCHING, this);
 		}
 
-		ASSERT(TargetModel());
+		ASSERT(TargetModel() != NULL);
 
 		if (pose == fDropTarget)
 			fDropTarget = NULL;
@@ -8038,7 +8210,7 @@ BPoseView::DeletePose(const node_ref* itemNode, BPose* pose, int32 index)
 
 				if (pose == NULL && bounds.top > 0) {
 					// scroll up a little
-					BView::ScrollTo(bounds.left, std::max(bounds.top - fListElemHeight, 0.0f));
+					_inherited::ScrollTo(bounds.left, std::max(bounds.top - fListElemHeight, 0.0f));
 				}
 			}
 		}
@@ -8060,14 +8232,14 @@ BPoseView::DeletePose(const node_ref* itemNode, BPose* pose, int32 index)
 
 
 Model*
-BPoseView::FindZombie(const node_ref* itemNode, int32* resultingIndex)
+BPoseView::FindZombie(const node_ref* itemNode, int32* resultIndex)
 {
 	int32 count = fZombieList->CountItems();
 	for (int32 index = 0; index < count; index++) {
 		Model* zombie = fZombieList->ItemAt(index);
 		if (*zombie->NodeRef() == *itemNode) {
-			if (resultingIndex)
-				*resultingIndex = index;
+			if (resultIndex)
+				*resultIndex = index;
 			return zombie;
 		}
 	}
@@ -8079,22 +8251,25 @@ BPoseView::FindZombie(const node_ref* itemNode, int32* resultingIndex)
 // return pose at location h,v (search list starting from bottom so
 // drawing and hit detection reflect the same pose ordering)
 BPose*
-BPoseView::FindPose(BPoint point, int32* poseIndex) const
+BPoseView::FindPose(BPoint where, int32* poseIndex) const
 {
+	const PoseList* poseList = CurrentPoseList();
+	const int32 poseCount = poseList->CountItems();
+	BPose* pose;
+
 	if (ViewMode() == kListMode) {
-		int32 index = (int32)(point.y / fListElemHeight);
+		int32 index = (int32)(where.y / fListElemHeight);
 		if (poseIndex != NULL)
 			*poseIndex = index;
 
-		BPoint loc(0, index * fListElemHeight);
-		BPose* pose = CurrentPoseList()->ItemAt(index);
-		if (pose != NULL && pose->PointInPose(loc, this, point))
+		BPoint poseLoc(0, index * fListElemHeight);
+		pose = poseList->ItemAt(index);
+		if (pose != NULL && pose->PointInPose(poseLoc, this, where))
 			return pose;
 	} else {
-		int32 poseCount = fPoseList->CountItems();
 		for (int32 index = poseCount - 1; index >= 0; index--) {
-			BPose* pose = fPoseList->ItemAt(index);
-			if (pose->PointInPose(this, point)) {
+			pose = poseList->ItemAt(index);
+			if (pose->PointInPose(this, where)) {
 				if (poseIndex)
 					*poseIndex = index;
 
@@ -8111,8 +8286,8 @@ BPose*
 BPoseView::FirstVisiblePose(int32* _index) const
 {
 	ASSERT(ViewMode() == kListMode);
-	return FindPose(BPoint(fListOffset,
-		Bounds().top + fListElemHeight - 1), _index);
+
+	return FindPose(BPoint(fListOffset, Bounds().top + fListElemHeight - 1), _index);
 }
 
 
@@ -8120,8 +8295,9 @@ BPose*
 BPoseView::LastVisiblePose(int32* _index) const
 {
 	ASSERT(ViewMode() == kListMode);
-	BPose* pose = FindPose(BPoint(fListOffset, Bounds().top + Frame().Height()
-		- fListElemHeight + 2), _index);
+
+	float poseY = Bounds().top + Frame().Height() - fListElemHeight + 2;
+	BPose* pose = FindPose(BPoint(fListOffset, poseY), _index);
 	if (pose == NULL) {
 		// Just get the last one
 		pose = CurrentPoseList()->LastItem();
@@ -8147,7 +8323,7 @@ BPoseView::OpenSelection(BPose* clickedPose, int32* index)
 	}
 
 	// check if we can use the single window mode
-	if (settings.SingleWindowBrowse() && !IsDesktop() && !IsFilePanel()
+	if (settings.SingleWindowBrowse() && !IsDesktopView() && !IsFilePanel()
 		&& (modifiers() & B_OPTION_KEY) == 0 && TargetModel()->IsDirectory()
 		&& singleWindowBrowsePose && singleWindowBrowsePose->ResolvedModel()
 		&& singleWindowBrowsePose->ResolvedModel()->IsDirectory()) {
@@ -8170,8 +8346,7 @@ BPoseView::OpenSelectionUsing(BPose* clickedPose, int32* index)
 
 
 void
-BPoseView::OpenSelectionCommon(BPose* clickedPose, int32* poseIndex,
-	bool openWith)
+BPoseView::OpenSelectionCommon(BPose* clickedPose, int32* poseIndex, bool openWith)
 {
 	int32 selectCount = CountSelected();
 	if (selectCount == 0)
@@ -8186,11 +8361,11 @@ BPoseView::OpenSelectionCommon(BPose* clickedPose, int32* poseIndex,
 		// close parent window if option down and we're not the desktop
 		// and we're not in single window mode
 		if (dynamic_cast<TTracker*>(be_app) == NULL || (modifiers() & B_OPTION_KEY) == 0
-			|| IsFilePanel() || IsDesktop() || TrackerSettings().SingleWindowBrowse()) {
+			|| IsFilePanel() || IsDesktopView() || TrackerSettings().SingleWindowBrowse()) {
 			continue;
 		}
 
-		ASSERT(TargetModel());
+		ASSERT(TargetModel() != NULL);
 		message.AddData("nodeRefsToClose", B_RAW_TYPE, TargetModel()->NodeRef(),
 			sizeof (node_ref));
 	}
@@ -8206,7 +8381,7 @@ BPoseView::OpenSelectionCommon(BPose* clickedPose, int32* poseIndex,
 		fSelectionHandler->PostMessage(&message);
 
 	if (clickedPose) {
-		ASSERT(poseIndex);
+		ASSERT(poseIndex != NULL);
 		if (ViewMode() == kListMode)
 			DrawOpenAnimation(CalcPoseRectList(clickedPose, *poseIndex, true));
 		else
@@ -8239,16 +8414,6 @@ BPoseView::DrawOpenAnimation(BRect rect)
 	}
 
 	SetDrawingMode(B_OP_OVER);
-}
-
-
-void
-BPoseView::ApplyBackgroundColor()
-{
-	float bgTint = TargetVolumeIsReadOnly()
-		? ReadOnlyTint(ui_color(B_DOCUMENT_BACKGROUND_COLOR)) : B_NO_TINT;
-	SetViewUIColor(B_DOCUMENT_BACKGROUND_COLOR, bgTint);
-	SetLowUIColor(B_DOCUMENT_BACKGROUND_COLOR, bgTint);
 }
 
 
@@ -8352,7 +8517,7 @@ BPoseView::ClearPoses()
 void
 BPoseView::SwitchDir(const entry_ref* newDirRef, AttributeStreamNode* node)
 {
-	ASSERT(TargetModel());
+	ASSERT(TargetModel() != NULL);
 	if (*newDirRef == *TargetModel()->EntryRef())
 		// no change
 		return;
@@ -8432,13 +8597,10 @@ BPoseView::SwitchDir(const entry_ref* newDirRef, AttributeStreamNode* node)
 		AddTrashPoses();
 	else
 		AddPoses(TargetModel());
+
 	TargetModel()->CloseNode();
 
-	if (!IsDesktop()) {
-		ApplyBackgroundColor();
-		if (ContainerWindow() != NULL)
-			ContainerWindow()->UpdateBackgroundImage();
-	}
+	AdoptSystemColors();
 
 	Invalidate();
 
@@ -8449,7 +8611,7 @@ BPoseView::SwitchDir(const entry_ref* newDirRef, AttributeStreamNode* node)
 void
 BPoseView::Refresh()
 {
-	ASSERT(TargetModel());
+	ASSERT(TargetModel() != NULL);
 	if (TargetModel()->OpenNode() != B_OK)
 		return;
 
@@ -8566,7 +8728,7 @@ BPoseView::SetDefaultPrinter()
 		alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
 		alert->Go();
 		return;
- 	}
+	}
 	SendSelectionAsRefs(kMakeActivePrinter);
 }
 
@@ -8599,7 +8761,7 @@ BPoseView::CanOpenParent()
 		}
 	} else {
 		// deny Desktop, allow Desktop folder
-		if (IsDesktop() || TargetModel()->IsRoot())
+		if (IsDesktopView() || TargetModel()->IsRoot())
 			return false;
 	}
 
@@ -8647,6 +8809,9 @@ BPoseView::ClearSelection()
 	fSelectionPivotPose = NULL;
 	fRealPivotPose = NULL;
 
+	const PoseList* poseList = CurrentPoseList();
+	const int32 poseCount = poseList->CountItems();
+
 	if (CountSelected() > 0) {
 		// scan all visible poses first
 		BRect bounds(Bounds());
@@ -8669,10 +8834,11 @@ BPoseView::ClearSelection()
 					break;
 			}
 		} else {
-			int32 startIndex = FirstIndexAtOrBelow((int32)(bounds.top - IconPoseHeight()), true);
-			int32 poseCount = fVSPoseList->CountItems();
+			const int32 startIndex
+				= FirstIndexAtOrBelow((int32)(bounds.top - IconPoseHeight()), true);
+
 			for (int32 index = startIndex; index < poseCount; index++) {
-				BPose* pose = fVSPoseList->ItemAt(index);
+				BPose* pose = poseList->ItemAt(index);
 				if (pose != NULL) {
 					if (pose->IsSelected()) {
 						pose->Select(false);
@@ -8711,46 +8877,50 @@ BPoseView::ShowSelection(bool show)
 	// scan all visible poses first
 	BRect bounds(Bounds());
 
+	const PoseList* poseList = CurrentPoseList();
+	const int32 poseCount = poseList->CountItems();
+
 	if (ViewMode() == kListMode) {
-		int32 startIndex = (int32)(bounds.top / fListElemHeight);
+		const int32 startIndex = (int32)(bounds.top / fListElemHeight);
 		BPoint loc(0, startIndex * fListElemHeight);
 
-		const PoseList* poseList = CurrentPoseList();
-		int32 poseCount = poseList->CountItems();
 		for (int32 index = startIndex; index < poseCount; index++) {
 			BPose* pose = poseList->ItemAt(index);
-			if (fSelectionList->HasItem(pose))
-				if (pose->IsSelected() != show
-					|| fShowSelectionWhenInactive) {
+			if (pose == NULL)
+				break;
+
+			if (fSelectionList->HasItem(pose)) {
+				if (pose->IsSelected() != show || fShowSelectionWhenInactive) {
 					if (!fShowSelectionWhenInactive)
 						pose->Select(show);
 
-					pose->Draw(BRect(pose->CalcRect(loc, this, false)),
-						bounds, this, false);
+					Invalidate(pose->CalcRect(loc, this, false));
 				}
+			}
 
 			loc.y += fListElemHeight;
 			if (loc.y > bounds.bottom)
 				break;
 		}
 	} else {
-		int32 startIndex = FirstIndexAtOrBelow((int32)(bounds.top - IconPoseHeight()), true);
-		int32 poseCount = fVSPoseList->CountItems();
+		const int32 startIndex
+			= FirstIndexAtOrBelow((int32)(bounds.top - IconPoseHeight()), true);
 		for (int32 index = startIndex; index < poseCount; index++) {
-			BPose* pose = fVSPoseList->ItemAt(index);
-			if (pose != NULL) {
-				if (fSelectionList->HasItem(pose))
-					if (pose->IsSelected() != show
-						|| fShowSelectionWhenInactive) {
-						if (!fShowSelectionWhenInactive)
-							pose->Select(show);
+			BPose* pose = poseList->ItemAt(index);
+			if (pose == NULL)
+				break;
 
-						Invalidate(pose->CalcRect(this));
-					}
+			if (fSelectionList->HasItem(pose)) {
+				if (pose->IsSelected() != show || fShowSelectionWhenInactive) {
+					if (!fShowSelectionWhenInactive)
+						pose->Select(show);
 
-				if (pose->Location(this).y > bounds.bottom)
-					break;
+					Invalidate(pose->CalcRect(this));
+				}
 			}
+
+			if (pose->Location(this).y > bounds.bottom)
+				break;
 		}
 	}
 
@@ -8785,10 +8955,9 @@ BPoseView::AddRemovePoseFromSelection(BPose* pose, int32 index, bool select)
 	pose->Select(select);
 
 	// update display
-	if (ViewMode() == kListMode) {
-		Invalidate(pose->CalcRect(BPoint(0, index * fListElemHeight),
-			this, false));
-	} else
+	if (ViewMode() == kListMode)
+		Invalidate(pose->CalcRect(BPoint(0, index * fListElemHeight), this, false));
+	else
 		Invalidate(pose->CalcRect(this));
 
 	if (select)
@@ -8833,13 +9002,19 @@ BPoseView::SelectedVolumeIsReadOnly() const
 	} else if (selectCount > 0) {
 		// only check first item's volume, assume rest are the same
 		pose = fSelectionList->FirstItem();
-		if (pose->TargetModel()->IsRoot())
+		if (pose->TargetModel()->IsRoot()) {
+			// root pose is always considered read-only
 			return true;
-
-		entry.SetTo(pose->TargetModel()->EntryRef());
-		if (FSGetParentVirtualDirectoryAware(entry, parent) == B_OK) {
-			parent.GetNodeRef(&nref);
-			volume.SetTo(nref.device);
+		} else if (pose->TargetModel()->IsVolume()) {
+			// determine if read-only based on pose's volume
+			volume.SetTo(pose->TargetModel()->NodeRef()->device);
+		} else {
+			// determine if read-only based on pose's parent directory
+			entry.SetTo(pose->TargetModel()->EntryRef());
+			if (FSGetParentVirtualDirectoryAware(entry, parent) == B_OK) {
+				parent.GetNodeRef(&nref);
+				volume.SetTo(nref.device);
+			}
 		}
 	} else {
 		// no items selected, check target volume instead
@@ -8904,9 +9079,10 @@ BPoseView::RemoveFromExtent(const BRect &rect)
 {
 	ASSERT(ViewMode() != kListMode);
 
-	if (rect.left <= fExtent.left || rect.right >= fExtent.right
-		|| rect.top <= fExtent.top || rect.bottom >= fExtent.bottom)
+	if (rect.left <= fExtent.left || rect.top <= fExtent.top
+		|| rect.right >= fExtent.right || rect.bottom >= fExtent.bottom) {
 		RecalcExtent();
+	}
 }
 
 
@@ -8916,35 +9092,51 @@ BPoseView::RecalcExtent()
 	ASSERT(ViewMode() != kListMode);
 
 	ClearExtent();
-	int32 poseCount = fPoseList->CountItems();
-	for (int32 index = 0; index < poseCount; index++)
-		AddToExtent(fPoseList->ItemAt(index)->CalcRect(this));
+	if (IsFiltering()) {
+		int32 poseCount = fFilteredPoseList->CountItems();
+		for (int32 index = 0; index < poseCount; index++)
+			AddToExtent(fFilteredPoseList->ItemAt(index)->CalcRect(this));
+	} else {
+		int32 poseCount = fVSPoseList->CountItems();
+		for (int32 index = 0; index < poseCount; index++)
+			AddToExtent(fVSPoseList->ItemAt(index)->CalcRect(this));
+	}
 }
 
 
 BRect
 BPoseView::Extent() const
 {
-	BRect rect;
+	if (ViewMode() == kListMode)
+		return ListModeExtent();
+	else
+		return IconModeExtent();
+}
 
-	if (ViewMode() == kListMode) {
-		BColumn* column = fColumnList->LastItem();
-		if (column != NULL) {
-			rect.left = rect.top = 0;
-			rect.right = column->Offset() + column->Width()
-				+ kTitleColumnRightExtraMargin - kRoomForLine / 2.0f;
-			rect.bottom = fListElemHeight * CurrentPoseList()->CountItems();
-		} else
-			rect.Set(LeftTop().x, LeftTop().y, LeftTop().x, LeftTop().y);
-	} else {
-		rect = fExtent;
-		rect.left -= fOffset.x;
-		rect.top -= fOffset.y;
-		rect.right += fOffset.x;
-		rect.bottom += fOffset.y;
-		if (!rect.IsValid())
-			rect.Set(LeftTop().x, LeftTop().y, LeftTop().x, LeftTop().y);
-	}
+
+BRect
+BPoseView::ListModeExtent() const
+{
+	BColumn* column = fColumnList->LastItem();
+	if (column == NULL)
+		return BRect(LeftTop().x, LeftTop().y, LeftTop().x, LeftTop().y);
+
+	BRect rect;
+	rect.left = rect.top = 0;
+	rect.right = column->Offset() + column->Width() + kTitleColumnRightExtraMargin
+		- kRoomForLine / 2.f;
+	rect.bottom = fListElemHeight * CurrentPoseList()->CountItems();
+
+	return rect;
+}
+
+
+BRect
+BPoseView::IconModeExtent() const
+{
+	BRect rect(fExtent.InsetByCopy(-fOffset));
+	if (!rect.IsValid())
+		rect.Set(LeftTop().x, LeftTop().y, LeftTop().x, LeftTop().y);
 
 	return rect;
 }
@@ -9060,78 +9252,52 @@ BPoseView::DrawPose(BPose* pose, int32 index, bool fullDraw)
 {
 	BRect rect = CalcPoseRect(pose, index, fullDraw);
 
-	if (TrackerSettings().ShowVolumeSpaceBar()
-		&& pose->TargetModel()->IsVolume()) {
+	if (TrackerSettings().ShowVolumeSpaceBar() && pose->TargetModel()->IsVolume())
 		Invalidate(rect);
-	} else
-		pose->Draw(rect, rect, this, fullDraw);
-}
-
-
-rgb_color
-BPoseView::TextColor(bool selected) const
-{
-	if (selected)
-		return ui_color(B_DOCUMENT_BACKGROUND_COLOR);
 	else
-		return ui_color(B_DOCUMENT_TEXT_COLOR);
-}
-
-
-rgb_color
-BPoseView::BackColor(bool selected) const
-{
-	if (selected) {
-		return InvertedBackColor(ui_color(B_DOCUMENT_BACKGROUND_COLOR));
-	} else {
-		rgb_color background = ui_color(B_DOCUMENT_BACKGROUND_COLOR);
-		return tint_color(background,
-			TargetVolumeIsReadOnly() ? ReadOnlyTint(background) : B_NO_TINT);
-	}
+		pose->Draw(rect, rect, this, fullDraw);
 }
 
 
 void
 BPoseView::Draw(BRect updateRect)
 {
-	if (IsDesktop()) {
-		BScreen screen(Window());
-		rgb_color color = screen.DesktopColor();
-		SetLowColor(color);
-		SetViewColor(color);
-	}
 	DrawViewCommon(updateRect);
 
 	if ((Flags() & B_DRAW_ON_CHILDREN) == 0)
 		DrawAfterChildren(updateRect);
+
+	_inherited::Draw(updateRect);
 }
 
 
 void
 BPoseView::DrawAfterChildren(BRect updateRect)
 {
-	if (fTransparentSelection && fSelectionRectInfo.rect.IsValid()) {
-		SetDrawingMode(B_OP_ALPHA);
-		rgb_color color = ui_color(B_NAVIGATION_BASE_COLOR);
-		color.alpha = 128;
-		SetHighColor(color);
-		if (fSelectionRectInfo.rect.Width() == 0
-			|| fSelectionRectInfo.rect.Height() == 0) {
-			StrokeLine(fSelectionRectInfo.rect.LeftTop(),
-				fSelectionRectInfo.rect.RightBottom());
-		} else {
-			StrokeRect(fSelectionRectInfo.rect);
-			BRect interior = fSelectionRectInfo.rect;
-			interior.InsetBy(1, 1);
-			if (interior.IsValid()) {
-				color = ui_color(B_CONTROL_HIGHLIGHT_COLOR);
-				color.alpha = 90;
-				SetHighColor(color);
-				FillRect(interior);
-			}
+	if (!fTransparentSelection || !fSelectionRectInfo.rect.IsValid())
+		return;
+
+	PushState();
+
+	SetDrawingMode(B_OP_ALPHA);
+	rgb_color color = ui_color(B_NAVIGATION_BASE_COLOR);
+	color.alpha = 128;
+	SetHighColor(color);
+	if (fSelectionRectInfo.rect.Width() == 0 || fSelectionRectInfo.rect.Height() == 0) {
+		StrokeLine(fSelectionRectInfo.rect.LeftTop(), fSelectionRectInfo.rect.RightBottom());
+	} else {
+		StrokeRect(fSelectionRectInfo.rect);
+		BRect interior = fSelectionRectInfo.rect;
+		interior.InsetBy(1, 1);
+		if (interior.IsValid()) {
+			color = ui_color(B_CONTROL_HIGHLIGHT_COLOR);
+			color.alpha = 90;
+			SetHighColor(color);
+			FillRect(interior);
 		}
-		SetDrawingMode(B_OP_OVER);
 	}
+
+	PopState();
 }
 
 
@@ -9155,32 +9321,42 @@ BPoseView::SynchronousUpdate(BRect updateRect, bool clip)
 void
 BPoseView::DrawViewCommon(const BRect& updateRect)
 {
-	if (ViewMode() == kListMode) {
-		const PoseList* poseList = CurrentPoseList();
-		int32 poseCount = poseList->CountItems();
-		int32 startIndex
-			= (int32)((updateRect.top - fListElemHeight) / fListElemHeight);
+	const PoseList* poseList = CurrentPoseList();
+	const int32 poseCount = poseList->CountItems();
+	BPose* pose;
+	BRect poseRect;
 
+	if (ViewMode() == kListMode) {
+		int32 startIndex = (int32)((updateRect.top - fListElemHeight) / fListElemHeight);
 		if (startIndex < 0)
 			startIndex = 0;
 
 		BPoint location(0, startIndex * fListElemHeight);
-
 		for (int32 index = startIndex; index < poseCount; index++) {
-			BPose* pose = poseList->ItemAt(index);
-			BRect poseRect(pose->CalcRect(location, this, true));
-			pose->Draw(poseRect, updateRect, this, true);
+			pose = poseList->ItemAt(index);
+			if (pose == NULL)
+				break;
+
+			poseRect = pose->CalcRect(location, this, false);
+			if (updateRect.Intersects(poseRect))
+				pose->Draw(poseRect, updateRect, this, true);
+
 			location.y += fListElemHeight;
 			if (location.y >= updateRect.bottom)
 				break;
 		}
 	} else {
-		int32 poseCount = fPoseList->CountItems();
 		for (int32 index = 0; index < poseCount; index++) {
-			BPose* pose = fPoseList->ItemAt(index);
-			BRect poseRect(pose->CalcRect(this));
+			pose = poseList->ItemAt(index);
+			if (pose == NULL)
+				break;
+
+			poseRect = pose->CalcRect(this);
 			if (updateRect.Intersects(poseRect))
 				pose->Draw(poseRect, updateRect, this, true);
+
+			if (pose->Location(this).y > updateRect.bottom)
+				break;
 		}
 	}
 }
@@ -9193,7 +9369,7 @@ BPoseView::ColumnRedraw(BRect updateRect)
 	ASSERT(ViewMode() == kListMode);
 
 #if COLUMN_MODE_ON_DESKTOP
-	if (IsDesktop()) {
+	if (IsDesktopView()) {
 		BScreen screen(Window());
 		rgb_color d = screen.DesktopColor();
 		SetLowColor(d);
@@ -9201,8 +9377,7 @@ BPoseView::ColumnRedraw(BRect updateRect)
 	}
 #endif
 
-	int32 startIndex
-		= (int32)((updateRect.top - fListElemHeight) / fListElemHeight);
+	int32 startIndex = (int32)((updateRect.top - fListElemHeight) / fListElemHeight);
 	if (startIndex < 0)
 		startIndex = 0;
 
@@ -9210,6 +9385,9 @@ BPoseView::ColumnRedraw(BRect updateRect)
 	int32 poseCount = poseList->CountItems();
 	if (poseCount <= 0)
 		return;
+
+	PushState();
+	SetDrawingMode(B_OP_COPY);
 
 	BPoint location(0, startIndex * fListElemHeight);
 	BRect srcRect = poseList->ItemAt(0)->CalcRect(B_ORIGIN, this, false);
@@ -9220,24 +9398,29 @@ BPoseView::ColumnRedraw(BRect updateRect)
 	BRegion updateRegion;
 	updateRegion.Set(updateRect);
 	ConstrainClippingRegion(&updateRegion);
+	offscreenView->SetDrawingMode(B_OP_COPY);
+	if (!TargetVolumeIsReadOnly())
+		offscreenView->SetLowUIColor(LowUIColor());
+	else
+		offscreenView->SetLowUIColor(LowUIColor(), ReadOnlyTint(LowUIColor()));
 
 	for (int32 index = startIndex; index < poseCount; index++) {
 		BPose* pose = poseList->ItemAt(index);
+		if (pose == NULL)
+			break;
 
-		offscreenView->SetDrawingMode(B_OP_COPY);
-		offscreenView->SetLowColor(LowColor());
 		offscreenView->FillRect(offscreenView->Bounds(), B_SOLID_LOW);
-
-		BRect dstRect = srcRect;
-		dstRect.OffsetTo(location);
-
+		BRect dstRect = srcRect.OffsetByCopy(location);
 		BPoint offsetBy(0, -(index * ListElemHeight()));
-		pose->Draw(dstRect, updateRect, this, offscreenView, true,
-			offsetBy, pose->IsSelected());
+		pose->Draw(dstRect, updateRect, this, offscreenView, true, offsetBy, pose->IsSelected());
 
 		offscreenView->Sync();
-		SetDrawingMode(B_OP_COPY);
 		DrawBitmap(sOffscreen->Bitmap(), srcRect, dstRect);
+		if (!TargetVolumeIsReadOnly())
+			offscreenView->SetLowUIColor(LowUIColor());
+		else
+			offscreenView->SetLowUIColor(LowUIColor(), ReadOnlyTint(LowUIColor()));
+
 		location.y += fListElemHeight;
 		if (location.y > updateRect.bottom)
 			break;
@@ -9245,6 +9428,7 @@ BPoseView::ColumnRedraw(BRect updateRect)
 
 	sOffscreen->DoneUsing();
 	ConstrainClippingRegion(0);
+	PopState();
 }
 
 
@@ -9399,8 +9583,7 @@ BSearch(PoseList* table, const BPose* key, BPoseView* view,
 
 
 int32
-BPoseView::BSearchList(PoseList* poseList, const BPose* pose,
-	int32* resultingIndex, int32 oldIndex)
+BPoseView::BSearchList(PoseList* poseList, const BPose* pose, int32* resultIndex, int32 oldIndex)
 {
 	// check to see if insertion should be at beginning of list
 	const BPose* firstPose = poseList->FirstItem();
@@ -9408,7 +9591,7 @@ BPoseView::BSearchList(PoseList* poseList, const BPose* pose,
 		return kInsertAtFront;
 
 	if (PoseCompareAddWidget(pose, firstPose, this) < 0) {
-		*resultingIndex = 0;
+		*resultIndex = 0;
 		return kInsertAtFront;
 	}
 
@@ -9423,14 +9606,13 @@ BPoseView::BSearchList(PoseList* poseList, const BPose* pose,
 		poseList->ItemAt(oldIndex), this) <= 0;
 
 	if (valid) {
-		*resultingIndex = oldIndex - 1;
+		*resultIndex = oldIndex - 1;
 		return kInsertAfter;
 	}
 
-	*resultingIndex = poseCount - 1;
+	*resultIndex = poseCount - 1;
 
-	const BPose* searchResult = BSearch(poseList, pose, this,
-		PoseCompareAddWidget);
+	const BPose* searchResult = BSearch(poseList, pose, this, PoseCompareAddWidget);
 
 	if (searchResult != NULL) {
 		// what are we doing here??
@@ -9438,8 +9620,7 @@ BPoseView::BSearchList(PoseList* poseList, const BPose* pose,
 		// something
 		int32 index = poseList->IndexOf(searchResult);
 		for (; index < poseCount; index++) {
-			int32 result = PoseCompareAddWidget(pose, poseList->ItemAt(index),
-				this);
+			int32 result = PoseCompareAddWidget(pose, poseList->ItemAt(index), this);
 			if (result <= 0) {
 				--index;
 				break;
@@ -9447,7 +9628,7 @@ BPoseView::BSearchList(PoseList* poseList, const BPose* pose,
 		}
 
 		if (index != poseCount)
-			*resultingIndex = index;
+			*resultIndex = index;
 	}
 
 	return kInsertAfter;
@@ -9531,10 +9712,9 @@ BPoseView::SortPoses()
 #endif
 
 	BPose** poses = reinterpret_cast<BPose**>(fPoseList->AsBList()->Items());
-	std::stable_sort(poses, &poses[fPoseList->CountItems()],
-		PoseComparator(this));
+	std::stable_sort(poses, &poses[fPoseList->CountItems()], PoseComparator(this));
 	if (IsFiltering()) {
-		poses = reinterpret_cast<BPose**>(fPoseList->AsBList()->Items());
+		poses = reinterpret_cast<BPose**>(fFilteredPoseList->AsBList()->Items());
 		std::stable_sort(poses, &poses[fFilteredPoseList->CountItems()], PoseComparator(this));
 	}
 }
@@ -9566,8 +9746,7 @@ BPoseView::ResizeColumnToWidest(BColumn* column)
 	PoseList* poseList = CurrentPoseList();
 	int32 poseCount = poseList->CountItems();
 	for (int32 i = 0; i < poseCount; ++i) {
-		BTextWidget* widget
-			= poseList->ItemAt(i)->WidgetFor(column->AttrHash());
+		BTextWidget* widget = poseList->ItemAt(i)->WidgetFor(column->AttrHash());
 		if (widget != NULL) {
 			float width = widget->PreferredWidth(this);
 			if (width > maxWidth)
@@ -9585,8 +9764,7 @@ BPoseView::ResizeColumnToWidest(BColumn* column)
 
 
 BPoint
-BPoseView::ResizeColumn(BColumn* column, float newSize,
-	float* lastLineDrawPos,
+BPoseView::ResizeColumn(BColumn* column, float newSize, float* lastLineDrawPos,
 	void (*drawLineFunc)(BPoseView*, BPoint, BPoint),
 	void (*undrawLineFunc)(BPoseView*, BPoint, BPoint))
 {
@@ -9628,8 +9806,7 @@ BPoseView::ResizeColumn(BColumn* column, float newSize,
 		CopyBits(sourceRect, destRect);
 		if (drawLineFunc != NULL) {
 			ASSERT(lastLineDrawPos != NULL);
-			(drawLineFunc)(this, BPoint(destRect.left + kRoomForLine,
-					destRect.top),
+			(drawLineFunc)(this, BPoint(destRect.left + kRoomForLine, destRect.top),
 				BPoint(destRect.left + kRoomForLine, destRect.bottom));
 			*lastLineDrawPos = destRect.left + kRoomForLine;
 		}
@@ -9641,9 +9818,8 @@ BPoseView::ResizeColumn(BColumn* column, float newSize,
 				BPoint(*lastLineDrawPos, sourceRect.bottom));
 		}
 		if (drawLineFunc != NULL) {
-			ASSERT(lastLineDrawPos);
-			(drawLineFunc)(this, BPoint(destRect.left + kRoomForLine,
-					destRect.top),
+			ASSERT(lastLineDrawPos != NULL);
+			(drawLineFunc)(this, BPoint(destRect.left + kRoomForLine, destRect.top),
 				BPoint(destRect.left + kRoomForLine, destRect.bottom));
 			*lastLineDrawPos = destRect.left + kRoomForLine;
 		}
@@ -9720,8 +9896,7 @@ BPoseView::UpdateDropTarget(BPoint mouseLoc, const BMessage* dragMessage,
 
 	Model tmpTarget;
 	if (targetModel != NULL && targetModel->IsSymLink()
-		&& tmpTarget.SetTo(targetPose->TargetModel()->EntryRef(), true, true)
-			== B_OK) {
+		&& tmpTarget.SetTo(targetPose->TargetModel()->EntryRef(), true, true) == B_OK) {
 		targetModel = &tmpTarget;
 	}
 
@@ -9767,10 +9942,10 @@ BPoseView::FrameForPose(BPose* targetPose, bool convert, BRect* poseRect)
 {
 	bool frameIsValid = false;
 	BRect bounds(Bounds());
+	PoseList* poseList = CurrentPoseList();
+	int32 poseCount = poseList->CountItems();
 
 	if (ViewMode() == kListMode) {
-		PoseList* poseList = CurrentPoseList();
-		int32 poseCount = poseList->CountItems();
 		int32 startIndex = (int32)(bounds.top / fListElemHeight);
 
 		BPoint location(0, startIndex * fListElemHeight);
@@ -9786,21 +9961,21 @@ BPoseView::FrameForPose(BPose* targetPose, bool convert, BRect* poseRect)
 		}
 	} else {
 		int32 startIndex = FirstIndexAtOrBelow((int32)(bounds.top - IconPoseHeight()), true);
-		int32 poseCount = fVSPoseList->CountItems();
 
 		for (int32 index = startIndex; index < poseCount; index++) {
-			BPose* pose = fVSPoseList->ItemAt(index);
-			if (pose != NULL) {
-				if (pose == fDropTarget) {
-					*poseRect = pose->CalcRect(this);
-					frameIsValid = true;
-					break;
-				}
+			BPose* pose = poseList->ItemAt(index);
+			if (pose == NULL)
+				break;
 
-				if (pose->Location(this).y > bounds.bottom) {
-					frameIsValid = false;
-					break;
-				}
+			if (pose == fDropTarget) {
+				*poseRect = pose->CalcRect(this);
+				frameIsValid = true;
+				break;
+			}
+
+			if (pose->Location(this).y > bounds.bottom) {
+				frameIsValid = false;
+				break;
 			}
 		}
 	}
@@ -9869,16 +10044,6 @@ BPoseView::MenuTrackingHook(BMenu* menu, void*)
 
 
 void
-BPoseView::DragStop()
-{
-	fStartFrame.Set(0, 0, 0, 0);
-	BContainerWindow* window = ContainerWindow();
-	if (window != NULL)
-		window->DragStop();
-}
-
-
-void
 BPoseView::HiliteDropTarget(bool hiliteState)
 {
 	// hilites current drop target while dragging, does not modify
@@ -9911,16 +10076,22 @@ BPoseView::HiliteDropTarget(bool hiliteState)
 	// scan all visible poses
 	BRect bounds(Bounds());
 
-	if (ViewMode() == kListMode) {
-		PoseList* poseList = CurrentPoseList();
-		int32 poseCount = poseList->CountItems();
-		int32 startIndex = (int32)(bounds.top / fListElemHeight);
+	const PoseList* poseList = CurrentPoseList();
+	const int32 poseCount = poseList->CountItems();
+	BPose* pose;
+	BRect poseRect;
 
+	if (ViewMode() == kListMode) {
+		int32 startIndex = (int32)(bounds.top / fListElemHeight);
 		BPoint location(0, startIndex * fListElemHeight);
 
 		for (int32 index = startIndex; index < poseCount; index++) {
+			pose = poseList->ItemAt(index);
+			if (pose == NULL)
+				break;
+
 			if (fDropTarget == poseList->ItemAt(index)) {
-				BRect poseRect = fDropTarget->CalcRect(location, this, false);
+				poseRect = fDropTarget->CalcRect(location, this, false);
 				fDropTarget->Draw(poseRect, poseRect, this, false);
 				break;
 			}
@@ -9931,27 +10102,28 @@ BPoseView::HiliteDropTarget(bool hiliteState)
 		}
 	} else {
 		int32 startIndex = FirstIndexAtOrBelow((int32)(bounds.top - IconPoseHeight()), true);
-		int32 poseCount = fVSPoseList->CountItems();
 
 		for (int32 index = startIndex; index < poseCount; index++) {
-			BPose* pose = fVSPoseList->ItemAt(index);
-			if (pose != NULL) {
-				if (pose == fDropTarget) {
-					BRect poseRect = pose->CalcRect(this);
-					// TODO: maybe leave just the else part
-					if (!hiliteState)
-						// deselecting an icon with widget drawn over background
-						// have to be a little tricky here - draw just the icon,
-						// invalidate the widget
-						pose->DeselectWithoutErasingBackground(poseRect, this);
-					else
-						pose->Draw(poseRect, poseRect, this, false);
-					break;
-				}
+			pose = poseList->ItemAt(index);
+			if (pose == NULL)
+				break;
 
-				if (pose->Location(this).y > bounds.bottom)
-					break;
+			if (pose == fDropTarget) {
+				poseRect = fDropTarget->CalcRect(this);
+				// TODO: maybe leave just the else part
+				if (!hiliteState) {
+					// deselecting an icon with widget drawn over background
+					// have to be a little tricky here - draw just the icon,
+					// invalidate the widget
+					fDropTarget->DeselectWithoutErasingBackground(poseRect, this);
+				} else {
+					fDropTarget->Draw(poseRect, poseRect, this, false);
+				}
+				break;
 			}
+
+			if (pose->Location(this).y > bounds.bottom)
+				break;
 		}
 	}
 }
@@ -10052,10 +10224,9 @@ BPoseView::CheckAutoScroll(BPoint mouseLoc, bool shouldScroll)
 		if (keepGoing) {
 			wouldScroll = true;
 			if (shouldScroll) {
-				if (fHScrollBar != NULL) {
-					fHScrollBar->SetValue(
-						fHScrollBar->Value() - scrollIncrement);
-				} else
+				if (fHScrollBar != NULL)
+					fHScrollBar->SetValue(fHScrollBar->Value() - scrollIncrement);
+				else
 					ScrollBy(-scrollIncrement, 0);
 			}
 		}
@@ -10079,11 +10250,10 @@ BPoseView::CheckAutoScroll(BPoint mouseLoc, bool shouldScroll)
 		if (keepGoing) {
 			wouldScroll = true;
 			if (shouldScroll) {
-				if (fHScrollBar != NULL) {
-					fHScrollBar->SetValue(
-						fHScrollBar->Value() + scrollIncrement);
- 				} else
- 					ScrollBy(scrollIncrement, 0);
+				if (fHScrollBar != NULL)
+					fHScrollBar->SetValue(fHScrollBar->Value() + scrollIncrement);
+				else
+					ScrollBy(scrollIncrement, 0);
 			}
 		}
 	}
@@ -10136,8 +10306,7 @@ BPoseView::HandleAutoScroll()
 
 
 BRect
-BPoseView::CalcPoseRect(const BPose* pose, int32 index,
-	bool firstColumnOnly) const
+BPoseView::CalcPoseRect(const BPose* pose, int32 index, bool firstColumnOnly) const
 {
 	if (ViewMode() == kListMode)
 		return CalcPoseRectList(pose, index, firstColumnOnly);
@@ -10154,11 +10323,9 @@ BPoseView::CalcPoseRectIcon(const BPose* pose) const
 
 
 BRect
-BPoseView::CalcPoseRectList(const BPose* pose, int32 index,
-	bool firstColumnOnly) const
+BPoseView::CalcPoseRectList(const BPose* pose, int32 index, bool firstColumnOnly) const
 {
-	return pose->CalcRect(BPoint(0, index * fListElemHeight), this,
-		firstColumnOnly);
+	return pose->CalcRect(BPoint(0, index * fListElemHeight), this, firstColumnOnly);
 }
 
 
@@ -10200,10 +10367,39 @@ BPoseView::HideBarberPole()
 }
 
 
-bool
-BPoseView::IsWatchingDateFormatChange()
+status_t
+BPoseView::DragStart(const BMessage* dragMessage)
 {
-	return fIsWatchingDateFormatChange;
+	if (dragMessage == NULL)
+		return B_ERROR;
+
+	// if already dragging, or
+	// if all the refs match
+	if (IsDragging() && SpringLoadedFolderCompareMessages(dragMessage, fDragMessage))
+		return B_OK;
+
+	// cache the current drag message
+	// build a list of the mimetypes in the message
+	SpringLoadedFolderCacheDragData(dragMessage, &fDragMessage, &fCachedTypesList);
+
+	fWaitingForRefs = true;
+
+	return B_OK;
+}
+
+
+void
+BPoseView::DragStop()
+{
+	delete fDragMessage;
+	fDragMessage = NULL;
+
+	delete fCachedTypesList;
+	fCachedTypesList = NULL;
+
+	fStartFrame.Set(0, 0, 0, 0);
+
+	fWaitingForRefs = false;
 }
 
 
@@ -10257,13 +10453,6 @@ BPoseView::AdaptToVolumeChange(BMessage*)
 void
 BPoseView::AdaptToDesktopIntegrationChange(BMessage*)
 {
-}
-
-
-bool
-BPoseView::WidgetTextOutline() const
-{
-	return fWidgetTextOutline;
 }
 
 
@@ -10351,12 +10540,12 @@ BPoseView::UpdateAfterFilterChange()
 
 	BPose* pose = fFilteredPoseList->LastItem();
 	if (pose == NULL)
-		BView::ScrollTo(0, 0);
+		_inherited::ScrollTo(0, 0);
 	else {
 		BRect bounds = Bounds();
 		float height = fFilteredPoseList->CountItems() * fListElemHeight;
 		if (bounds.top > 0 && bounds.bottom > height)
-			BView::ScrollTo(0, std::max(height - bounds.Height(), 0.0f));
+			_inherited::ScrollTo(0, std::max(height - bounds.Height(), 0.0f));
 	}
 
 	UpdateScrollRange();
@@ -10369,12 +10558,17 @@ BPoseView::FilterPose(BPose* pose)
 	if (pose == NULL || !IsFiltering())
 		return false;
 
+	ModelNodeLazyOpener modelOpener(pose->TargetModel());
 	if (IsRefFiltering()) {
-		PoseInfo poseInfo;
-		ReadPoseInfo(pose->TargetModel(), &poseInfo);
-		if (pose->TargetModel()->OpenNode() != B_OK)
+		modelOpener.OpenNode();
+
+		Model* model = pose->TargetModel();
+		if (!model->IsNodeOpen())
 			return false;
-		if (!ShouldShowPose(pose->TargetModel(), &poseInfo))
+
+		struct stat_beos stat;
+		convert_to_stat_beos(model->StatBuf(), &stat);
+		if (!fRefFilter->Filter(model->EntryRef(), model->Node(), &stat, model->MimeType()))
 			return false;
 	}
 
@@ -10384,7 +10578,6 @@ BPoseView::FilterPose(BPose* pose)
 	bool found[stringCount];
 	memset(found, 0, sizeof(found));
 
-	ModelNodeLazyOpener modelOpener(pose->TargetModel());
 	for (int32 i = 0; i < CountColumns(); i++) {
 		BTextWidget* widget = pose->WidgetFor(ColumnAt(i), this, modelOpener);
 		const char* text = NULL;
@@ -10467,7 +10660,7 @@ BPoseView::RebuildFilteringPoseList()
 	for (int32 index = 0; index < poseCount; index++) {
 		BPose* pose = fPoseList->ItemAt(index);
 		if (pose == NULL)
-			continue;
+			break;
 
 		if (FilterPose(pose))
 			fFilteredPoseList->AddItem(pose);

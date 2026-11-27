@@ -28,6 +28,7 @@ struct fd_info;
 struct fd_set;
 struct fs_info;
 struct iovec;
+struct loadavg;
 struct msqid_ds;
 struct net_stat;
 struct pollfd;
@@ -212,13 +213,14 @@ extern bigtime_t	_kern_estimate_max_scheduling_latency(thread_id thread);
 
 extern status_t		_kern_set_scheduler_mode(int32 mode);
 extern int32		_kern_get_scheduler_mode(void);
+extern status_t		_kern_get_loadavg(struct loadavg* info, size_t size);
 
 // user/group functions
-extern gid_t		_kern_getgid(bool effective);
-extern uid_t		_kern_getuid(bool effective);
-extern status_t		_kern_setregid(gid_t rgid, gid_t egid,
+extern status_t		_kern_getresgid(gid_t *rgid, gid_t *egid, gid_t *sgid);
+extern status_t		_kern_getresuid(uid_t *ruid, uid_t *euid, uid_t *suid);
+extern status_t		_kern_setresgid(gid_t rgid, gid_t egid, gid_t sgid,
 						bool setAllIfPrivileged);
-extern status_t		_kern_setreuid(uid_t ruid, uid_t euid,
+extern status_t		_kern_setresuid(uid_t ruid, uid_t euid, uid_t suid,
 						bool setAllIfPrivileged);
 extern ssize_t		_kern_getgroups(int groupCount, gid_t* groupList);
 extern status_t		_kern_setgroups(int groupCount, const gid_t* groupList);
@@ -276,7 +278,7 @@ extern int			_kern_open_dir(int fd, const char *path);
 extern int			_kern_open_parent_dir(int fd, char *name,
 						size_t nameLength);
 extern status_t		_kern_fcntl(int fd, int op, size_t argument);
-extern status_t		_kern_fsync(int fd);
+extern status_t		_kern_fsync(int fd, bool dataOnly);
 extern status_t		_kern_flock(int fd, int op);
 extern off_t		_kern_seek(int fd, off_t pos, int seekType);
 extern status_t		_kern_create_dir_entry_ref(dev_t device, ino_t inode,
@@ -353,6 +355,7 @@ extern status_t		_kern_unlock_node(int fd);
 extern status_t		_kern_get_next_fd_info(team_id team, uint32 *_cookie,
 						struct fd_info *info, size_t infoSize);
 extern status_t		_kern_preallocate(int fd, off_t offset, off_t length);
+extern status_t		_kern_close_range(u_int minFd, u_int maxFd, int flags);
 
 // socket functions
 extern int			_kern_socket(int family, int type, int protocol);

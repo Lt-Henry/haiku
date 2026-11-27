@@ -1,4 +1,4 @@
-1	catalan; valencian	x-vnd.Haiku-WebPositive	371749163
+1	catalan; valencian	x-vnd.Haiku-WebPositive	3459776802
 Authentication required	Authentication Panel		Cal autenticació
 Previous	WebPositive Window		Anterior
 Copy	Console Window		Copia
@@ -14,7 +14,7 @@ There was an error setting up the bookmark.	WebPositive Window		Hi ha hagut un e
 Fonts	Settings Window		Lletres
 Path	Cookie Manager		Camí
 Bookmarks	WebPositive Window		Marcadors
-Failed to remove bookmark '%leaf%' from boookmark bar.	BookmarkBar		No s'ha pogut suprimir el marcador %leaf% de la barra.
+Failed to remove bookmark '%leaf%' from boookmark bar.	BookmarkBar		Ha fallat suprimir el marcador %leaf% de la barra.
 Use proxy server to connect to the internet	Settings Window		Useu un servidor intermediari per connectar-vos a Internet.
 %url finished	WebPositive Window	Loading URL finished. Don't translate variable %url.	%url acabat
 Auto-hide interface in full screen mode	Settings Window		Amaga la interfície automàticament en mode de pantalla completa
@@ -36,7 +36,7 @@ Browse…	Settings Window		Navega...
 Resume prior session	Settings Window		Continua la sessió anterior
 Match case	WebPositive Window		Coincidència de caixa
 Proxy password:	Settings Window		Contrasenya del servidor intermediari:
-Failed to delete bookmark:\n'%path%'	BookmarkBar		No s'ha pogut suprimir el marcador:\n%path%
+Failed to delete bookmark:\n'%path%'	BookmarkBar		Ha fallat suprimir el marcador:\n%path%
 Size:	Font Selection view		Mida:
 Page source	WebPositive Window		Codi font de la pàgina
 Proxy server port:	Settings Window		Port del servidor intermediari:
@@ -63,7 +63,6 @@ WebPositive	System name		WebPositive
 Old name: %s	BookmarkBar		Nom antic: %s
 Expiration	Cookie Manager		Venciment
 Reload	WebPositive Window		Torna a carregar
-Your CPU is too old and does not support the SSE2 extensions, without which WebPositive cannot run. We recommend installing NetSurf instead.	WebPositive		La CPU és massa antiga i no admet les extensions SSE2, sense les quals el WebPositive no pot funcionar. Us recomanem que instal·leu el NetSurf.
 Download finished	Download Window		Baixada acabada
 Cookie manager	WebPositive Window		Gestor de galetes
 Username:	Authentication Panel		Nom d'usuari:
@@ -90,6 +89,7 @@ New tab	WebPositive Window		Pestanya nova
 Increase size	WebPositive Window		Augmenta'n la mida
 Today	WebPositive Window		Avui
 Open location	WebPositive Window		Obre la ubicació
+There are still downloads in progress, do you really want to quit %appname% now?	WebPositive		Encara hi ha baixades en curs. De debò que voleu sortir de l'aplicació %appname% ara?
 New browser window	Download Window		Finestra de navegació nova
 Open	Download Window		Obre
 New window	WebPositive Window		Finestra nova
@@ -109,6 +109,7 @@ Apply	Settings Window		Aplica-ho
 There was an error trying to show the Bookmarks folder.\n\nError: %error	WebPositive Window	Don't translate variable %error	Hi ha hagut un error en intentar mostrar la carpeta de marcadors.\n\nError: %error
 Revert	Settings Window		Reverteix
 Copy	WebPositive Window		Copia
+Your CPU is too old and does not support the SSE2 extensions, without which %appname% cannot run. We recommend installing NetSurf instead.	WebPositive		La CPU és massa antiga i no admet les extensions SSE2, sense les quals %appname% no es pot executar. Us recomanem que instal·leu NetSurf.
 {0, plural,one{Last line repeated # time.}other{Last line repeated # times.}}	Console Window		{0, plural,one{S'ha repetit la darrera línia # cop.}other{S'ha repetit la darrera línia # cops.}}
 Default standard font size:	Settings Window		Mida de la lletra estàndard per defecte:
 Custom	Settings Window		Personalitzat
@@ -118,7 +119,6 @@ Remove	Download Window		Suprimeix
 Close tab	WebPositive Window		Tanca la pestanya
 About	WebPositive Window		Quant a
 Continue downloads	WebPositive		Continua les baixades
-There are still downloads in progress, do you really want to quit WebPositive now?	WebPositive		Encara hi ha baixades en curs, realment voleu sortir del WebPositive ara?
 Proxy server requires authentication	Settings Window		El servidor intermediari requereix autenticació.
 Cancel	Settings Window		Cancel·la
 Reset size	WebPositive Window		Restableix-ne la mida
@@ -142,7 +142,6 @@ Next	WebPositive Window		Següent
 Bookmark error	WebPositive Window		Error de marcador
 OK	WebPositive Window		D'acord
 (%currentSize% of %expectedSize%, %rate%/s)	Download Window		(%currentSize% de %expectedSize%, %rate%/s)
-WebPositive	Download Window		WebPositive
 Save page as…	WebPositive Window		Desa la pàgina com a...
 Zoom text only	WebPositive Window		Amplia només el text
 Page source error	WebPositive Window		Error del codi font de la pàgina
@@ -153,6 +152,8 @@ Window	WebPositive Window		Finestra
 Proxy server address:	Settings Window		Adreça del servidor intermediari:
 Search page:	Settings Window		Cerca a la pàgina:
 Settings	WebPositive Window		Paràmetres
+Show in Tracker	BookmarkBar		Mostra-ho al Rastrejador
+(%currentSize% received, %rate%/s)	Download Window		(%currentSize% rebut, %rate%/s)
 Clear	URL Bar		Neteja
 Loading %url	WebPositive Window		Es carrega %url
 The quick brown fox jumps over the lazy dog.	Font Selection view	Don't translate this literally ! Use a phrase showing all chars from A to Z.	Jove xef, sol·licito que porti cafè descafeïnat i whisky amb quinze glaçons d'hidrogen!

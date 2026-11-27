@@ -25,6 +25,7 @@
 #include <AutoDeleter.h>
 
 #include <fs/devfs.h>
+#include <io_requests.h>
 #include <util/fs_trim_support.h>
 
 #include "dma_resources.h"
@@ -316,6 +317,11 @@ das_io(void *cookie, io_request *request)
 {
 	das_handle* handle = (das_handle*)cookie;
 
+	if (handle->info->capacity == 0 || handle->info->io_scheduler == NULL) {
+		notify_io_request(request, B_DEV_NO_MEDIA);
+		return B_DEV_NO_MEDIA;
+	}
+
 	return handle->info->io_scheduler->ScheduleRequest(request);
 }
 
@@ -368,8 +374,9 @@ das_ioctl(void* cookie, uint32 op, void* buffer, size_t length)
 				return B_BAD_ADDRESS;
 
 			if (iconData.icon_size >= (int32)sizeof(kDriveIcon)) {
-				if (user_memcpy(iconData.icon_data, kDriveIcon,
-						sizeof(kDriveIcon)) != B_OK)
+				if (!IS_USER_ADDRESS(iconData.icon_data)
+						|| user_memcpy(iconData.icon_data, kDriveIcon,
+							sizeof(kDriveIcon)) != B_OK)
 					return B_BAD_ADDRESS;
 			}
 

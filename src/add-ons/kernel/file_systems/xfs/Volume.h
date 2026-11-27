@@ -33,6 +33,10 @@ public:
 			bool				IsValidSuperBlock() const;
 			bool				IsVersion5() const
 									{ return fSuperBlock.IsVersion5(); }
+			bool				IsBigtimeEnabled() const
+									{ return fSuperBlock.IsBigtimeEnabled(); }
+			bool				IsLargeExtentsEnabled() const
+									{ return fSuperBlock.IsLargeExtentsEnabled(); }
 			bool				IsReadOnly() const
 									{ return
 										(fFlags & VOLUME_READ_ONLY) != 0; }

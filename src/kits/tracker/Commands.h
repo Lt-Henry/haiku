@@ -80,6 +80,7 @@ const uint32 kCreateRelativeLink = 'Trln';
 const uint32 kDuplicateSelection = 'Tdsl';
 const uint32 kMoveSelectionToTrash = kMoveToTrash;
 const uint32 kLoadAddOn = 'Tlda';
+const uint32 kRebuildAddOnMenus = 'Trba';
 const uint32 kEmptyTrash = 'Tetr';
 const uint32 kAddPrinter = 'Tadp';
 const uint32 kMakeActivePrinter = 'Tmap';
@@ -113,6 +114,7 @@ const uint32 kEditFavorites = 'Tedf';
 const uint32 kSwitchDirectory = 'Tswd';
 const uint32 kQuitTracker = 'Tqit';
 
+const uint32 kSwitchToDesktop = 'TswD';
 const uint32 kSwitchToHome = 'Tswh';
 
 const uint32 kTestIconCache = 'TicC';

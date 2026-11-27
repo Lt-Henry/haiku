@@ -104,6 +104,8 @@ public:
 	// a default state file the last time it ran.
 	bool DefaultStateRestored() const { return fDefaultStateRestored; }
 
+	virtual bool ShouldHaveDraggableFolderIcon() { return false; };
+
 protected:
 	BPoseView* NewPoseView(Model* model, uint32);
 	virtual void Init(const BMessage* message = NULL);
@@ -176,9 +178,8 @@ public:
 	BFilePanelPoseView(Model*);
 
 	virtual bool IsFilePanel() const;
-	virtual bool FSNotification(const BMessage*);
-
-	void SetIsDesktop(bool);
+	virtual bool IsDesktop() const { return fIsDesktop; };
+	void SetIsDesktop(bool on) { fIsDesktop = on; };
 
 protected:
 	// don't do any volume watching and memtamime watching in file panels
@@ -192,9 +193,7 @@ protected:
 
 	virtual EntryListBase* InitDirentIterator(const entry_ref*);
 	virtual void AddPosesCompleted();
-	virtual bool IsDesktopView() const;
-
-	void ShowVolumes(bool visible, bool showShared);
+	virtual bool IsVolumesRoot() const { return fIsDesktop; };
 
 	void AdaptToVolumeChange(BMessage*);
 	void AdaptToDesktopIntegrationChange(BMessage*);
@@ -205,6 +204,7 @@ private:
 		// the root of the world and "/boot/home/Desktop" to which
 		// we might have navigated from the home dir.
 
+	friend class TFilePanel;
 	typedef BPoseView _inherited;
 };
 

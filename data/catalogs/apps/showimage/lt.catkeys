@@ -1,7 +1,5 @@
-1	lithuanian	x-vnd.Haiku-ShowImage	575555985
-ShowImage	System name		Paveikslų žiūryklė
+1	lithuanian	x-vnd.Haiku-ShowImage	621535342
 Page setup…	Menus		Puslapio nuostatos…
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		Dokumentas „%s“ (%d puslapis) pakeistas. Ar norite dokumentą užverti?
 Previous file	Menus		Ankstesnis puslapis
 View	Menus		Rodymas
 Leave full screen	Menus		Normalioji veiksena
@@ -26,7 +24,6 @@ Zoom in	Menus		Didinti
 Last page	Menus		Paskutinis puslapis
 Cancel	ClosePrompt		Atsisakyti
 High-quality zooming	Menus		Aukštos kokybės didinimas
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		Dokumentas „%s“ pakeistas. Ar norite jį užverti?
 Close	Menus		Užverti
 Selection mode	Menus		Žymėjimo veiksena
 DPI:	PrintOptionsWindow		Raiška (taškais colyje):
@@ -43,13 +40,11 @@ Stretch to window	Menus		Ištempti iki lango dydžio
 Job setup	PrintOptionsWindow		Užduoties nuostatos
 Clear selection	Menus		Panaikinti žymėjimą
 Rotate clockwise	Menus		Pasukti pagal laikrodžio rodyklę
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		Nepavyko įkelti paveikslo! Arba nėra tokio failo, arba nerastas jam tinkamas keitiklis.
 Rotate counterclockwise	Menus		Pasukti prieš laikrodžio rodyklę
 Previous page	Menus		Ankstesnis puslapis
 Fit to window	Menus		Sutalpinti lange
 Go to page	Menus		Pereiti puslapin
 Browse	Menus		Naršymas
-Progress monitor	ProgressWindow		Eigos indikatorius
 Edit	Menus		Taisa
 Move to Trash	Menus		Išmesti Šiukšlinėn
 Use as background…	Menus		Naudoti kaip darbalaukio foną…

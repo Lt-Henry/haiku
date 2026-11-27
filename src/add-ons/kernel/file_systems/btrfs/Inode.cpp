@@ -11,7 +11,10 @@
 #include "CachedBlock.h"
 #include "CRCTable.h"
 #include "Utility.h"
-
+#include <zlib.h>
+#ifdef ZSTD_ENABLED
+#include <zstd.h>
+#endif
 
 #undef ASSERT
 //#define TRACE_BTRFS
@@ -194,8 +197,11 @@ Inode::FindBlock(off_t pos, off_t& physical, off_t* _length)
 	off_t logical = 0;
 	if (extent_data->Type() == BTRFS_EXTENT_DATA_REGULAR)
 		logical = diff + extent_data->disk_offset;
-	else
-		panic("unknown extent type; %d\n", extent_data->Type());
+	else {
+		ERROR("unknown extent type; %d\n", extent_data->Type());
+		free(extent_data);
+		return B_BAD_DATA;
+	}
 	status = fVolume->FindBlock(logical, physical);
 	if (_length != NULL)
 		*_length = extent_data->Size() - diff;
@@ -248,16 +254,18 @@ Inode::ReadAt(off_t pos, uint8* buffer, size_t* _length)
 
 
 	uint8 compression = extent_data->Compression();
+
 	if (FileCache() != NULL
 		&& extent_data->Type() == BTRFS_EXTENT_DATA_REGULAR) {
 		TRACE("inode %" B_PRIdINO ": ReadAt cache (pos %" B_PRIdOFF ", length %lu)\n",
 			ID(), pos, length);
 		if (compression == BTRFS_EXTENT_COMPRESS_NONE)
-			return file_cache_read(FileCache(), NULL, pos, buffer, _length);
-		else if (compression == BTRFS_EXTENT_COMPRESS_ZLIB)
-			panic("zlib isn't unsupported for regular extent\n");
-		else
-			panic("unknown extent compression; %d\n", compression);
+			return file_cache_read(FileCache(), pos, buffer, _length);
+		else if (compression == BTRFS_EXTENT_COMPRESS_ZLIB
+			|| compression == BTRFS_EXTENT_COMPRESS_ZSTD) {
+			panic("compression type %d not supported for regular extent\n", compression);
+		} else
+			ERROR("unknown extent compression; %d\n", compression);
 		return B_BAD_DATA;
 	}
 
@@ -266,14 +274,27 @@ Inode::ReadAt(off_t pos, uint8* buffer, size_t* _length)
 
 	off_t diff = pos - search_key.Offset();
 	if (extent_data->Type() != BTRFS_EXTENT_DATA_INLINE) {
-		panic("unknown extent type; %d\n", extent_data->Type());
+		ERROR("unknown extent type; %d\n", extent_data->Type());
 		return B_BAD_DATA;
 	}
 
 	*_length = min_c(extent_data->Size() - diff, *_length);
 	if (compression == BTRFS_EXTENT_COMPRESS_NONE) {
-		if (user_memcpy(buffer, extent_data->inline_data, *_length) < B_OK)
+		const uint32 header_size = offsetof(btrfs_extent_data, inline_data);
+		if (item_size <= header_size)
+			return B_BAD_DATA;
+
+		uint32 max_data_len = item_size - header_size;
+
+		size_t bytes_to_copy = min_c(*_length, (size_t)(max_data_len - diff));
+
+		const uint8* src = (const uint8*)extent_data + header_size + diff;
+
+		if (user_memcpy(buffer, src, bytes_to_copy) < B_OK)
 			return B_BAD_ADDRESS;
+
+		*_length = bytes_to_copy;
+		return B_OK;
 	} else if (compression == BTRFS_EXTENT_COMPRESS_ZLIB) {
 		char in[2048];
 		z_stream zStream = {
@@ -346,9 +367,53 @@ Inode::ReadAt(off_t pos, uint8* buffer, size_t* _length)
 
 		*_length = zStream.total_out;
 
+	} else if (compression == BTRFS_EXTENT_COMPRESS_ZSTD) {
+#ifdef ZSTD_ENABLED
+		const uint32 header_size = offsetof(btrfs_extent_data, inline_data);
+
+		if (item_size <= header_size)
+			return B_BAD_DATA;
+
+		uint32 inline_size = item_size - header_size;
+
+		const uint8* src = extent_data->inline_data;
+
+		size_t uncompressedSize = extent_data->Size();
+
+		if (uncompressedSize > 65536)
+			uncompressedSize = 65536;
+
+		uint8* tempBuffer = new(std::nothrow) uint8[uncompressedSize];
+		if (tempBuffer == NULL)
+			return B_NO_MEMORY;
+		ArrayDeleter<uint8> bufferDeleter(tempBuffer);
+
+		size_t const decompressResult
+			= ZSTD_decompress(tempBuffer, uncompressedSize, src, inline_size);
+
+		if (ZSTD_isError(decompressResult))
+			return B_BAD_DATA;
+
+		size_t bytesToCopy = 0;
+		if (diff < (off_t)decompressResult) {
+			size_t remaining = decompressResult - diff;
+			bytesToCopy = min_c(*_length, remaining);
+		}
+
+		if (bytesToCopy > 0) {
+			if (user_memcpy(buffer, tempBuffer + diff, bytesToCopy) != B_OK)
+				return B_BAD_ADDRESS;
+		}
+
+		*_length = bytesToCopy;
+		return B_OK;
+#else
+		return B_NOT_SUPPORTED;
+#endif
+
 	} else {
-		panic("unknown extent compression; %d\n", compression);
-		return B_BAD_DATA;
+		ERROR("unknown extent compression algorithm; %d\n", compression);
+		return B_NOT_SUPPORTED;
 	}
 	return B_OK;
 

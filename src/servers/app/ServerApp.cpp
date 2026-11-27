@@ -337,7 +337,7 @@ ServerApp::InWorkspace(int32 index) const
 	BAutolock locker(fWindowListLock);
 
 	// we could cache this, but then we'd have to recompute the cached
-	// value everytime a window has closed or changed workspaces
+	// value every time a window has closed or changed workspaces
 
 	// TODO: support initial application workspace!
 
@@ -367,7 +367,7 @@ ServerApp::Workspaces() const
 	BAutolock locker(fWindowListLock);
 
 	// we could cache this, but then we'd have to recompute the cached
-	// value everytime a window has closed or changed workspaces
+	// value every time a window has closed or changed workspaces
 
 	for (int32 i = fWindowList.CountItems(); i-- > 0;) {
 		ServerWindow* serverWindow = fWindowList.ItemAt(i);
@@ -470,21 +470,6 @@ ServerApp::RemovePicture(ServerPicture* picture)
 	ASSERT(picture->Owner() == this);
 
 	fPictureMap.erase(picture->Token());
-}
-
-
-/*!	Called from the ClientMemoryAllocator whenever a server area could be
-	deleted.
-	A message is then sent to the client telling it that it can delete its
-	client area, too.
-*/
-void
-ServerApp::NotifyDeleteClientArea(area_id serverArea)
-{
-	BMessage notify(kMsgDeleteServerMemoryArea);
-	notify.AddInt32("server area", serverArea);
-
-	SendMessageToClient(&notify);
 }
 
 
@@ -592,7 +577,7 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			port_id clientReplyPort = -1;
 			status_t status = _CreateWindow(code, link, clientReplyPort);
 
-			// if sucessful, ServerWindow::Run() will already have replied
+			// if successful, ServerWindow::Run() will already have replied
 			if (status < B_OK) {
 				// window creation failed, we need to notify the client
 				BPrivate::LinkSender reply(clientReplyPort);
@@ -678,8 +663,6 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			fLink.StartMessage(error);
 			fLink.Flush();
 
-			if (error == B_OK)
-				fDesktop->BroadcastToAllApps(AS_UPDATE_DECORATOR);
 			break;
 		}
 
@@ -774,7 +757,7 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 				fLink.Attach<uint8>(allocationFlags);
 
 				fLink.Attach<area_id>(bitmap->Area());
-				fLink.Attach<int32>(bitmap->AreaOffset());
+				fLink.Attach<ssize_t>(bitmap->AreaOffset());
 
 				if ((allocationFlags & kFramebuffer) != 0)
 					fLink.Attach<int32>(bitmap->BytesPerRow());
@@ -863,7 +846,7 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			int32 bytesPerRow;
 			int32 screenID;
 			area_id clientArea;
-			int32 areaOffset;
+			size_t areaOffset;
 
 			link.Read<BRect>(&frame);
 			link.Read<color_space>(&colorSpace);
@@ -871,7 +854,7 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			link.Read<int32>(&bytesPerRow);
 			link.Read<int32>(&screenID);
 			link.Read<int32>(&clientArea);
-			if (link.Read<int32>(&areaOffset) == B_OK) {
+			if (link.Read<size_t>(&areaOffset) == B_OK) {
 				// TODO: choose the right HWInterface with regards to the
 				// screenID
 				bitmap.SetTo(gBitmapManager->CloneFromClient(clientArea, areaOffset,
@@ -1095,10 +1078,10 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 
 			fAppCursor.SetTo(fDesktop->GetCursorManager().FindCursor(token), false);
 
+			fDesktop->GetCursorManager().Unlock();
+
 			if (_HasWindowUnderMouse())
 				fDesktop->SetCursor(CurrentCursor());
-
-			fDesktop->GetCursorManager().Unlock();
 
 			if (sync) {
 				// The application is expecting a reply
@@ -1431,6 +1414,9 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 
 			fLink.StartMessage(B_OK);
 			fLink.Flush();
+
+			BMessage message(B_MENU_INFO_UPDATED);
+			fDesktop->BroadcastToAllClients(&message);
 			break;
 		}
 
@@ -2882,9 +2868,8 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			// 8) uint32 - flags
 			// 9) font_metric_mode - mode
 			// 10) int32 numStrings
-			// 11) escapement_delta - additional delta (numStrings times)
-			// 12) int32 string length to measure (numStrings times)
-			// 13) string - string (numStrings times)
+			// 11) string - string (numStrings times)
+			// 12) escapement_delta - additional delta (numStrings times)
 
 			// Returns:
 			// 1) BRect - rects with numStrings entries
@@ -2923,8 +2908,9 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 				// This version of ReadString allocates the strings, we free
 				// them below
 				link.ReadString(&stringArray[i], &lengthArray[i]);
-				link.Read<escapement_delta>(&deltaArray[i]);
 			}
+			for (int32 i = 0; i < numStrings; i++)
+				link.Read<escapement_delta>(&deltaArray[i]);
 
 			ServerFont font;
 			status_t status = font.SetFamilyAndStyle(familyID, styleID,
@@ -3267,27 +3253,6 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 			break;
 		}
 
-		case AS_GET_FRAME_BUFFER_CONFIG:
-		{
-			STRACE(("ServerApp %s: get frame buffer config\n", Signature()));
-
-			// We aren't using the screen_id for now...
-			int32 id;
-			link.Read<int32>(&id);
-
-			frame_buffer_config config;
-			// TODO: I wonder if there should be a "desktop" lock...
-			status_t status = fDesktop->HWInterface()->GetFrameBufferConfig(config);
-			if (status == B_OK) {
-				fLink.StartMessage(B_OK);
-				fLink.Attach<frame_buffer_config>(config);
-			} else
-				fLink.StartMessage(status);
-
-			fLink.Flush();
-			break;
-		}
-
 		case AS_GET_RETRACE_SEMAPHORE:
 		{
 			STRACE(("ServerApp %s: get retrace semaphore\n", Signature()));
@@ -3423,7 +3388,9 @@ ServerApp::_DispatchMessage(int32 code, BPrivate::LinkReceiver& link)
 		case AS_READ_BITMAP:
 		{
 			STRACE(("ServerApp %s: AS_READ_BITMAP\n", Signature()));
+			int32 id;
 			int32 token;
+			link.Read<int32>(&id);
 			link.Read<int32>(&token);
 
 			bool drawCursor = true;

@@ -87,16 +87,23 @@ NetworkStatus::ArgvReceived(int32 argc, char** argv)
 
 	if (strcmp(argv[1], "--help") == 0
 		|| strcmp(argv[1], "-h") == 0) {
-		const char* str = B_TRANSLATE("NetworkStatus options:\n"
+		BString str = B_TRANSLATE("%appname% options:\n"
 			"\t--deskbar\tautomatically add replicant to Deskbar\n"
 			"\t--help\t\tprint this info and exit");
-		puts(str);
+		str.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("NetworkStatus"));
+		puts(str.String());
 		fQuitImmediately = true;
 		return;
 	}
 
-	if (strcmp(argv[1], "--deskbar") == 0)
+	if (strcmp(argv[1], "--deskbar") == 0) {
 		fAutoInstallInDeskbar = true;
+		if (!IsLaunching()) {
+			BDeskbar deskbar;
+			if (deskbar.IsRunning() && !deskbar.HasItem(kDeskbarItemName))
+				_InstallReplicantInDeskbar();
+		}
+	}
 }
 
 
@@ -149,17 +156,21 @@ NetworkStatus::ReadyToRun()
 		}
 
 		_InstallReplicantInDeskbar();
+		Quit();
 		return;
 	}
 
 	if (isDeskbarRunning && !isInstalled) {
-		BAlert* alert = new BAlert("", B_TRANSLATE("You can run NetworkStatus "
-			"in a window or install it in the Deskbar."),
+		BString text = B_TRANSLATE(
+			"You can run %appname% in a window or install it in the Deskbar.");
+		text.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("NetworkStatus"));
+		BAlert* alert = new BAlert("", text,
 			B_TRANSLATE("Run in window"), B_TRANSLATE("Install in Deskbar"),
 			NULL, B_WIDTH_AS_USUAL, B_WARNING_ALERT);
 
 		if (alert->Go() == 1) {
 			_InstallReplicantInDeskbar();
+			Quit();
 			return;
 		}
 	}
@@ -197,8 +208,6 @@ NetworkStatus::_InstallReplicantInDeskbar()
 		BDeskbar deskbar;
 		deskbar.AddItem(&ref);
 	}
-
-	Quit();
 }
 
 

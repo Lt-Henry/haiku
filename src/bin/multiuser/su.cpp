@@ -1,5 +1,5 @@
 /*
- * Copyright 2017, Haiku, Inc. All Rights Reserved.
+ * Copyright 2017-2025, Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -43,7 +43,7 @@ main(int argc, char *argv[])
 	bool loginShell = false;
 	const char* command = NULL;
 
-	char c;
+	int c;
 	while ((c = getopt(argc, argv, "c:l")) != -1) {
 		switch (c) {
 			case 'l':
@@ -75,18 +75,22 @@ main(int argc, char *argv[])
 
 	openlog(kProgramName, 0, LOG_AUTH);
 
-	status_t status = B_ERROR;
-	struct passwd* passwd = NULL;
-
-	status = authenticate_user("password: ", user, &passwd, NULL,
-		kRetries, false);
-
-	if (status < B_OK || !passwd) {
-		if (passwd != NULL)
-			syslog(LOG_NOTICE, "su failed for \"%s\"", passwd->pw_name);
-		else
-			syslog(LOG_NOTICE, "su attempt for non-existent user \"%s\"", user);
+	struct passwd* passwd = getpwnam(user);
+	if (passwd == NULL) {
+		syslog(LOG_NOTICE, "su attempt for non-existent user \"%s\"", user);
+		fprintf(stderr, "su: user \"%s\" does not exist\n", user);
 		exit(1);
+	}
+
+	// if not root, the user needs to authenticate
+	status_t status = B_ERROR;
+	if (getuid() != 0) {
+		status = authenticate_user("password: ", passwd, getspnam(user), kRetries, false);
+
+		if (status < B_OK) {
+			syslog(LOG_NOTICE, "su failed for \"%s\"", passwd->pw_name);
+			exit(1);
+		}
 	}
 
 	// setup environment for the user

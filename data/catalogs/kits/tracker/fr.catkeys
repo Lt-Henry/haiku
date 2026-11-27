@@ -1,4 +1,4 @@
-1	french	x-vnd.Haiku-libtracker	4162514004
+1	french	x-vnd.Haiku-libtracker	3236035134
 Created	ContainerWindow		Créé
 Icon	AttributesView		Icône
 Open and make preferred	OpenWithWindow		Ouvrir et en faire la préférence
@@ -43,7 +43,6 @@ You cannot replace a folder or a symbolic link with a file.	FSUtils		Vous ne pou
 (unknown)	InfoWindow		(inconnu)
 {0, plural, other{<# dates>}}	AttributesView		{0, plural, one{<# date>} other{<# dates>}}
 Trailing \\.	libtracker		Les \\ à la fin.
-At %func \nfind_directory() failed. \nReason: %error	Email Query Columns		Dans %func\nfind_directory() a échoué.\nMotif : %error
 Handles any file	OpenWithWindow		Manipule n’importe quel fichier
 save text	FilePanelPriv		sauvegarder le texte
 Raw data	AttributesView		Données brutes
@@ -104,6 +103,7 @@ Window	ContainerWindow		Fenêtre
 %BytesPerSecond/s	StatusWindow		%BytesPerSecond/s
 Remove	FindPanel		Supprimer
 Company	Person Query Columns		Société
+Select folders…	FindPanel		Sélectionnez des répertoires…
 Recent documents	FavoritesMenu		Documents récents
 Edit templates…	TemplatesMenu		Éditer les modèles…
 {0, plural, one{# byte} other{# bytes}}	FSUtils		{0, plural, one{# octet} other{# octets}}
@@ -136,12 +136,10 @@ URL	Bookmark Query Columns		URL
 Floating point number	AttributesView		Nombre à virgule flottante
 Cancel	ContainerWindow		Annuler
 Attributes	ContainerWindow		Attributs
-Error deleting items	FSUtils		Erreur en supprimant les éléments
 Cut	ContainerWindow		Couper
 Disks	Model		Disques
 Create a Query template	FindPanel		Créer un modèle de requête
 Size	FindPanel		Taille
-OK	Email Query Columns		OK
 Location	QueryPoseView		Emplacement
 Edit query	ContainerWindow		Éditer la requète
 {0, plural, one{(# byte)} other{(# bytes)}}	InfoWindow		{0, plural, one{(# octet)} other{(# octets)}}
@@ -165,8 +163,11 @@ Property info	AttributesView		Information sur la propriété
 Sorry, you can't create links in the Trash.	PoseView		Désolé, vous ne pouvez pas créer des liens dans la Corbeille.
 From	Email Query Columns		De
 Open selection with:	OpenWithWindow		Ouvrir la sélection avec :
+Preferences…	ContainerWindow		Préférences...
 Could not open \"%document\" because application \"%app\" is in the Trash. 	FSUtils		Impossible d’ouvrir « %document », car l’application « %app » est dans la Corbeille. 
 Work Phone	Person Query Columns		Téléphone professionnel
+Select folders	FindPanel		Sélectionner des répertoires
+OK	TrackerInitialState		OK
 Close	ContainerWindow		Fermer
 Get info	ContainerWindow		Informations
 MIME Type	AttributesView		Type MIME
@@ -190,8 +191,8 @@ by name	FindPanel		par nom
 Sorry, you can't save things at the root of your system.	FilePanelPriv		Désolé, vous ne pouvez rien sauvegarder à la racine de votre système.
 Restore	ContainerWindow		Restaurer
 Location	ContainerWindow		Emplacement
-Skip	FSUtils		Passer
 Warning space color	SettingsView		Couleur d’espace faible
+Skip	FSUtils		Passer
 Text list	AttributesView		Liste de textes
 Used space color	SettingsView		Couleur de l’espace utilisé
 Cancel	FSUtils		Annuler
@@ -313,8 +314,8 @@ Could not open \"%document\" with application \"%app\" (%error). 	FSUtils		Impos
 Create %s clipping	PoseView		Créer un extrait de %s
 Error moving \"%name\"	FSUtils		Erreur lors du déplacement de « %name »
 To: %dir	StatusWindow		Vers : %dir
-Cancel	Tracker		Annuler
 Paste layout	ContainerWindow		Coller la disposition
+Cancel	Tracker		Annuler
 yes	AttributesView		oui
 Make active printer	ContainerWindow		Activer l’imprimante
 Copy to	ContainerWindow		Copier vers
@@ -334,6 +335,7 @@ The entered file name is too long.	FSUtils		Le nom de fichier saisi est trop lon
 Some of the selected items cannot be moved to the Trash. Would you like to delete them instead? (This operation cannot be reverted.)	PoseView		Certains des éléments sélectionnés ne peuvent pas être envoyés à la Corbeille. Voulez vous les supprimer ? (Cette opération est irrémédiable.)
 Add printer…	ContainerWindow		Ajouter une imprimante…
 Permissions	ContainerWindow		Permissions
+Trash	FSUtils		Corbeille
 Size:	InfoWindow		Taille :
 Copy	ContainerWindow		Copier
 The selected item cannot be moved to the Trash. Would you like to delete it instead? (This operation cannot be reverted.)	PoseView		L’élément sélectionné ne peut pas être envoyé à la Corbeille. Voulez vous le supprimer ? (Cette opération est irrémédiable.)
@@ -353,7 +355,6 @@ Create link here	ContainerWindow		Créer un lien ici
 Force identify	ContainerWindow		Forcer l’identification
 no items	CountView		aucun élément
 Time	AttributesView		Heure
-Disks	DirMenu		Disques
 Open parent	ContainerWindow		Ouvrir le parent
 Find…	ContainerWindow		Rechercher…
 moving	FSUtils		déplacement
@@ -453,6 +454,7 @@ The file \"%name\" already exists in the specified folder. Do you want to replac
 You must drop items on one of the disk icons in the \"Disks\" window.	PoseView		Vous devez déposer les éléments sur une des icônes disques de la fenêtre « Disques ».
 Version:	InfoWindow		Version :
 OK	PoseView		OK
+Add new submenu…	TemplatesMenu		Ajouter un nouveau sous-menu…
 Find	FindPanel		Rechercher
 Empty folder	NavMenu		Dossier vide
 Defaults	TrackerSettingsWindow		Par défaut
@@ -476,7 +478,7 @@ Create a Query	FindPanel		Créer une requête
 I know what I'm doing	FSUtils	button label	Je sais ce que je fais
 Preparing to copy items…	StatusWindow		Copie des éléments en préparation…
 %lld B	WidgetAttributeText	The filesize symbol for byte	%lld o
-Entry ref	AttributesView		Référence de l'entrée
+Entry ref	AttributesView		Référence de l’entrée
 Icon view	ContainerWindow		Vue en icônes
 The entered folder name is too long.	FSUtils		Le nom de dossier saisi est trop long.
 Name	ContainerWindow		Nom

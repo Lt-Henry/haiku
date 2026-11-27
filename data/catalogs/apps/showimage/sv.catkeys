@@ -1,7 +1,6 @@
-1	swedish	x-vnd.Haiku-ShowImage	2453396430
-ShowImage	System name		BildVisning
+1	swedish	x-vnd.Haiku-ShowImage	549474543
+ShowImage	System name		ShowImage
 Page setup…	Menus		Sidinställningar...
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		Dokumentet '%s' (sida %d) har ändrats. Vill du verkligen stänga dokumentet?
 Previous file	Menus		Föregående fil
 View	Menus		Visa
 Leave full screen	Menus		Lämna fullskärmsläge
@@ -13,6 +12,7 @@ Height: 	PrintOptionsWindow		Höjd:
 Next file	Menus		Nästa fil
 Slide show	Menus		Bildspel
 Original size	Menus		Originalstorlek
+The document '%filename%' has been changed. Do you want to close the document?	ClosePrompt		Dokumentet '%filename%' har ändrats. Vill du stänga dokumentet?
 Width:	PrintOptionsWindow		Bredd:
 Resize to (in 1/72 inches):	PrintOptionsWindow		Ändra storlek till (i måttenheten 1/72 tum):
 Zoom factor in %:	PrintOptionsWindow		Zoomläge i %:
@@ -26,8 +26,8 @@ Zoom in	Menus		Zooma in
 Last page	Menus		Sista sidan
 Cancel	ClosePrompt		Avbryt
 Attributes	Menus		Attribut
+Show boundaries marks	Menus		Visa gränsmarkeringar
 High-quality zooming	Menus		Högkvalitets inzomning
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		Dokumentet '%s' har ändrats. Vill du verkligen stänga dokumentet?
 Close	Menus		Stäng
 Selection mode	Menus		Markeringsläge
 Reset rating	Menus		Återställ betyg
@@ -46,14 +46,13 @@ Stretch to window	Menus		Sträck ut i fönster
 Job setup	PrintOptionsWindow		Utskriftsinställningar
 Clear selection	Menus		Rensa markering
 Rotate clockwise	Menus		Rotera medurs
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		Kunde inte ladda bilden! Endera finns inte filen eller så saknas en bildöversättare för bildformatet.
 Open with…	Menus		Öppna med...
 Rotate counterclockwise	Menus		Rotera moturs
+The document '%filename%' (page %number%) has been changed. Do you want to close the document?	ClosePrompt		Dokumentet '%filename%' (sida %number%) har ändrats. Vill du stänga dokumentet?
 Previous page	Menus		Tidigare sida
 Fit to window	Menus		Anpassa till fönster
 Go to page	Menus		Gå till sida
 Browse	Menus		Bläddra
-Progress monitor	ProgressWindow		Förloppsmonitor
 Edit	Menus		Redigera
 Move to Trash	Menus		Flytta till papperskorgen
 Use as background…	Menus		Använd som bakgrund…

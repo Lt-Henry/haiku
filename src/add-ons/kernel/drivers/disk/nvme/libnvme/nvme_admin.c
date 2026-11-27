@@ -157,8 +157,9 @@ int nvme_admin_get_feature(struct nvme_ctrlr *ctrlr,
 int nvme_admin_set_feature(struct nvme_ctrlr *ctrlr,
 			   bool save,
 			   enum nvme_feat feature,
-			   uint32_t cdw11,
-			   uint32_t cdw12,
+			   uint32_t cdw11, uint32_t cdw12,
+			   uint32_t cdw13, uint32_t cdw14, uint32_t cdw15,
+			   void *buf, uint32_t len,
 			   uint32_t *attributes)
 {
 	struct nvme_completion_poll_status status;
@@ -173,10 +174,13 @@ int nvme_admin_set_feature(struct nvme_ctrlr *ctrlr,
 		cmd.cdw10 |= (1 << 31);
 	cmd.cdw11 = cdw11;
 	cmd.cdw12 = cdw12;
+	cmd.cdw13 = cdw13;
+	cmd.cdw14 = cdw14;
+	cmd.cdw15 = cdw15;
 
 	/* Submit the command */
 	status.done = false;
-	ret = nvme_admin_submit_cmd(ctrlr, &cmd, NULL, 0,
+	ret = nvme_admin_submit_cmd(ctrlr, &cmd, buf, len,
 				    nvme_request_completion_poll_cb,
 				    &status);
 	if (ret == 0) {

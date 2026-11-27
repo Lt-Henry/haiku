@@ -1,7 +1,5 @@
-1	indonesian	x-vnd.Haiku-ShowImage	2453396430
-ShowImage	System name		ShowImage
+1	indonesian	x-vnd.Haiku-ShowImage	2499375787
 Page setup…	Menus		Atur Halaman…
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		Dokumen '%s' (halaman %d) telah diubah. Apakah Anda ingin menutup dokumen?
 Previous file	Menus		File sebelumnya
 View	Menus		Tampilan
 Leave full screen	Menus		Tinggalkan layar penuh
@@ -27,7 +25,6 @@ Last page	Menus		Halaman terakhir
 Cancel	ClosePrompt		Batalkan
 Attributes	Menus		Atribut
 High-quality zooming	Menus		Pembesaran kualitas tinggi
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		Dokumen '%s' telah diubah. Apakah Anda ingin menutup dokumen?
 Close	Menus		Tutup
 Selection mode	Menus		Mode seleksi
 Reset rating	Menus		Atur ulang rating
@@ -46,14 +43,12 @@ Stretch to window	Menus		Regangkan ke jendela
 Job setup	PrintOptionsWindow		Pengaturan pekerjaan
 Clear selection	Menus		Bersihkan pilihan
 Rotate clockwise	Menus		Putar searah jarum jam
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		Tidak dapat memuat gambar! Entah file atau penerjemah gambar untuk itu tidak ada.
 Open with…	Menus		Bukan dengan…
 Rotate counterclockwise	Menus		Putar berlawanan jarum jam
 Previous page	Menus		Halaman sebelumnya
 Fit to window	Menus		Paskan ke jendela
 Go to page	Menus		Menuju halaman
 Browse	Menus		Ramban
-Progress monitor	ProgressWindow		Monitor kemajuan
 Edit	Menus		Sunting
 Move to Trash	Menus		Buang ke Tong Sampah
 Use as background…	Menus		Gunakan sebagai latar belakang…

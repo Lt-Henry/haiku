@@ -24,7 +24,7 @@
 
 #	include <debug.h>
 #	include <lock.h>
-#	include <OpenHashTable.h>
+#	include <util/OpenHashTable.h>
 #	include <util/AutoLock.h>
 #	include <vfs.h>
 #	include <vm/vm.h>
@@ -600,8 +600,6 @@ rootfs_open(fs_volume* _volume, fs_vnode* _v, int openMode, void** _cookie)
 
 	if (S_ISDIR(vnode->stream.type) && (openMode & O_RWMASK) != O_RDONLY)
 		return B_IS_A_DIRECTORY;
-	if ((openMode & O_DIRECTORY) != 0 && !S_ISDIR(vnode->stream.type))
-		return B_NOT_A_DIRECTORY;
 
 	status_t status = rootfs_check_permissions(vnode, open_mode_to_access(openMode));
 	if (status != B_OK)
@@ -631,7 +629,7 @@ rootfs_free_cookie(fs_volume* _volume, fs_vnode* _v, void* _cookie)
 
 
 static status_t
-rootfs_fsync(fs_volume* _volume, fs_vnode* _v)
+rootfs_fsync(fs_volume* _volume, fs_vnode* _v, bool dataOnly)
 {
 	return B_OK;
 }
@@ -859,29 +857,6 @@ rootfs_ioctl(fs_volume* _volume, fs_vnode* _v, void* _cookie, uint32 op,
 		_volume, _cookie, (int)op, buffer, (int)length));
 
 	return B_BAD_VALUE;
-}
-
-
-static bool
-rootfs_can_page(fs_volume* _volume, fs_vnode* _v, void* cookie)
-{
-	return false;
-}
-
-
-static status_t
-rootfs_read_pages(fs_volume* _volume, fs_vnode* _v, void* cookie, off_t pos,
-	const iovec* vecs, size_t count, size_t* _numBytes)
-{
-	return B_NOT_ALLOWED;
-}
-
-
-static status_t
-rootfs_write_pages(fs_volume* _volume, fs_vnode* _v, void* cookie, off_t pos,
-	const iovec* vecs, size_t count, size_t* _numBytes)
-{
-	return B_NOT_ALLOWED;
 }
 
 
@@ -1235,9 +1210,9 @@ fs_vnode_ops sVnodeOps = {
 	&rootfs_put_vnode,
 	&rootfs_remove_vnode,
 
-	&rootfs_can_page,
-	&rootfs_read_pages,
-	&rootfs_write_pages,
+	NULL,	// can_page()
+	NULL,	// read_pages()
+	NULL,	// write_pages()
 
 	NULL,	// io()
 	NULL,	// cancel_io()

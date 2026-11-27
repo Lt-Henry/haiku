@@ -1,4 +1,4 @@
-1	bokmål, norwegian; norwegian bokmål	x-vnd.Haiku-Shortcuts	3834857117
+1	bokmål, norwegian; norwegian bokmål	x-vnd.Haiku-Shortcuts	641209832
 *MouseUp	ShortcutsWindow		*MusOpp
 Application	ShortcutsWindow		Program
 Option	ShortcutsSpec	Name for modifier on keyboard	Option
@@ -6,11 +6,12 @@ Save changes before closing?	ShortcutsWindow		Lagre endringer før du lukker?
 Revert to saved	ShortcutsWindow		Tilbakestill til lagret
 Don't save	ShortcutsWindow		Ikke lagre
 *MouseDown	ShortcutsWindow		*MusNed
+%prefname% wasn't able to save your keyset.	ShortcutsWindow		%prefname% kunne ikke lagre nøkkelsettet ditt.
 *Beep	ShortcutsWindow		*Bip
-Shortcuts wasn't able to save your keyset.	ShortcutsWindow		Hurtigtaster klarte ikke å lagre ditt sett med hurtigtaster
 Save	ShortcutsWindow		Lagre
 Either	ShortcutsSpec		Vilkårlig
 Oh no	ShortcutsWindow		Å, nei
+%prefname% was unable to save your KeySet file!	ShortcutsWindow		%prefname% kunne ikke largre KeySet-filen din!
 Key	ShortcutsWindow		Tast
 *SendMessage application/x-vnd.Be-TRAK 'Tfnd'	ShortcutsWindow		*SendMelding application/x-vnd.Be-TRAK 'Tfnd'
 Select	ShortcutsWindow		Velg
@@ -21,8 +22,6 @@ Cancel	ShortcutsWindow		Avbryt
 *MoveMouse +20 +0	ShortcutsWindow		*FlyttMus +20 +0
 Control	ShortcutsSpec	Name for modifier on keyboard	Control
 Left	ShortcutsSpec		Venstre
-Shortcuts was unable to parse your KeySet file!	ShortcutsWindow		Hurtigtaster kunne ikke tolke filen din med hurtigtaster!
-Shortcuts was unable to save your KeySet file!	ShortcutsWindow		Hurtigtaster klarte ikke å lagre filen din med hurtigtaster!
 *InsertString \"Your Text Here\"	ShortcutsWindow		*SettInnStreng \"Din Tekst Her\"
 Remove selected shortcut	ShortcutsWindow		Fjern merket hurtigtast
 Error, NULL state description?	ShortcutsSpec		Feil, NULL-tilstand beskrivelse?
@@ -44,4 +43,5 @@ Shift	ShortcutsSpec	Name for modifier on keyboard	Shift
 Open KeySet…	ShortcutsWindow		Åpne sett med hurtigtaster
 File	ShortcutsWindow		Fil
 *LaunchHandler text/html	ShortcutsWindow		*OppstartsHåndterer text/html
+%prefname% was unable to parse your KeySet file!	ShortcutsWindow		%prefname% kunne ikke tolke KeySet-filen din!
 *MoveMouseTo 50% 50%	ShortcutsWindow		*FlyttMusTil 50% 50%

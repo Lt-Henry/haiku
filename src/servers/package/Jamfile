@@ -1,9 +1,9 @@
 SubDir HAIKU_TOP src servers package ;
 
 UsePrivateSystemHeaders ;
-UsePrivateHeaders app interface kernel shared storage ;
+UsePrivateHeaders app interface shared storage ;
 
-Server package_daemon
+Application package_daemon
 	:
 	CommitTransactionHandler.cpp
 	Constants.cpp

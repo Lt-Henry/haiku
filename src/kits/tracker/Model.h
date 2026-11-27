@@ -97,7 +97,7 @@ public:
 	status_t SetTo(const node_ref* dirNode, const node_ref* node,
 		const char* name, bool open = false, bool writable = false);
 
-	int CompareFolderNamesFirst(const Model* compareModel) const;
+	int CompareFolderNamesFirst(const Model* compare) const;
 
 	// node management
 	status_t OpenNode(bool writable = false);
@@ -167,10 +167,12 @@ public:
 	// Node monitor update call
 	void UpdateEntryRef(const node_ref* dirRef, const char* name);
 	bool AttrChanged(const char* attrName);
-		// returns true if pose needs to update it's icon, etc.
+		// returns true if pose needs to update its icon, etc.
 		// pass null to force full update
+	bool IconAttrChanged(const char* attrName);
+		// returns true if pose needs to update its icon
 	bool StatChanged();
-		// returns true if pose needs to update it's icon
+		// returns true if pose needs to update its icon
 
 	status_t WatchVolumeAndMountPoint(uint32, BHandler*);
 		// correctly handles boot volume name watching
@@ -208,6 +210,9 @@ public:
 
 	bool Mimeset(bool force);
 		// returns true if mime type changed
+	void SniffMimeIfNeeded();
+		// if the filesystem does not support MIME, sets fMimeType using the MIME sniffer;
+		// makes no attempt to write the file's MIME attribute
 
 	bool HasLocalizedName() const;
 
@@ -215,7 +220,6 @@ private:
 	status_t OpenNodeCommon(bool writable);
 	void SetupBaseType();
 	void FinishSettingUpType();
-	bool ShouldUseWellKnownIcon() const;
 	bool CheckAppIconHint() const;
 	void DeletePreferredAppVolumeNameLinkTo();
 	void CacheLocalizedName();

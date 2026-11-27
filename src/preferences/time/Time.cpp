@@ -100,8 +100,11 @@ int
 main(int argc, char** argv)
 {
 	if (argc > 1) {
-		if (strcmp(argv[1], "--update") != 0)
+		if (strcmp(argv[1], "--update") != 0) {
+			fprintf(stderr, "Usage: %s [--update]\n", argv[0]);
+			fprintf(stderr, "    --update    Optionally force an NTP clock sync and exit\n\n");
 			return 0;
+		}
 
 		Settings settings;
 		const char* errorString = NULL;
@@ -109,11 +112,11 @@ main(int argc, char** argv)
 		if (update_time(settings, &errorString, &errorCode) == B_OK) {
 			printf("Synchronization successful\n");
 		} else if (errorCode != 0) {
-			printf("The following error occured "
+			printf("The following error occurred "
 					"while synchronizing:\n%s: %s\n",
 				errorString, strerror(errorCode));
 		} else {
-			printf("The following error occured while synchronizing:\n%s\n",
+			printf("The following error occurred while synchronizing:\n%s\n",
 				errorString);
 		}
 	} else {

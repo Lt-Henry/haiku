@@ -1050,7 +1050,8 @@ status_t
 AttributeEntry::Read(off_t position, void *buffer, size_t *length)
 {
 	*length = (size_t)min_c((off_t)*length, fEntry->size - position);
-	memcpy(buffer, fData + position, *length);
+	if (user_memcpy(buffer, fData + position, *length) != B_OK)
+		return B_BAD_ADDRESS;
 	return B_OK;
 }
 
@@ -1067,7 +1068,9 @@ AttributeEntry::Write(off_t position, const void *buffer, size_t *length)
 		}
 	}
 
-	memcpy(fData + position, buffer, *length);
+	if (user_memcpy(fData + position, buffer, *length) != B_OK)
+		return B_BAD_ADDRESS;
+
 	notify_attribute_changed(fParent->VolumeID(), -1, fParent->FileInode(),
 		fEntry->name, B_ATTR_CHANGED);
 	return B_OK;
@@ -1087,7 +1090,7 @@ AttributeEntry::ReadStat(struct stat *stat)
 	stat->st_mode = S_ATTR | 0x0777;
 	stat->st_type = fEntry->type;
 	stat->st_atime = stat->st_mtime = stat->st_crtime = time(NULL);
-	stat->st_blocks = (fEntry->size + stat->st_blksize - 1) / stat->st_blksize;
+	stat->st_blocks = (fEntry->size + DEV_BSIZE - 1) / DEV_BSIZE;
 	return B_OK;
 }
 
@@ -1262,13 +1265,13 @@ overlay_deselect(fs_volume *volume, fs_vnode *vnode, void *cookie, uint8 event,
 
 
 static status_t
-overlay_fsync(fs_volume *volume, fs_vnode *vnode)
+overlay_fsync(fs_volume *volume, fs_vnode *vnode, bool dataOnly)
 {
 	OverlayInode *node = (OverlayInode *)vnode->private_node;
 	fs_vnode *superVnode = node->SuperVnode();
 
 	if (superVnode->ops->fsync != NULL)
-		return superVnode->ops->fsync(volume->super_volume, superVnode);
+		return superVnode->ops->fsync(volume->super_volume, superVnode, dataOnly);
 
 	return B_OK;
 }
@@ -1994,6 +1997,9 @@ static status_t
 overlay_mount(fs_volume *volume, const char *device, uint32 flags,
 	const char *args, ino_t *rootID)
 {
+	if (volume->super_volume == NULL)
+		return B_UNSUPPORTED;
+
 	TRACE_VOLUME("mounting attribute overlay\n");
 	volume->private_volume = new(std::nothrow) OverlayVolume(volume);
 	if (volume->private_volume == NULL)

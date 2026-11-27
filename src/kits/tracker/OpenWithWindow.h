@@ -152,6 +152,8 @@ public:
 	void SetCanSetAppAsDefault(bool);
 	void SetCanOpen(bool);
 
+	virtual bool ShouldHaveDraggableFolderIcon() { return false; };
+
 	OpenWithPoseView* PoseView() const;
 
 protected:
@@ -214,7 +216,12 @@ public:
 
 	OpenWithContainerWindow* ContainerWindow() const;
 
+	virtual void AdoptSystemColors();
+	virtual bool HasSystemColors() const;
+
 	virtual bool AddPosesThreadValid(const entry_ref*) const;
+
+	virtual bool IsOpenWithView() const;
 
 protected:
 	// don't do any volume watching and memtamime watching in open with
@@ -222,11 +229,9 @@ protected:
 	virtual void InitialStartWatching() {}
 	virtual void FinalStopWatching() {}
 
-	virtual void AttachedToWindow();
-	virtual rgb_color TextColor(bool selected = false) const;
-	virtual rgb_color BackColor(bool selected = false) const;
 	virtual EntryListBase* InitDirentIterator(const entry_ref* ref);
 	virtual void ReturnDirentIterator(EntryListBase* iterator);
+	virtual uint32 WatchNewNodeMask();
 
 	virtual void SetupDefaultColumnsIfNeeded();
 		// show launch window specific columns
@@ -238,7 +243,7 @@ protected:
 	virtual void RestoreState(const BMessage&);
 	virtual void SavePoseLocations(BRect* = NULL);
 	virtual void MoveSelectionToTrash(bool selectNext = true);
-	virtual void MoveSelectionTo(BPoint, BPoint, BContainerWindow*);
+	virtual void MoveSelectionTo(Model*, BPoint, BContainerWindow*, BPoint, uint32);
 	virtual void MoveSelectionInto(Model* destFolder,
 		BContainerWindow* srcWindow, bool forceCopy,
 		bool create_link = false);
@@ -269,6 +274,13 @@ private:
 
 	typedef BPoseView _inherited;
 };
+
+
+inline bool
+OpenWithPoseView::IsOpenWithView() const
+{
+	return true;
+}
 
 
 class OpenWithRefFilter: public BRefFilter {

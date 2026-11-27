@@ -165,7 +165,6 @@ fs_mount(fs_volume* _volume, const char* device, uint32 flags,
 		return B_NO_MEMORY;
 	ObjectDeleter<struct volume> volumeDeleter(volume);
 
-	mutex_init(&volume->lock, "NTFS volume lock");
 	volume->fs_info_flags = B_FS_IS_PERSISTENT;
 
 	unsigned long ntfsFlags = NTFS_MNT_RECOVER | NTFS_MNT_MAY_RDONLY;
@@ -260,6 +259,8 @@ fs_unmount(fs_volume* _volume)
 
 	if (ntfs_umount(volume->ntfs, false) < 0)
 		return errno;
+
+	put_vnode(_volume, FILE_root);
 
 	delete volume;
 	_volume->private_volume = NULL;
@@ -466,7 +467,7 @@ fs_can_page(fs_volume* _volume, fs_vnode* _node, void* _cookie)
 
 
 static status_t
-fs_read_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
+fs_read_pages(fs_volume* _volume, fs_vnode* _node, void*,
 	off_t pos, const iovec* vecs, size_t count, size_t* _numBytes)
 {
 	volume* volume = (struct volume*)_volume->private_volume;
@@ -479,7 +480,7 @@ fs_read_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
 
 	ntfs_inode* ni = ntfs_inode_open(volume->ntfs, node->inode);
 	if (ni == NULL)
-		return B_FILE_ERROR;
+		return B_IO_ERROR;
 	NtfsInodeCloser niCloser(ni);
 
 	if (pos < 0 || pos >= ni->data_size)
@@ -506,7 +507,7 @@ fs_read_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
 
 
 static status_t
-fs_write_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
+fs_write_pages(fs_volume* _volume, fs_vnode* _node, void*,
 	off_t pos, const iovec* vecs, size_t count, size_t* _numBytes)
 {
 	volume* volume = (struct volume*)_volume->private_volume;
@@ -519,7 +520,7 @@ fs_write_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
 
 	ntfs_inode* ni = ntfs_inode_open(volume->ntfs, node->inode);
 	if (ni == NULL)
-		return B_FILE_ERROR;
+		return B_IO_ERROR;
 	NtfsInodeCloser niCloser(ni);
 
 	if (pos < 0 || pos >= ni->data_size)
@@ -641,7 +642,7 @@ fs_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat, uint
 
 	ntfs_inode* ni = ntfs_inode_open(volume->ntfs, node->inode);
 	if (ni == NULL)
-		return B_FILE_ERROR;
+		return B_IO_ERROR;
 	NtfsInodeCloser niCloser(ni);
 
 	bool updateTime = false;
@@ -814,8 +815,6 @@ fs_open(fs_volume* _volume, fs_vnode* _node, int openMode, void** _cookie)
 	// opening a directory read-only is allowed (but no data can be read)
 	if ((node->mode & S_IFDIR) != 0 && (openMode & O_RWMASK) != 0)
 		return B_IS_A_DIRECTORY;
-	if ((openMode & O_DIRECTORY) != 0 && (node->mode & S_IFDIR) == 0)
-		return B_NOT_A_DIRECTORY;
 
 	status_t status = fs_access(_volume, _node, open_mode_to_access(openMode));
 	if (status != B_OK)
@@ -832,6 +831,8 @@ fs_open(fs_volume* _volume, fs_vnode* _node, int openMode, void** _cookie)
 	ObjectDeleter<file_cookie> cookieDeleter(cookie);
 
 	cookie->open_mode = openMode;
+	cookie->last_size = node->size;
+	cookie->last_notification = system_time();
 
 	// We don't actually support uncached mode; it would require us to handle
 	// passing user buffers to libntfs, among other things.
@@ -859,6 +860,11 @@ fs_open(fs_volume* _volume, fs_vnode* _node, int openMode, void** _cookie)
 			return errno;
 		node->size = na->data_size;
 		file_cache_set_size(node->file_cache, node->size);
+
+		if (cookie->last_size != 0) {
+			cookie->last_size = node->size;
+			notify_stat_changed(_volume->id, node->parent_inode, node->inode, B_STAT_SIZE);
+		}
 	}
 
 	cookieDeleter.Detach();
@@ -879,7 +885,7 @@ fs_read(fs_volume* _volume, fs_vnode* _node, void* _cookie, off_t pos,
 
 	ASSERT((cookie->open_mode & O_RWMASK) == O_RDONLY || (cookie->open_mode & O_RDWR) != 0);
 
-	return file_cache_read(node->file_cache, cookie, pos, buffer, length);
+	return file_cache_read(node->file_cache, pos, buffer, length);
 }
 
 
@@ -922,7 +928,7 @@ fs_write(fs_volume* _volume, fs_vnode* _node, void* _cookie, off_t pos,
 
 	lock.Unlock();
 
-	status_t status = file_cache_write(node->file_cache, cookie, pos, buffer, _length);
+	status_t status = file_cache_write(node->file_cache, pos, buffer, _length);
 	if (status != B_OK)
 		return status;
 
@@ -942,7 +948,7 @@ fs_write(fs_volume* _volume, fs_vnode* _node, void* _cookie, off_t pos,
 
 
 static status_t
-fs_fsync(fs_volume* _volume, fs_vnode* _node)
+fs_fsync(fs_volume* _volume, fs_vnode* _node, bool dataOnly)
 {
 	CALLED();
 	vnode* node = (vnode*)_node->private_node;
@@ -1120,6 +1126,7 @@ fs_create_dir(fs_volume* _volume, fs_vnode* _directory, const char* name, int mo
 	if (status != B_OK)
 		return status;
 
+	put_vnode(_volume, inode);
 	return B_OK;
 }
 

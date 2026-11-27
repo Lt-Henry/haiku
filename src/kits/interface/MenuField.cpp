@@ -47,8 +47,7 @@
 #ifdef TRACE_MENU_FIELD
 #	include <FunctionTracer.h>
 	static int32 sFunctionDepth = -1;
-#	define CALLED(x...)	FunctionTracer _ft("BMenuField", __FUNCTION__, \
-							sFunctionDepth)
+#	define CALLED(x...)	FunctionTracer _ft(printf, this, __PRETTY_FUNCTION__, sFunctionDepth)
 #	define TRACE(x...)	{ BString _to; \
 							_to.Append(' ', (sFunctionDepth + 1) * 2); \
 							printf("%s", _to.String()); printf(x); }
@@ -555,6 +554,7 @@ BMenuField::MouseUp(BPoint where)
 void
 BMenuField::DetachedFromWindow()
 {
+	Window()->RemoveCommonFilter(fMouseDownFilter);
 	BView::DetachedFromWindow();
 }
 
@@ -623,14 +623,18 @@ BMenuField::MenuItem() const
 void
 BMenuField::SetLabel(const char* label)
 {
-	if (fLabel) {
-		if (label && strcmp(fLabel, label) == 0)
-			return;
-
-		free(fLabel);
+	if ((fLabel != NULL && label != NULL && strcmp(fLabel, label) == 0)
+		|| (fLabel == NULL && label == NULL)) {
+		// labels are the same, do not set label
+		return;
 	}
 
-	fLabel = strdup(label);
+	if (fLabel != NULL) {
+		free(fLabel);
+		fLabel = NULL;
+	}
+	if (label != NULL)
+		fLabel = strdup(label);
 
 	if (Window())
 		Invalidate();

@@ -32,6 +32,8 @@
 		- The \ref app is the starting point for developing applications
 			and includes classes for messaging and for interacting with
 			the rest of the system.
+		- The \ref device offers software interfaces
+			that allow applications to access and interact with connected hardware.
 		- The \ref game provides classes for producing game sounds and
 			working with full screen apps.
 		- The \ref interface is used to create responsive and attractive
@@ -42,6 +44,12 @@
 			- The \link layout_intro Layout API \endlink is a new addition
 				to the Interface Kit in Haiku which provides resources to
 				layout your application flexibly and easily.
+		- The \ref kernel contains functions and definitions to work with the
+			applications' running behaviors. This includes handling teams and
+			their threads, loaded executable images and their symbols, or deal
+			with big stretches of shared memory known as areas. In addition, it also
+			provides utilities to perform scheduling and thread access protection
+			through semaphores.
 		- The \ref locale includes classes to localize your application to
 			different languages, timezones, number formatting conventions and
 			much more.
@@ -116,14 +124,23 @@
 		- BKey
 		- BKeyStore
 
+	\defgroup device Device Kit
+	\brief The Device Kit offers software interfaces
+	that allow applications to access and interact with connected hardware.
+
+	\defgroup device Device Kit
+	\brief The Device Kit provides access to devices such as joysticks and serial ports.
 
 	\defgroup game Game Kit
 	\brief The Game Kit provides classes for producing game sounds and
 		working with full screen apps.
 
-
 	\defgroup interface Interface Kit
 	\brief API for displaying a graphical user interface.
+
+	\defgroup kernel Kernel Kit
+	\brief The Kernel Kit provides low-level APIs mainly of use for writing device drivers and
+		kernel modules.
 
 	\defgroup locale Locale Kit
 	\brief Collection of classes for localizing applications.
@@ -561,13 +578,14 @@ snooze_until(time - Latency(), B_SYSTEM_TIMEBASE);
 		formats.
 
 
-	\defgroup libtranslation (libtranslation.so)
+	\defgroup libtranslation Translation Kit library (libtranslation.so)
 
-	\defgroup libbe (libbe.so)
+	\defgroup libbe Main C++ library (libbe.so)
 
+	\defgroup libdevice Device Kit library (libdevice.so)
 
-	\defgroup libroot (libroot.so)
-	\brief Implements the C and POSIX standard libraries.
+	\defgroup libmail Mail Kit library (libmail.so)
+
 */
 
 ///// Subgroups /////

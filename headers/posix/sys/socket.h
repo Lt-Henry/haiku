@@ -49,6 +49,7 @@ typedef uint8_t sa_family_t;
 
 #define SOCK_NONBLOCK 	0x00040000
 #define SOCK_CLOEXEC 	0x00080000
+#define SOCK_CLOFORK 	0x00100000
 
 /* Socket options for SOL_SOCKET level */
 #define	SOL_SOCKET		-1
@@ -81,7 +82,7 @@ typedef uint8_t sa_family_t;
 #define SHUT_WR			1
 #define SHUT_RDWR		2
 
-#define SOMAXCONN		32		/* Max listen queue for a socket */
+#define SOMAXCONN		4096		/* Max listen queue for a socket */
 
 struct linger {
 	int			l_onoff;
@@ -125,6 +126,8 @@ struct msghdr {
 #define MSG_MCAST		0x0200	/* this message rec'd as multicast */
 #define	MSG_EOF			0x0400	/* data completes connection */
 #define MSG_NOSIGNAL	0x0800	/* don't raise SIGPIPE if socket is closed */
+#define MSG_CMSG_CLOEXEC	0x1000	/* set FD_CLOEXEC flag on FDs created via SCM_RIGHTS */
+#define MSG_CMSG_CLOFORK	0x2000	/* set FD_CLOFORK flag on FDs created via SCM_RIGHTS */
 
 struct cmsghdr {
 	socklen_t	cmsg_len;

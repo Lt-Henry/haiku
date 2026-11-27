@@ -1,4 +1,4 @@
-1	czech	x-vnd.Haiku-PowerStatus	1876447050
+1	czech	x-vnd.Haiku-PowerStatus	4069361317
 Run in window	PowerStatus		Spustit v okně
 Extended battery info	PowerStatus		Podrobnější informace o baterii
 Show status icon	PowerStatus		Zobrazit ikonu stavu
@@ -14,23 +14,23 @@ Quit	PowerStatus		Ukončit
 Battery not charging	PowerStatus		Baterie se nenabíjí
 Battery low	PowerStatus		Nízká úroveň baterie
 Model number: 	PowerStatus		Číslo modelu: 
+You can run %appname% in a window or install it in the Deskbar.	PowerStatus		%appname% lze spustit v okně nebo instalovat na Panel.
 Battery unused	PowerStatus		Baterie nevyužita
 Type: 	PowerStatus		Typ: 
-You can run PowerStatus in a window or install it in the Deskbar.	PowerStatus		Můžete spouštět PowerStatus v okně nebo jej nainstalovat do panelu.
+Damaged or missing battery	PowerStatus		Poškozená nebo chybějící baterie
  mAh	PowerStatus		 mAh
 Battery discharging	PowerStatus		Baterie se vybíjí
 Design voltage: 	PowerStatus		Napětí (dle výrobce): 
 discharging	PowerStatus		vybíjí se
 rechargeable	PowerStatus		nabíjecí
-Battery info…	PowerStatus		Informace o baterii...
+Battery info…	PowerStatus		Informace o baterii…
 Show time	PowerStatus		Zobraz čas
  mA	PowerStatus		 mA
-About…	PowerStatus		O...
+About…	PowerStatus		O…
 Serial number: 	PowerStatus		Sériové číslo: 
 Battery critical	PowerStatus		Vyždímaná baterie
 Capacity: 	PowerStatus		Kapacita: 
  mW	PowerStatus		 mW
-No supported battery detected. PowerStatus cannot be used on your system.	PowerStatus		Nenalezena podporovaná baterie. Nelze použít PowerStatus na vašem zařízení.
 Show percent	PowerStatus		Zobrazit procenta
 Capacity granularity 1: 	PowerStatus		Přesnost kapacity 1: 
 The battery level is getting low, please plug in the device.	PowerStatus		Úroveň nabití baterie je nízká. Prosím, připojte zařízení do elektrické sítě.
@@ -39,6 +39,7 @@ Capacity granularity 2: 	PowerStatus		Přesnost kapacity 2:
 Too bad!	PowerStatus		Průšvih!
 Technology: 	PowerStatus		Technologie: 
 not charging	PowerStatus		nenabíjí
+No supported battery detected. %appname% cannot be used on your system.	PowerStatus		Nenalezena podporovaná baterie. %appname% nelze použít.
  mWh	PowerStatus		 mWh
 PowerStatus	System name		PowerStatus
 Design capacity: 	PowerStatus		Původní kapacita: 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2022, Andrew Lindesay <apl@lindesay.co.nz>
+ * Copyright 2022-2026, Andrew Lindesay <apl@lindesay.co.nz>
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 #ifndef ABSTRACT_PACKAGE_PROCESS_H
@@ -18,27 +18,20 @@ class Model;
 
 class AbstractPackageProcess : public BReferenceable, public AbstractProcess {
 public:
-								AbstractPackageProcess(PackageInfoRef package,
-									Model* model);
+								AbstractPackageProcess(const BString& packageName, Model* model);
 	virtual						~AbstractPackageProcess();
 
-			int32				InstallLocation() const
-									{ return fInstallLocation; }
 
 protected:
-			PackageInfoRef		FindPackageByName(const BString& name);
+			int32				InstallLocation() const;
+			PackageInfoRef		FindPackageByName(const BString& packageName) const;
 
-			void				SetPackageState(PackageInfoRef& package, PackageState state);
-			void				SetPackageDownloadProgress(PackageInfoRef& package, float value);
-			void				ClearPackageInstallationLocations(PackageInfoRef& package);
+			void				SetPackageState(const BString& packageName, PackageState state);
+			void				ClearPackageInstallationLocations(const BString& packageName);
 
 protected:
-			PackageManager*		fPackageManager;
-			PackageInfoRef		fPackage;
-
-private:
+			BString				fPackageName;
 			Model*				fModel;
-			int32				fInstallLocation;
 };
 
 

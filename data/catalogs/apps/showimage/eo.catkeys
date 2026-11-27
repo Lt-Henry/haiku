@@ -1,7 +1,5 @@
-1	esperanto	x-vnd.Haiku-ShowImage	575555985
-ShowImage	System name		La Bildmontrilo
+1	esperanto	x-vnd.Haiku-ShowImage	621535342
 Page setup…	Menus		Agordo de paĝo…
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		La dokumento '%s' (paĝo %d) estas ŝanĝita. Ĉu vi volas fermi ĝin?
 Previous file	Menus		Antaŭa dosiero
 View	Menus		Rigardi
 Leave full screen	Menus		Malplenekrane
@@ -26,7 +24,6 @@ Zoom in	Menus		Zomi
 Last page	Menus		Lasta paĝo
 Cancel	ClosePrompt		Nuligi
 High-quality zooming	Menus		Bonkvalita zomado
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		La dokumento '%s' estas ŝanĝita. Ĉu vi volas malfermi ĝin?
 Close	Menus		Fermi
 Selection mode	Menus		Reĝimo de elekto
 DPI:	PrintOptionsWindow		Punktoj cole:
@@ -43,13 +40,11 @@ Stretch to window	Menus		Streĉi al fenestro
 Job setup	PrintOptionsWindow		Agordo de tasko
 Clear selection	Menus		Rezigni elekton
 Rotate clockwise	Menus		Turni laŭhorloĝe
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		Ne povas alŝuti bildon! La dosiero aŭ formatpelilo forestas.
 Rotate counterclockwise	Menus		Turni kontraŭhorloĝe
 Previous page	Menus		Antaŭa paĝo
 Fit to window	Menus		Adapti al fenestro
 Go to page	Menus		Al paĝo
 Browse	Menus		Rigardi
-Progress monitor	ProgressWindow		Indikilo de progreso
 Edit	Menus		Redakti
 Move to Trash	Menus		Movi en Rubujon
 Use as background…	Menus		Uzi kiel fono...

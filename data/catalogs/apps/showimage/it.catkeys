@@ -1,7 +1,5 @@
-1	italian	x-vnd.Haiku-ShowImage	2453396430
-ShowImage	System name		ShowImage
+1	italian	x-vnd.Haiku-ShowImage	549295024
 Page setup…	Menus		Imposta pagina…
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		Il documento '%s' (pagina %d) è stato modificato. Vuoi chiudere il documento?
 Previous file	Menus		File precedente
 View	Menus		Visualizza
 Leave full screen	Menus		Esci dallo schermo intero
@@ -13,6 +11,7 @@ Height: 	PrintOptionsWindow		Altezza:
 Next file	Menus		File seguente
 Slide show	Menus		Mostra sequenza
 Original size	Menus		Dimensione originale
+The document '%filename%' has been changed. Do you want to close the document?	ClosePrompt		Il documento "%filename%" è stato modificato. Vuoi chiudere il documento?
 Width:	PrintOptionsWindow		Larghezza:
 Resize to (in 1/72 inches):	PrintOptionsWindow		Ridimensiona (in 1/72 pollici):
 Zoom factor in %:	PrintOptionsWindow		Fattore di zoom in %:
@@ -27,7 +26,6 @@ Last page	Menus		Ultima pagina
 Cancel	ClosePrompt		Annulla
 Attributes	Menus		Attributi
 High-quality zooming	Menus		Zoom di alta qualità
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		Il documento '%s' è stato modificato. Vuoi chiudere il documento?
 Close	Menus		Chiudi
 Selection mode	Menus		Modalità selezione
 Reset rating	Menus		Reimposta valutazione
@@ -46,14 +44,13 @@ Stretch to window	Menus		Estendi alla finestra
 Job setup	PrintOptionsWindow		Imposta attività
 Clear selection	Menus		Pulisci selezione
 Rotate clockwise	Menus		Ruota in senso orario
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		Impossibile caricare l'immagine! Il file, il suo traduttore dati o entrambi non esistono.
 Open with…	Menus		Apri con...
 Rotate counterclockwise	Menus		Ruota in senso antiorario
+The document '%filename%' (page %number%) has been changed. Do you want to close the document?	ClosePrompt		Il documento "%filename%" (pagina %number%) è stato modificato. Vuoi chiudere il documento?
 Previous page	Menus		Pagina precedente
 Fit to window	Menus		Adatta alla finestra
 Go to page	Menus		Vai alla pagina
 Browse	Menus		Sfoglia
-Progress monitor	ProgressWindow		Controllo avanzamento
 Edit	Menus		Modifica
 Move to Trash	Menus		Sposta nel Cestino
 Use as background…	Menus		Utilizza come sfondo…

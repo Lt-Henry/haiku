@@ -10,7 +10,7 @@
 
 #include <debugger.h>
 #include <driver_settings.h>
-#include <int.h>
+#include <interrupts.h>
 #include <team.h>
 #include <thread.h>
 #include <util/AutoLock.h>
@@ -134,7 +134,8 @@ set_iframe_registers(iframe* frame, const debug_cpu_state* cpuState)
 	frame->cx = cpuState->rcx;
 	frame->bx = cpuState->rbx;
 	frame->ax = cpuState->rax;
-	frame->ip = cpuState->rip;
+	if (IS_USER_ADDRESS(cpuState->rip))
+		frame->ip = cpuState->rip;
 	frame->flags = (frame->flags & ~X86_EFLAGS_USER_SETTABLE_FLAGS)
 		| (cpuState->rflags & X86_EFLAGS_USER_SETTABLE_FLAGS);
 	frame->sp = cpuState->rsp;
@@ -186,7 +187,8 @@ set_iframe_registers(iframe* frame, const debug_cpu_state* cpuState)
 	frame->ax = cpuState->eax;
 //	frame->vector = cpuState->vector;
 //	frame->error_code = cpuState->error_code;
-	frame->ip = cpuState->eip;
+	if (IS_USER_ADDRESS(cpuState->eip))
+		frame->ip = cpuState->eip;
 //	frame->cs = cpuState->cs;
 	frame->flags = (frame->flags & ~X86_EFLAGS_USER_SETTABLE_FLAGS)
 		| (cpuState->eflags & X86_EFLAGS_USER_SETTABLE_FLAGS);
@@ -748,9 +750,9 @@ arch_set_debug_cpu_state(const debug_cpu_state* cpuState)
 		// not use these registers (not even indirectly).
 #ifdef __x86_64__
 		Thread* thread = thread_get_current_thread();
-		memcpy(thread->arch_info.fpu_state, &cpuState->extended_registers,
+		memcpy(thread->arch_info.user_fpu_state, &cpuState->extended_registers,
 			sizeof(cpuState->extended_registers));
-		frame->fpu = &thread->arch_info.fpu_state;
+		frame->fpu = &thread->arch_info.user_fpu_state;
 #else
 		if (gHasSSE) {
 			// Since fxrstor requires 16-byte alignment and this isn't
@@ -1160,7 +1162,7 @@ x86_init_user_debug()
 		"Sets respectively clears the breakpoint at address <address>.\n", 0);
 	add_debugger_command_etc("watchpoint", &debugger_watchpoint,
 		"Set/clears a watchpoint",
-		"<address> <address> ( [ rw ] [ <size> ] | clear )\n"
+		"<address> ( [ rw ] [ <size> ] | clear )\n"
 		"Sets respectively clears the watchpoint at address <address>.\n"
 		"If \"rw\" is given the new watchpoint is a read/write watchpoint\n"
 		"otherwise a write watchpoint only.\n", 0);

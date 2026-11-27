@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2021 Haiku, Inc. All rights reserved.
+ * Copyright 2019-2026 Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -18,19 +18,21 @@ extern "C" {
 
 #include "dtb.h"
 
-/* TODO: Code taken from ARM port just for building purposes */
 
-/* The potential interrupt controoller would be present in the dts as:
- * compatible = "arm,gic-v3";
- */
+void arm64_handle_fdt_psci_node(const void *fdt, int node);
+void arm64_handle_fdt_cpu_node(const void *fdt, int node);
+
+
 const struct supported_interrupt_controllers {
 	const char*	dtb_compat;
 	const char*	kind;
 } kSupportedInterruptControllers[] = {
-	{ "arm,cortex-a9-gic", INTC_KIND_GICV1 },
-	{ "arm,cortex-a15-gic", INTC_KIND_GICV2 },
-	{ "ti,omap3-intc", INTC_KIND_OMAP3 },
-	{ "marvell,pxa-intc", INTC_KIND_PXA },
+	{"arm,cortex-a9-gic", INTC_KIND_GICV1},
+	{"arm,cortex-a15-gic", INTC_KIND_GICV2},
+	{"arm,gic-400", INTC_KIND_GICV2},
+	{"arm,gic-v3", INTC_KIND_GICV3},
+	{"ti,omap3-intc", INTC_KIND_OMAP3},
+	{"marvell,pxa-intc", INTC_KIND_PXA},
 };
 
 
@@ -42,15 +44,7 @@ arch_handle_fdt(const void* fdt, int node)
 
 	if (deviceType != NULL) {
 		if (strcmp(deviceType, "cpu") == 0) {
-			platform_cpu_info* info = NULL;
-			arch_smp_register_cpu(&info);
-			if (info == NULL)
-				return;
-			info->id = fdt32_to_cpu(*(uint32*)fdt_getprop(fdt, node,
-				"reg", NULL));
-			dprintf("cpu\n");
-			dprintf("  id: %" B_PRIu32 "\n", info->id);
-
+			arm64_handle_fdt_cpu_node(fdt, node);
 		}
 	}
 
@@ -75,6 +69,9 @@ arch_handle_fdt(const void* fdt, int node)
 			}
 		}
 	}
+
+	if (strcmp(compatible, "arm,psci-1.0") == 0)
+		arm64_handle_fdt_psci_node(fdt, node);
 }
 
 

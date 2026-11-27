@@ -1,7 +1,7 @@
 /*
  * Copyright 2013-2014, Stephan Aßmus <superstippi@gmx.de>.
  * Copyright 2014, Axel Dörfler <axeld@pinc-software.de>.
- * Copyright 2016-2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2016-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  *
  * Note that this file included code earlier from `Model.cpp` and
@@ -10,6 +10,11 @@
 
 
 #include "PackageFilter.h"
+
+#include <set>
+
+#include "Logger.h"
+#include "PackageFilterSpecification.h"
 #include "PackageUtils.h"
 
 
@@ -52,22 +57,39 @@ AndFilter::AcceptsPackage(const PackageInfoRef& package) const
 }
 
 
-class StateFilter : public PackageFilter
+class FalseFilter : public PackageFilter
 {
 public:
-	StateFilter(PackageState state)
-		:
-		fState(state)
+	FalseFilter()
 	{
 	}
 
 	virtual bool AcceptsPackage(const PackageInfoRef& package) const
 	{
-		return PackageUtils::State(package) == fState;
+		return false;
+	}
+};
+
+
+class StateFilter : public PackageFilter
+{
+public:
+	StateFilter()
+	{
+	}
+
+	void Add(PackageState state)
+	{
+		fStates.insert(state);
+	}
+
+	virtual bool AcceptsPackage(const PackageInfoRef& package) const
+	{
+		return fStates.find(PackageUtils::State(package)) != fStates.end();
 	}
 
 private:
-	PackageState	fState;
+	std::set<PackageState> fStates;
 };
 
 
@@ -126,6 +148,40 @@ private:
 };
 
 
+class DesktopFilter : public PackageFilter {
+public:
+	virtual bool AcceptsPackage(const PackageInfoRef& package) const
+	{
+		if (!package.IsSet())
+			return false;
+
+		PackageClassificationInfoRef classificationInfo = package->PackageClassificationInfo();
+
+		if (!classificationInfo.IsSet())
+			return false;
+
+		return classificationInfo->IsDesktop();
+	}
+};
+
+
+class NativeDesktopFilter : public PackageFilter {
+public:
+	virtual bool AcceptsPackage(const PackageInfoRef& package) const
+	{
+		if (!package.IsSet())
+			return false;
+
+		PackageClassificationInfoRef classificationInfo = package->PackageClassificationInfo();
+
+		if (!classificationInfo.IsSet())
+			return false;
+
+		return classificationInfo->IsNativeDesktop();
+	}
+};
+
+
 class SourceFilter : public PackageFilter {
 public:
 	virtual bool AcceptsPackage(const PackageInfoRef& package) const
@@ -138,16 +194,14 @@ public:
 };
 
 
-class DevelopmentFilter : public PackageFilter
-{
+class DevelopmentFilter : public PackageFilter {
 public:
 	virtual bool AcceptsPackage(const PackageInfoRef& package) const
 	{
 		if (!package.IsSet())
 			return false;
 		const BString& packageName = package->Name();
-		return packageName.EndsWith("_devel")
-			|| packageName.EndsWith("_debuginfo");
+		return packageName.EndsWith("_devel") || packageName.EndsWith("_debuginfo");
 	}
 };
 
@@ -179,8 +233,7 @@ public:
 		// Every search term must be found in one of the package texts
 		for (int32 i = fSearchTerms.CountStrings() - 1; i >= 0; i--) {
 			const BString& term = fSearchTerms.StringAt(i);
-			if (!_TextContains(package->Name(), term)
-				&& !_AcceptsPackageFromPublisher(package, term)
+			if (package->Name().FindFirst(term) < 0 && !_AcceptsPackageFromPublisher(package, term)
 				&& !_AcceptsPackageFromLocalizedText(package, term)) {
 				return false;
 			}
@@ -199,16 +252,15 @@ public:
 				searchTerms.Append(" ");
 			searchTerms.Append(term);
 		}
- 		return searchTerms;
+		return searchTerms;
 	}
 
 private:
- 	bool _TextContains(BString text, const BString& string) const
- 	{
- 		text.ToLower();
- 		int32 index = text.FindFirst(string);
- 		return index >= 0;
- 	}
+	bool _TextContains(BString text, const BString& string) const
+	{
+		int32 index = text.IFindFirst(string);
+		return index >= 0;
+	}
 
 	bool _AcceptsPackageFromPublisher(const PackageInfoRef& package,
 		const BString& searchTerm) const
@@ -229,12 +281,12 @@ private:
 			return false;
 
 		return _TextContains(localizedText->Title(), searchTerm)
-        	|| _TextContains(localizedText->Summary(), searchTerm)
-        	|| _TextContains(localizedText->Description(), searchTerm);
+			|| _TextContains(localizedText->Summary(), searchTerm)
+			|| _TextContains(localizedText->Description(), searchTerm);
 	}
 
 private:
- 	BStringList fSearchTerms;
+	BStringList fSearchTerms;
 };
 
 
@@ -263,9 +315,16 @@ PackageFilterFactory::CreateDepotFilter(const BString& depotName)
 
 
 /*static*/ PackageFilterRef
-PackageFilterFactory::CreateStateFilter(PackageState state)
+PackageFilterFactory::CreateDesktopFilter()
 {
-	return PackageFilterRef(new StateFilter(state), true);
+	return PackageFilterRef(new DesktopFilter(), true);
+}
+
+
+/*static*/ PackageFilterRef
+PackageFilterFactory::CreateNativeDesktopFilter()
+{
+	return PackageFilterRef(new NativeDesktopFilter(), true);
 }
 
 
@@ -280,4 +339,65 @@ PackageFilterFactory::CreateSourceFilter()
 PackageFilterFactory::CreateDevelopmentFilter()
 {
 	return PackageFilterRef(new DevelopmentFilter(), true);
+}
+
+
+/*static*/ PackageFilterRef
+PackageFilterFactory::CreateFalseFilter()
+{
+	return PackageFilterRef(new FalseFilter(), true);
+}
+
+
+/*static*/ PackageFilterRef
+PackageFilterFactory::Not(PackageFilterRef filter)
+{
+	return PackageFilterRef(new NotFilter(filter), true);
+}
+
+
+/*static*/ PackageFilterRef
+PackageFilterFactory::CreateFilter(const PackageFilterSpecificationRef specification)
+{
+	if (!specification.IsSet())
+		return CreateFalseFilter();
+
+	AndFilter* andFilter = new AndFilter();
+
+	if (!specification->SearchTerms().IsEmpty())
+		andFilter->AddFilter(CreateSearchTermsFilter(specification->SearchTerms()));
+
+	if (!specification->DepotName().IsEmpty())
+		andFilter->AddFilter(CreateDepotFilter(specification->DepotName()));
+
+	if (!specification->Category().IsEmpty())
+		andFilter->AddFilter(CreateCategoryFilter(specification->Category()));
+
+	if (specification->ShowOnlyDesktopPackages())
+		andFilter->AddFilter(CreateDesktopFilter());
+
+	if (specification->ShowOnlyNativeDesktopPackages())
+		andFilter->AddFilter(CreateNativeDesktopFilter());
+
+	if (!specification->ShowInstalledPackages()) {
+		StateFilter* stateFilter = new StateFilter();
+		stateFilter->Add(ACTIVATED);
+		stateFilter->Add(INSTALLED);
+		andFilter->AddFilter(Not(PackageFilterRef(stateFilter, true)));
+	}
+
+	if (!specification->ShowAvailablePackages()) {
+		StateFilter* stateFilter = new StateFilter();
+		stateFilter->Add(NONE);
+		stateFilter->Add(UNINSTALLED);
+		andFilter->AddFilter(Not(PackageFilterRef(stateFilter, true)));
+	}
+
+	if (!specification->ShowSourcePackages())
+		andFilter->AddFilter(Not(CreateSourceFilter()));
+
+	if (!specification->ShowDevelopPackages())
+		andFilter->AddFilter(Not(CreateDevelopmentFilter()));
+
+	return PackageFilterRef(andFilter, true);
 }

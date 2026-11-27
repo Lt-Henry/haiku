@@ -118,7 +118,7 @@ public:
 	inline	BRegion&			VisibleRegion() { return fVisibleRegion; }
 			BRegion&			VisibleContentRegion();
 
-			// TODO: not protected by a lock, but noone should need this anyways
+			// TODO: not protected by a lock, but no one should need this anyways
 			// make private? when used inside Window, it has the ReadLock()
 			void				GetFullRegion(BRegion* region);
 			void				GetBorderRegion(BRegion* region);
@@ -222,10 +222,15 @@ public:
 	inline	bool				IsMinimized() const { return fMinimized; }
 
 			void				SetCurrentWorkspace(int32 index)
-									{ fCurrentWorkspace = index; }
+									{ fCurrentWorkspace = index; fPriorWorkspace = index; }
 			int32				CurrentWorkspace() const
 									{ return fCurrentWorkspace; }
 			bool				IsVisible() const;
+
+			void				SetPriorWorkspace(int32 index)
+									{ fPriorWorkspace = index; }
+			int32				PriorWorkspace() const
+									{ return fPriorWorkspace; }
 
 			bool				IsDragging() const;
 			bool				IsResizing() const;
@@ -430,6 +435,7 @@ protected:
 			uint32				fFlags;
 			uint32				fWorkspaces;
 			int32				fCurrentWorkspace;
+			int32				fPriorWorkspace;
 
 			int32				fMinWidth;
 			int32				fMaxWidth;

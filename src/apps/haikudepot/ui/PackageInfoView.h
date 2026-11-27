@@ -1,17 +1,19 @@
 /*
  * Copyright 2013-2014, Stephan Aßmus <superstippi@gmx.de>.
- * Copyright 2020-2023, Andrew Lindesay <apl@lindesay.co.nz>
+ * Copyright 2020-2026, Andrew Lindesay <apl@lindesay.co.nz>
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 #ifndef PACKAGE_INFO_VIEW_H
 #define PACKAGE_INFO_VIEW_H
+
+
+#include <vector>
 
 #include <GroupView.h>
 
 #include "Model.h"
 #include "PackageInfo.h"
 #include "PackageInfoListener.h"
-#include "ProcessCoordinator.h"
 
 
 class BCardLayout;
@@ -29,13 +31,10 @@ enum {
 
 class PackageInfoView : public BView {
 public:
-								PackageInfoView(Model* model,
-									ProcessCoordinatorConsumer*
-										processCoordinatorConsumer);
+								PackageInfoView(Model* model);
 	virtual						~PackageInfoView();
 
 	virtual void				AttachedToWindow();
-	virtual	void				MessageReceived(BMessage* message);
 
 			void				SetPackage(const PackageInfoRef& package);
 			const PackageInfoRef& Package() const
@@ -43,6 +42,9 @@ public:
 			void				Clear();
 
 			void				HandleScreenshotCached(const ScreenshotCoordinate& coordinate);
+			void				HandleIconsChanged();
+			void				HandlePackagesChanged(
+									const std::vector<PackageInfoChangeEvent>& events);
 
 private:
 	static const ScreenshotCoordinate
@@ -50,6 +52,8 @@ private:
 			void				_SetPackageScreenshotThumb(const PackageInfoRef& package);
 			void				_HandleScreenshotCached(const PackageInfoRef& package,
 									const ScreenshotCoordinate& coordinate);
+
+			void				_HandlePackageChanged(const PackageInfoChangeEvent& event);
 
 private:
 			Model*				fModel;
@@ -62,8 +66,6 @@ private:
 			PackageInfoRef		fPackage;
 			OnePackageMessagePackageListener*
 								fPackageListener;
-			ProcessCoordinatorConsumer*
-								fProcessCoordinatorConsumer;
 };
 
 #endif // PACKAGE_INFO_VIEW_H

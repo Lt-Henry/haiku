@@ -1,23 +1,21 @@
 /*
  * Copyright 2013-2014, Stephan Aßmus <superstippi@gmx.de>.
  * Copyright 2013, Rene Gollent <rene@gollent.com>.
- * Copyright 2016-2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2016-2025, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
 
 #include "Language.h"
 
-
 #include "Logger.h"
 #include "StringUtils.h"
 
 
-/*! serverName is the name of the language on the server.
+/*! @param serverName is the name of the language on the server.
  */
 
-Language::Language(const char* language, const BString& serverName,
-	bool isPopular)
+Language::Language(const char* language, const BString& serverName, bool isPopular)
 	:
 	BLanguage(language),
 	fServerName(serverName),
@@ -32,6 +30,27 @@ Language::Language(const Language& other)
 	fServerName(other.fServerName),
 	fIsPopular(other.fIsPopular)
 {
+}
+
+
+bool
+Language::operator==(const Language& other) const
+{
+	return Compare(other) == 0;
+}
+
+
+bool
+Language::operator!=(const Language& other) const
+{
+	return !(*this == other);
+}
+
+
+bool
+Language::operator<(const Language& other) const
+{
+	return Compare(other) < 0;
 }
 
 
@@ -60,9 +79,9 @@ Language::Compare(const Language& other) const
 
 
 bool
-IsLanguageBefore(const LanguageRef& l1, const LanguageRef& l2)
+IsLanguageRefLess(const LanguageRef& l1, const LanguageRef& l2)
 {
 	if (!l1.IsSet() || !l2.IsSet())
-		HDFATAL("unexpected NULL reference in a referencable");
-	return l1.Get()->Compare(*(l2.Get())) < 0;
+		debugger("illegal state in language less");
+	return *(l1.Get()) < *(l2.Get());
 }

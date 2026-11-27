@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2016-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  *
  * Note that this file included code earlier from `Model.cpp` and
@@ -9,7 +9,6 @@
 
 #include "PopulatePkgChangelogFromServerProcess.h"
 
-#include <Autolock.h>
 #include <Catalog.h>
 
 #include "Logger.h"
@@ -21,10 +20,10 @@
 
 
 PopulatePkgChangelogFromServerProcess::PopulatePkgChangelogFromServerProcess(
-	PackageInfoRef packageInfo, Model* model)
+	const BString& packageName, Model* model)
 	:
 	fModel(model),
-	fPackageInfo(packageInfo)
+	fPackageName(packageName)
 {
 }
 
@@ -41,8 +40,8 @@ PopulatePkgChangelogFromServerProcess::Name() const
 }
 
 
-const char*
-PopulatePkgChangelogFromServerProcess::Description() const
+const BString
+PopulatePkgChangelogFromServerProcess::Description()
 {
 	return B_TRANSLATE("Fetching changelog for package");
 }
@@ -51,13 +50,17 @@ PopulatePkgChangelogFromServerProcess::Description() const
 status_t
 PopulatePkgChangelogFromServerProcess::RunInternal()
 {
+	if (!ServerHelper::IsNetworkAvailable()) {
+		HDINFO("no network so will not populate changelog");
+		return B_OK;
+	}
+
 	// TODO; use API spec to code generation techniques instead of this manually written client.
 
 	BMessage responsePayload;
-	BString packageName = fPackageInfo->Name();
 	status_t result;
 
-	result = fModel->GetWebAppInterface()->GetChangelog(packageName, responsePayload);
+	result = fModel->WebApp()->GetChangelog(fPackageName, responsePayload);
 
 	if (result == B_OK) {
 		BMessage resultMessage;
@@ -68,34 +71,38 @@ PopulatePkgChangelogFromServerProcess::RunInternal()
 		if (result == B_OK) {
 			if (resultMessage.FindString("content", &content) == B_OK) {
 				content.Trim();
-
-				PackageLocalizedTextRef localizedText = fPackageInfo->LocalizedText();
-
-				if (localizedText.IsSet()) {
-					localizedText = PackageLocalizedTextRef(
-						new PackageLocalizedText(*(localizedText.Get())), true);
-				} else {
-					localizedText = PackageLocalizedTextRef(new PackageLocalizedText(), true);
-				}
-
-				localizedText->SetChangelog(content);
-
-				// TODO; later work to make the `PackageInfo` immutable to avoid this locking
-				BAutolock locker(fModel->Lock());
-				fPackageInfo->SetLocalizedText(localizedText);
-				HDDEBUG("changelog populated for [%s]", packageName.String());
+				result = _UpdateChangelog(content);
+				HDDEBUG("changelog populated for [%s] (length %" B_PRIi32 ")",
+					fPackageName.String(), content.Length());
 			} else {
-				HDDEBUG("no changelog present for [%s]", packageName.String());
+				HDDEBUG("no changelog present for [%s]", fPackageName.String());
 			}
-		} else {
-			int32 errorCode = WebAppInterface::ErrorCodeFromResponse(responsePayload);
-
-			if (errorCode != ERROR_CODE_NONE)
-				ServerHelper::NotifyServerJsonRpcError(responsePayload);
 		}
 	} else {
 		ServerHelper::NotifyTransportError(result);
 	}
 
 	return result;
+}
+
+
+status_t
+PopulatePkgChangelogFromServerProcess::_UpdateChangelog(const BString& value)
+{
+	PackageInfoRef package = fModel->PackageForName(fPackageName);
+
+	if (!package.IsSet()) {
+		HDERROR("the package [%s] was not found", fPackageName.String());
+		return B_ERROR;
+	}
+
+	PackageLocalizedTextRef localizedText
+		= PackageLocalizedTextBuilder(package->LocalizedText()).WithChangelog(value).BuildRef();
+
+	PackageInfoRef updatedPackage
+		= PackageInfoBuilder(package).WithLocalizedText(localizedText).BuildRef();
+
+	fModel->AddPackageWithChange(updatedPackage, static_cast<uint32>(PKG_CHANGED_LOCALIZED_TEXT));
+
+	return B_OK;
 }

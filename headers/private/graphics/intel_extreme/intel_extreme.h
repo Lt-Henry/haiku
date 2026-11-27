@@ -82,6 +82,7 @@
 #define INTEL_MODEL_HASM	(INTEL_GROUP_HAS | INTEL_TYPE_MOBILE)
 #define INTEL_MODEL_VLV		(INTEL_GROUP_VLV)
 #define INTEL_MODEL_VLVM	(INTEL_GROUP_VLV | INTEL_TYPE_MOBILE)
+#define INTEL_MODEL_CHVM	(INTEL_GROUP_CHV | INTEL_TYPE_MOBILE)
 #define INTEL_MODEL_BDW		(INTEL_GROUP_BDW)
 #define INTEL_MODEL_BDWM	(INTEL_GROUP_BDW | INTEL_TYPE_MOBILE)
 #define INTEL_MODEL_BDWS	(INTEL_GROUP_BDW | INTEL_TYPE_SERVER)
@@ -110,6 +111,7 @@
 #define INTEL_PCH_SPT_DEVICE_ID		0xa100
 #define INTEL_PCH_SPT_LP_DEVICE_ID	0x9d00
 #define INTEL_PCH_KBP_DEVICE_ID		0xa280
+#define INTEL_PCH_APL_LP_DEVICE_ID	0x5a80
 #define INTEL_PCH_GMP_DEVICE_ID		0x3180
 #define INTEL_PCH_CNP_DEVICE_ID		0xa300
 #define INTEL_PCH_CNP_LP_DEVICE_ID	0x9d80
@@ -351,6 +353,9 @@ struct child_device_config {
 	uint8 hdmi_iboost_level:4;
 	uint8 dp_max_link_rate:3;
 	uint8 dp_max_link_rate_reserved:5;
+	uint8 efp_index;
+	uint32 edp_data_rate_override:12;
+	uint32 edp_data_rate_override_reserved:20;
 } __attribute__((packed));
 
 
@@ -1315,6 +1320,7 @@ struct intel_brightness_legacy {
 #define DISPLAY_CONTROL_RGB16_SKY		(0x0eUL << 24)
 #define DISPLAY_CONTROL_RGB32_SKY		(0x04UL << 24)
 #define DISPLAY_CONTROL_RGB64_SKY		(0x06UL << 24)
+#define DISPLAY_CONTROL_TILE_MODE_MASK	(7UL << 10)
 
 // INTEL_DISPLAY_A_PIPE_CONTROL ILK+
 #define INTEL_PIPE_DITHER_TYPE_MASK		(0x0000000c)
@@ -1503,6 +1509,7 @@ struct intel_brightness_legacy {
 
 // Kaby Lake/Sunrisepoint
 #define BLC_PWM_PCH_CTL1				(0x8250 | REGS_SOUTH_SHARED) // Enable with bit 31
+#define BLM_PCH_OVERRIDE_ENABLE			(1 << 30)
 #define BLC_PWM_PCH_CTL2				(0x8254 | REGS_SOUTH_SHARED) // Duty Cycle and Period
 
 // Devices after Cannonlake have a new register layout, with separate registers for the period
@@ -1769,6 +1776,8 @@ struct overlay_scale {
 #define OVERLAY_MIRROR_NORMAL			0x0
 #define OVERLAY_MIRROR_HORIZONTAL		0x1
 #define OVERLAY_MIRROR_VERTICAL			0x2
+
+#define INTEL_GRAPHICS_MEMORY_FENCE_GEN6(i) (0x100000 + (i * 8))
 
 // The real overlay registers are written to using an update buffer
 

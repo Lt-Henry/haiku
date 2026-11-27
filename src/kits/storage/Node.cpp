@@ -191,7 +191,7 @@ BNode::SetTo(const BEntry* entry)
 status_t
 BNode::SetTo(const char* path)
 {
-	return _SetTo(-1, path, false);
+	return _SetTo(AT_FDCWD, path, false);
 }
 
 
@@ -239,7 +239,7 @@ BNode::Unlock()
 status_t
 BNode::Sync()
 {
-	return (fCStatus != B_OK) ? B_FILE_ERROR : _kern_fsync(fFd);
+	return (fCStatus != B_OK) ? B_FILE_ERROR : _kern_fsync(fFd, false);
 }
 
 

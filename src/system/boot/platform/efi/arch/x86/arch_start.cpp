@@ -64,7 +64,7 @@ arch_start_kernel(addr_t kernelEntry)
 	// Allocate virtual memory for kernel args
 	struct kernel_args *kernelArgs = NULL;
 	if (platform_allocate_region((void **)&kernelArgs,
-			sizeof(struct kernel_args), 0, false) != B_OK)
+			sizeof(struct kernel_args), 0) != B_OK)
 		panic("Failed to allocate kernel args.");
 
 	addr_t virtKernelArgs;
@@ -133,6 +133,7 @@ arch_start_kernel(addr_t kernelEntry)
 
 	dprintf("Calling ExitBootServices. So long, EFI!\n");
 	serial_disable();
+
 	while (true) {
 		if (kBootServices->ExitBootServices(kImage, mapKey) == EFI_SUCCESS) {
 			// Disconnect from EFI serial_io / stdio services
@@ -159,7 +160,7 @@ arch_start_kernel(addr_t kernelEntry)
 	// Copy final kernel args
 	// This should be the last step before jumping to the kernel
 	// as there are some fixups happening to kernel_args even in the last minute
-	memcpy(kernelArgs, &gKernelArgs, sizeof(struct kernel_args));
+	memcpy((void *)kernelArgs, &gKernelArgs, sizeof(struct kernel_args));
 
 	smp_boot_other_cpus(pageDirectory, kernelEntry, virtKernelArgs);
 

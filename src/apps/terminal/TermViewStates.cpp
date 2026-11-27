@@ -155,23 +155,17 @@ TermView::StandardBaseState::StandardBaseState(TermView* view)
 bool
 TermView::StandardBaseState::_StandardMouseMoved(BPoint where, int32 modifiers)
 {
-	if (!fView->fReportAnyMouseEvent && !fView->fReportButtonMouseEvent)
+	bool reportButtonMouseEvent = fView->TextBuffer()->IsMouseMode(MOUSE_MODE_BUTTON_EVENT);
+	bool reportAnyMouseEvent = fView->TextBuffer()->IsMouseMode(MOUSE_MODE_ANY_EVENT);
+	if (!reportButtonMouseEvent && !reportAnyMouseEvent)
 		return false;
 
 	TermPos clickPos = fView->_ConvertToTerminal(where);
-
-	if (fView->fReportButtonMouseEvent || fView->fEnableExtendedMouseCoordinates) {
-		if (fView->fPrevPos.x != clickPos.x
-			|| fView->fPrevPos.y != clickPos.y) {
-			fView->_SendMouseEvent(fView->fMouseButtons, modifiers,
-				clickPos.x, clickPos.y, true);
-		}
-		fView->fPrevPos = clickPos;
-	} else {
-		fView->_SendMouseEvent(fView->fMouseButtons, modifiers, clickPos.x,
-			clickPos.y, true);
+	if (fView->fPrevPos.x != clickPos.x || fView->fPrevPos.y != clickPos.y) {
+		fView->_SendMouseEvent(fView->fMouseButtons, modifiers, clickPos.x, clickPos.y, true,
+			false);
 	}
-
+	fView->fPrevPos = clickPos;
 	return true;
 }
 
@@ -193,6 +187,36 @@ TermView::DefaultState::ModifiersChanged(int32 oldModifiers, int32 modifiers)
 }
 
 
+static char*
+_BuildXtermPCFunctionKeySequence(char* dest, int destN, int32 modifiers, const char* prefix,
+	char first, char last)
+{
+	// This helper function builds a sequence used specifically by Xterm-conforming terminals
+	// for encoding key modifiers (ctrl, alt, shift) used with arrow keys, Home/End, Ins/Del,
+	// PgUp/PgDn, and function keys F1-F12.
+
+	uint8 ctrl = (modifiers & B_CONTROL_KEY) != 0;
+	uint8 alt = (modifiers & B_OPTION_KEY) != 0;
+	uint8 shift = (modifiers & B_SHIFT_KEY) != 0;
+
+	if (!(ctrl || alt || shift)) {
+		if (last == '~')
+			snprintf(dest, destN, "%s%c%c", prefix, first, last);
+		else
+			snprintf(dest, destN, "%s%c", prefix, last);
+
+		return dest;
+	}
+
+	// Xterm's modifiers map can be computed as a bitmask of bits for ctrl, shift, alt plus 1.
+	uint xtermModifiers = (ctrl + alt + shift) == 0 ? 0 : (ctrl << 2 | alt << 1 | shift) + 1;
+
+	// When a modifier is set, prefix is always CSI.
+	snprintf(dest, destN, "\033[%c;%u%c", first, xtermModifiers, last);
+	return dest;
+}
+
+
 void
 TermView::DefaultState::KeyDown(const char* bytes, int32 numBytes)
 {
@@ -210,8 +234,10 @@ TermView::DefaultState::KeyDown(const char* bytes, int32 numBytes)
 	fView->_ActivateCursor(true);
 
 	// Handle the Option key when used as Meta
+	bool interpretMetaKey = fView->TextBuffer()->IsMode(MODE_INTERPRET_META_KEY);
+	bool metaKeySendsEscape = fView->TextBuffer()->IsMode(MODE_META_KEY_SENDS_ESCAPE);
 	if ((mod & B_LEFT_OPTION_KEY) != 0 && fView->fUseOptionAsMetaKey
-		&& (fView->fInterpretMetaKey || fView->fMetaKeySendsEscape)) {
+		&& (interpretMetaKey || metaKeySendsEscape)) {
 		const char* bytes;
 		int8 numBytes;
 
@@ -237,7 +263,7 @@ TermView::DefaultState::KeyDown(const char* bytes, int32 numBytes)
 		char outputBuffer[2];
 		const char* toWrite = bytes;
 
-		if (fView->fMetaKeySendsEscape) {
+		if (metaKeySendsEscape) {
 			fView->fShell->Write("\e", 1);
 		} else if (numBytes == 1) {
 			char byte = *bytes | 0x80;
@@ -279,11 +305,15 @@ TermView::DefaultState::KeyDown(const char* bytes, int32 numBytes)
 
 	// Terminal filters RET, ENTER, F1...F12, and ARROW key code.
 	const char *toWrite = NULL;
+	char outputBuffer[12];
+	const char* prefix = "\033[";
+	if (fView->TextBuffer()->IsMode(MODE_APPLICATION_CURSOR_KEYS))
+		prefix = "\033O"; // SS3, 7-bit encoding.
 
 	switch (*bytes) {
 		case B_RETURN:
 			if (rawChar == B_RETURN)
-				toWrite = "\r";
+				toWrite = fView->TextBuffer()->IsMode(MODE_LINEFEED_NEWLINE) ? "\r\n" : "\r";
 			break;
 
 		case B_DELETE:
@@ -299,23 +329,15 @@ TermView::DefaultState::KeyDown(const char* bytes, int32 numBytes)
 
 		case B_LEFT_ARROW:
 			if (rawChar == B_LEFT_ARROW) {
-				if ((mod & B_SHIFT_KEY) != 0)
-					toWrite = SHIFT_LEFT_ARROW_KEY_CODE;
-				else if ((mod & B_CONTROL_KEY) != 0)
-					toWrite = CTRL_LEFT_ARROW_KEY_CODE;
-				else
-					toWrite = LEFT_ARROW_KEY_CODE;
+				toWrite = _BuildXtermPCFunctionKeySequence(outputBuffer, sizeof(outputBuffer), mod,
+					prefix, '1', 'D');
 			}
 			break;
 
 		case B_RIGHT_ARROW:
 			if (rawChar == B_RIGHT_ARROW) {
-				if ((mod & B_SHIFT_KEY) != 0)
-					toWrite = SHIFT_RIGHT_ARROW_KEY_CODE;
-				else if ((mod & B_CONTROL_KEY) != 0)
-					toWrite = CTRL_RIGHT_ARROW_KEY_CODE;
-				else
-					toWrite = RIGHT_ARROW_KEY_CODE;
+				toWrite = _BuildXtermPCFunctionKeySequence(outputBuffer, sizeof(outputBuffer), mod,
+					prefix, '1', 'C');
 			}
 			break;
 
@@ -326,12 +348,8 @@ TermView::DefaultState::KeyDown(const char* bytes, int32 numBytes)
 			}
 
 			if (rawChar == B_UP_ARROW) {
-				if ((mod & B_SHIFT_KEY) != 0)
-					toWrite = SHIFT_UP_ARROW_KEY_CODE;
-				else if (mod & B_CONTROL_KEY)
-					toWrite = CTRL_UP_ARROW_KEY_CODE;
-				else
-					toWrite = UP_ARROW_KEY_CODE;
+				toWrite = _BuildXtermPCFunctionKeySequence(outputBuffer, sizeof(outputBuffer), mod,
+					prefix, '1', 'A');
 			}
 			break;
 
@@ -342,12 +360,8 @@ TermView::DefaultState::KeyDown(const char* bytes, int32 numBytes)
 			}
 
 			if (rawChar == B_DOWN_ARROW) {
-				if ((mod & B_SHIFT_KEY) != 0)
-					toWrite = SHIFT_DOWN_ARROW_KEY_CODE;
-				else if (mod & B_CONTROL_KEY)
-					toWrite = CTRL_DOWN_ARROW_KEY_CODE;
-				else
-					toWrite = DOWN_ARROW_KEY_CODE;
+				toWrite = _BuildXtermPCFunctionKeySequence(outputBuffer, sizeof(outputBuffer), mod,
+					prefix, '1', 'B');
 			}
 			break;
 
@@ -358,19 +372,15 @@ TermView::DefaultState::KeyDown(const char* bytes, int32 numBytes)
 
 		case B_HOME:
 			if (rawChar == B_HOME) {
-				if ((mod & B_SHIFT_KEY) != 0)
-					toWrite = SHIFT_HOME_KEY_CODE;
-				else
-					toWrite = HOME_KEY_CODE;
+				toWrite = _BuildXtermPCFunctionKeySequence(outputBuffer, sizeof(outputBuffer), mod,
+					prefix, '1', 'H');
 			}
 			break;
 
 		case B_END:
 			if (rawChar == B_END) {
-				if ((mod & B_SHIFT_KEY) != 0)
-					toWrite = SHIFT_END_KEY_CODE;
-				else
-					toWrite = END_KEY_CODE;
+				toWrite = _BuildXtermPCFunctionKeySequence(outputBuffer, sizeof(outputBuffer), mod,
+					prefix, '1', 'F');
 			}
 			break;
 
@@ -420,8 +430,7 @@ TermView::DefaultState::KeyDown(const char* bytes, int32 numBytes)
 void
 TermView::DefaultState::MouseDown(BPoint where, int32 buttons, int32 modifiers)
 {
-	if (fView->fReportAnyMouseEvent || fView->fReportButtonMouseEvent
-		|| fView->fReportNormalMouseEvent || fView->fReportX10MouseEvent) {
+	if (!fView->TextBuffer()->IsMouseMode(MOUSE_MODE_OFF)) {
 		TermPos clickPos = fView->_ConvertToTerminal(where);
 		fView->_SendMouseEvent(buttons, modifiers, clickPos.x, clickPos.y,
 			false, false);
@@ -456,8 +465,7 @@ TermView::DefaultState::MouseMoved(BPoint where, uint32 transit,
 void
 TermView::DefaultState::MouseUp(BPoint where, int32 buttons)
 {
-	if (fView->fReportAnyMouseEvent || fView->fReportButtonMouseEvent
-		|| fView->fReportNormalMouseEvent || fView->fReportX10MouseEvent) {
+	if (!fView->TextBuffer()->IsMouseMode(MOUSE_MODE_OFF)) {
 		TermPos clickPos = fView->_ConvertToTerminal(where);
 		fView->_SendMouseEvent(buttons, 0, clickPos.x, clickPos.y,
 			false, true);
@@ -666,10 +674,13 @@ TermView::SelectState::MouseUp(BPoint where, int32 buttons)
 	// When releasing the first mouse button, we copy the selected text to the
 	// clipboard.
 
-	if (fView->fReportAnyMouseEvent || fView->fReportButtonMouseEvent
-		|| fView->fReportNormalMouseEvent) {
+	bool reportButtonMouseEvent = fView->TextBuffer()->IsMouseMode(MOUSE_MODE_BUTTON_EVENT);
+	bool reportAnyMouseEvent = fView->TextBuffer()->IsMouseMode(MOUSE_MODE_ANY_EVENT);
+	bool reportNormalMouseEvent = fView->TextBuffer()->IsMouseMode(MOUSE_MODE_NORMAL);
+
+	if (reportAnyMouseEvent || reportButtonMouseEvent || reportNormalMouseEvent) {
 		TermPos clickPos = fView->_ConvertToTerminal(where);
-		fView->_SendMouseEvent(0, 0, clickPos.x, clickPos.y, false);
+		fView->_SendMouseEvent(0, 0, clickPos.x, clickPos.y, false, true);
 	} else if ((buttons & B_PRIMARY_MOUSE_BUTTON) == 0
 		&& (fView->fMouseButtons & B_PRIMARY_MOUSE_BUTTON) != 0) {
 		fView->Copy(fView->fMouseClipboard);
@@ -815,9 +826,18 @@ TermView::HyperLinkState::_GetHyperLinkAt(BPoint where, bool pathPrefixOnly,
 	HyperLink& _link, TermPos& _start, TermPos& _end)
 {
 	TerminalBuffer* textBuffer = fView->fTextBuffer;
+	BasicTerminalBuffer* visibleTextBuffer = fView->fVisibleTextBuffer;
 	BAutolock textBufferLocker(textBuffer);
+	int32 firstVisible = fView->_LineAt(0);
 
 	TermPos pos = fView->_ConvertToTerminal(where);
+
+	UTF8Char character;
+	Attributes attr;
+	if (visibleTextBuffer->GetChar(pos.y - firstVisible, pos.x, character, attr) == A_CHAR
+		&& attr.Hyperlink() != 0) {
+		return textBuffer->GetHyperLink(attr.Hyperlink(), _link);
+	}
 
 	// try to get a URL first
 	BString text;
@@ -1102,6 +1122,7 @@ TermView::HyperLinkMenuState::Prepare(BPoint point, const HyperLink& link)
 	BLayoutBuilder::Menu<> menuBuilder(menu);
 	switch (link.GetType()) {
 		case HyperLink::TYPE_URL:
+		case HyperLink::TYPE_OSC_URL:
 			menuBuilder
 				.AddItem(B_TRANSLATE("Open link"), kMessageOpenLink)
 				.AddItem(B_TRANSLATE("Copy link location"), kMessageCopyLink);
@@ -1143,8 +1164,7 @@ TermView::HyperLinkMenuState::MessageReceived(BMessage* message)
 		case kMessageCopyAbsolutePath:
 		{
 			if (fLink.IsValid()) {
-				BString toCopy = message->what == kMessageCopyLink
-					? fLink.Text() : fLink.Address();
+				BString toCopy = fLink.Address();
 
 				if (!be_clipboard->Lock())
 					return true;

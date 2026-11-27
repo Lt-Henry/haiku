@@ -447,8 +447,7 @@ arch_debug_save_registers(struct arch_debug_registers* registers)
 
 
 bool
-arch_debug_contains_call(Thread *thread, const char *symbol,
-	addr_t start, addr_t end)
+arch_debug_walk_stack(Thread* thread, bool (*callback)(void*, addr_t), void* context)
 {
 	return false;
 }
@@ -462,7 +461,7 @@ arch_debug_stack_trace(void)
 
 
 int32
-arch_debug_get_stack_trace(addr_t* returnAddresses, int32 maxCount,
+arch_get_stack_trace(addr_t* returnAddresses, int32 maxCount,
 	int32 skipIframes, int32 skipFrames, uint32 flags)
 {
 	// TODO: Implement!
@@ -499,6 +498,13 @@ arch_get_debug_variable(const char* variableName, uint64* value)
 {
 	// TODO: Implement!
 	return B_ENTRY_NOT_FOUND;
+}
+
+
+void
+arch_debug_snooze(bigtime_t duration)
+{
+	spin(duration);
 }
 
 

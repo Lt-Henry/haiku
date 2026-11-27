@@ -6,7 +6,6 @@
 #include "FUSEVolume.h"
 
 #include <dirent.h>
-#include <file_systems/mime_ext_table.h>
 
 #include <algorithm>
 
@@ -352,7 +351,7 @@ public:
 private:
 	void _SetType(const char* name)
 	{
-		if (strcmp(name, kAttrMimeTypeName) == 0)
+		if (strcmp(name, "BEOS:TYPE") == 0)
 			fType = B_MIME_STRING_TYPE;
 		else
 			fType = B_RAW_TYPE;
@@ -817,6 +816,7 @@ status_t
 FUSEVolume::Unmount()
 {
 printf("FUSEVolume::Unmount()\n");
+	UserlandFS::KernelEmu::put_vnode(fID, fRootNode->id);
 	_FileSystem()->ExitClientFS(B_OK);
 	return B_OK;
 }
@@ -911,6 +911,8 @@ FUSEVolume::ReadFSInfo(fs_info* info)
 
 	memset(info, 0, sizeof(*info));
 	info->flags = B_FS_IS_PERSISTENT;	// assume the FS is persistent
+	if ((st.f_flag & ST_RDONLY) != 0)
+		info->flags |= B_FS_IS_READONLY;
 	info->block_size = st.f_bsize;
 	info->io_size = 64 * 1024;			// some value
 	info->total_blocks = st.f_blocks;
@@ -1954,7 +1956,7 @@ FUSEVolume::Read(void* _node, void* _cookie, off_t pos, void* buffer,
 	status_t error = B_OK;
 
 	if (S_ISREG(node->type) && node->cacheCount > 0) {
-		error = UserlandFS::KernelEmu::file_cache_read(GetID(), node->id, cookie, pos,
+		error = UserlandFS::KernelEmu::file_cache_read(GetID(), node->id, pos,
 			buffer, _bytesRead);
 	} else
 		error = _InternalIO(node, cookie, NULL, pos, (char *)buffer, *_bytesRead, false);
@@ -1986,7 +1988,7 @@ FUSEVolume::Write(void* _node, void* _cookie, off_t pos, const void* buffer,
 	status_t error = B_OK;
 
 	if (S_ISREG(node->type) && node->cacheCount > 0) {
-		error = UserlandFS::KernelEmu::file_cache_write(GetID(), node->id, cookie, pos,
+		error = UserlandFS::KernelEmu::file_cache_write(GetID(), node->id, pos,
 			buffer, _bytesWritten);
 	} else
 		error = _InternalIO(node, cookie, NULL, pos, (char *)buffer, *_bytesWritten, true);
@@ -2517,21 +2519,6 @@ FUSEVolume::OpenAttr(void* _node, const char* name, int openMode,
 		locker.Unlock();
 
 		attrSize = fuse_fs_getxattr(fFS, path, name, NULL, 0);
-	}
-
-	if (attrSize < 0) {
-		if (strcmp(name, kAttrMimeTypeName) == 0) {
-			// Return a fake MIME type attribute based on the file extension
-			const char* mimeType = NULL;
-			error = set_mime(&mimeType, S_ISDIR(node->type) ? NULL : &path[0]);
-			if (error != B_OK)
-				return error;
-			*_cookie = new(std::nothrow)AttrCookie(name, mimeType);
-			return B_OK;
-		}
-
-		// Reading attribute failed
-		return attrSize;
 	}
 
 	AttrCookie* cookie = new(std::nothrow)AttrCookie(name);

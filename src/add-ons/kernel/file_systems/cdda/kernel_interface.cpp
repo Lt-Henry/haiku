@@ -519,7 +519,7 @@ fill_stat_buffer(Volume* volume, Inode* inode, Attribute* attribute,
 		stat.st_type = attribute->Type();
 	} else {
 		stat.st_size = inode->Size() + sizeof(wav_header);
-		stat.st_blocks = inode->Size() / 512;
+		stat.st_blocks = inode->Size() / DEV_BSIZE;
 		stat.st_mode = inode->Type();
 		stat.st_type = 0;
 	}
@@ -1675,7 +1675,7 @@ cdda_free_cookie(fs_volume* _volume, fs_vnode* _node, void* _cookie)
 
 
 static status_t
-cdda_fsync(fs_volume* _volume, fs_vnode* _node)
+cdda_fsync(fs_volume* _volume, fs_vnode* _node, bool dataOnly)
 {
 	return B_OK;
 }
@@ -1760,7 +1760,7 @@ cdda_can_page(fs_volume* _volume, fs_vnode* _node, void* cookie)
 
 
 static status_t
-cdda_read_pages(fs_volume* _volume, fs_vnode* _node, void* cookie, off_t pos,
+cdda_read_pages(fs_volume* _volume, fs_vnode* _node, void*, off_t pos,
 	const iovec* vecs, size_t count, size_t* _numBytes)
 {
 	return B_NOT_ALLOWED;
@@ -1768,7 +1768,7 @@ cdda_read_pages(fs_volume* _volume, fs_vnode* _node, void* cookie, off_t pos,
 
 
 static status_t
-cdda_write_pages(fs_volume* _volume, fs_vnode* _node, void* cookie, off_t pos,
+cdda_write_pages(fs_volume* _volume, fs_vnode* _node, void*, off_t pos,
 	const iovec* vecs, size_t count, size_t* _numBytes)
 {
 	return B_NOT_ALLOWED;

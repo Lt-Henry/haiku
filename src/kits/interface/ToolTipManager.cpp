@@ -50,11 +50,12 @@ public:
 			void				ResetWindowFrame();
 			void				ResetWindowFrame(BPoint where);
 
-			BToolTip*			Tip() const { return fToolTip; }
+			BReference<BToolTip> Tip() const { return fToolTip; }
 			bool				IsTipHidden() const { return fHidden; }
 
 private:
-			BToolTip*			fToolTip;
+			BReference<BToolTip> fToolTip;
+			BPoint				fWhere;
 			bool				fHidden;
 };
 
@@ -62,15 +63,14 @@ private:
 ToolTipView::ToolTipView(BToolTip* tip)
 	:
 	BView("tool tip", B_WILL_DRAW | B_FRAME_EVENTS),
-	fToolTip(tip),
+	fToolTip(tip, false),
 	fHidden(false)
 {
-	fToolTip->AcquireReference();
 	SetViewUIColor(B_TOOL_TIP_BACKGROUND_COLOR);
 	SetHighUIColor(B_TOOL_TIP_TEXT_COLOR);
 
 	BGroupLayout* layout = new BGroupLayout(B_VERTICAL);
-	layout->SetInsets(5, 5, 5, 5);
+	layout->SetInsets(B_USE_HALF_ITEM_SPACING);
 	SetLayout(layout);
 
 	AddChild(fToolTip->View());
@@ -79,7 +79,6 @@ ToolTipView::ToolTipView(BToolTip* tip)
 
 ToolTipView::~ToolTipView()
 {
-	fToolTip->ReleaseReference();
 }
 
 
@@ -159,10 +158,7 @@ ToolTipView::ShowTip()
 void
 ToolTipView::ResetWindowFrame()
 {
-	BPoint where;
-	GetMouse(&where, NULL, false);
-
-	ResetWindowFrame(ConvertToScreen(where));
+	ResetWindowFrame(fWhere);
 }
 
 
@@ -174,6 +170,8 @@ ToolTipView::ResetWindowFrame()
 void
 ToolTipView::ResetWindowFrame(BPoint where)
 {
+	fWhere = where;
+
 	if (Window() == NULL)
 		return;
 
@@ -322,7 +320,6 @@ ToolTipWindow::ToolTipWindow(BToolTip* tip, BPoint where, void* owner)
 	manager->Unlock();
 
 	// figure out size and location
-
 	view->ResetWindowFrame(where);
 }
 
@@ -339,20 +336,25 @@ ToolTipWindow::MessageReceived(BMessage* message)
 
 		case kMsgCurrentToolTip:
 		{
-			BToolTip* tip = view->Tip();
+			BReference<BToolTip> tip = view->Tip();
 
 			BMessage reply(B_REPLY);
-			reply.AddPointer("current", tip);
+			reply.AddPointer("current", tip.Get());
 			reply.AddPointer("owner", fOwner);
 
 			if (message->SendReply(&reply) == B_OK)
-				tip->AcquireReference();
+				tip.Detach();
 			break;
 		}
 
 		case kMsgShowToolTip:
+		{
+			BPoint where;
+			if (message->FindPoint("where", &where) == B_OK)
+				view->ResetWindowFrame(where);
 			view->ShowTip();
 			break;
+		}
 
 		case kMsgCloseToolTip:
 			if (view->IsTipHidden())
@@ -400,7 +402,9 @@ BToolTipManager::ShowTip(BToolTip* tip, BPoint where, void* owner)
 		current->ReleaseReference();
 
 	if (current == tip || currentOwner == owner) {
-		fWindow.SendMessage(kMsgShowToolTip);
+		BMessage message(kMsgShowToolTip);
+		message.AddPoint("where", where);
+		fWindow.SendMessage(&message);
 		return;
 	}
 

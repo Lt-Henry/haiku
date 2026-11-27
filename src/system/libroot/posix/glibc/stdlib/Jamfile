@@ -37,6 +37,10 @@ for architectureObject in [ MultiArchSubDirSetup ] {
 			strtod.c
 			strtold.c
 			strtof.c
+			strtol.c
+			strtoll.c
+			strtoul.c
+			strtoull.c
 
 			# These are nonstandard but were declared in BeOS's headers.
 			erand48_r.c

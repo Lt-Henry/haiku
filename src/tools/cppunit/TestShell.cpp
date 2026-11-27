@@ -10,6 +10,7 @@
 #include <image.h>
 #include <Locker.h>
 #include <Path.h>
+#include <String.h>
 #include <TLS.h>
 
 #include <cppunit/Exception.h>
@@ -18,6 +19,7 @@
 #include <cppunit/TestFailure.h>
 #include <cppunit/TestResult.h>
 #include <cppunit/TestSuite.h>
+#include <cppunit/extensions/TestFactoryRegistry.h>
 
 #include <TestShell.h>
 #include <TestListener.h>
@@ -61,25 +63,54 @@ status_t
 BTestShell::AddSuite(BTestSuite *suite) {
 	if (suite) {
 		if (Verbosity() >= v3)
-			cout << "Adding suite '" << suite->getName() << "'" << endl;
+			cout << "Adding BTestSuite '" << suite->getName() << "'" << endl;
 
-		// Add the suite
-		fSuites[suite->getName()] = suite;
+		CppUnit::TestSuite *ts = new CppUnit::TestSuite(suite->getName());
 
 		// Add its tests
 		const TestMap &map = suite->getTests();
 		for (TestMap::const_iterator i = map.begin();
 			   i != map.end();
 			      i++) {
-			AddTest(i->first, i->second);
+			CppUnit::TestSuite *t = new CppUnit::TestSuite(i->first);
+			t->addTest(i->second);
+			ts->addTest(t);
 			if (Verbosity() >= v4 && i->second)
-				cout << "  " << i->first << endl;
+				cout << "  " << i->first << "; " << i->second->getName() << endl;
+		}
+		AddSuite(ts);
+
+		return B_OK;
+	} else
+		return B_BAD_VALUE;
+}
+
+
+_EXPORT
+status_t
+BTestShell::AddSuite(CppUnit::TestSuite *suite) {
+	if (suite) {
+		if (Verbosity() >= v3)
+			cout << "Adding CppUnit::TestSuite '" << suite->getName() << "'" << endl;
+
+		// Add the suite
+		fSuites[suite->getName()] = suite;
+
+		// Add its tests
+		const std::vector<CppUnit::Test*> &tests = suite->getTests();
+		for (std::vector<CppUnit::Test*>::const_iterator i = tests.begin();
+			   i != tests.end();
+			      i++) {
+			AddTest((*i)->getName(), *i);
+			if (Verbosity() >= v4 && *i)
+				cout << "  " << (*i)->getName() << endl;
 		}
 
 		return B_OK;
 	} else
 		return B_BAD_VALUE;
 }
+
 
 _EXPORT
 void
@@ -102,27 +133,54 @@ BTestShell::LoadSuitesFrom(BDirectory *libDir) {
 	int count = 0;
 
 	typedef BTestSuite* (*suiteFunc)(void);
+	typedef const char* (*nameFunc)(void);
 	suiteFunc func;
+	nameFunc nameF;
 
 	while (libDir->GetNextEntry(&addonEntry, true) == B_OK) {
 		status_t err;
+		status_t addonStatus = B_ERROR;
+		bool getTestSuiteFound = false;
 		err = addonEntry.GetPath(&addonPath);
 		if (!err) {
-//			cout << "Checking " << addonPath.Path() << "..." << endl;
+			cout << "Checking " << addonPath.Path() << "";
+			BString filename(addonPath.Leaf());
+			if (!filename.EndsWith(".so")) {
+				cout << ", wrong extension. Skipping." << endl;
+				continue;
+			}
 			addonImage = load_add_on(addonPath.Path());
-			err = (addonImage >= 0 ? B_OK : B_ERROR);
+			addonStatus = (addonImage >= 0 ? B_OK : B_ERROR);
 		}
-		if (err == B_OK) {
-//			cout << "..." << endl;
+		if (addonStatus == B_OK) {
 			err = get_image_symbol(addonImage, "getTestSuite",
 				B_SYMBOL_TYPE_TEXT, reinterpret_cast<void **>(&func));
 		} else {
-//			cout << " !!! err == " << err << endl;
+			// cout << ", getTestSuite error == " << err << endl;
 		}
-		if (err == B_OK)
+		if (err == B_OK) {
+			cout << ", found getTestSuite()";
+			getTestSuiteFound = true;
 			err = AddSuite(func());
-		if (err == B_OK)
-			count++;
+			if (err == B_OK)
+				count++;
+		}
+		if(addonStatus == B_OK) {
+			err = get_image_symbol(addonImage, "getTestSuiteName",
+				B_SYMBOL_TYPE_TEXT, reinterpret_cast<void **>(&nameF));
+			if(err == B_OK) {
+				cout << ", found getTestSuiteName()";
+				const char* testSuiteName = nameF();
+				CppUnit::TestFactoryRegistry &registry =
+					CppUnit::TestFactoryRegistry::getRegistry(testSuiteName);
+				AddSuite(static_cast<CppUnit::TestSuite*>(registry.makeTest()));
+				count++;
+			} else if (!getTestSuiteFound) {
+				cout << ", getTestSuiteName error == " << err << endl;
+				continue;
+			}
+		}
+		cout << ", OK." << endl;
 	}
 	return count;
 }
@@ -178,10 +236,10 @@ BTestShell::Run(int argc, char *argv[]) {
 				if (fTests.find(*i) == fTests.end()) {
 					suitesToRemove.insert(*i);
 				}
-				const TestMap &tests = fSuites[*i]->getTests();
-				TestMap::const_iterator j;
+				const std::vector<CppUnit::Test*> &tests = fSuites[*i]->getTests();
+				std::vector<CppUnit::Test*>::const_iterator j;
 				for (j = tests.begin(); j != tests.end(); j++) {
-					fTestsToRun.insert( j->first );
+					fTestsToRun.insert( (*j)->getName() );
 				}
 			}
 		}
@@ -402,8 +460,13 @@ BTestShell::PrintResults() {
 				     iFailure != fResultsCollector.failures().end();
 				     ++iFailure)
 				{
-					if (!(*iFailure)->isError())
+					if (!(*iFailure)->isError()) {
 						cout << "    " << (*iFailure)->toString() << endl;
+						if ((*iFailure)->sourceLine().isValid()) {
+							cout << "        in " << (*iFailure)->sourceLine().fileName()
+								<< ":" << (*iFailure)->sourceLine().lineNumber() << endl;
+						}
+					}
 				}
 			}
 			if (fResultsCollector.testErrors() > 0) {
@@ -412,8 +475,13 @@ BTestShell::PrintResults() {
 				     iFailure != fResultsCollector.failures().end();
 				     ++iFailure)
 				{
-					if ((*iFailure)->isError())
+					if ((*iFailure)->isError()) {
 						cout << "    " << (*iFailure)->toString() << endl;
+						if ((*iFailure)->sourceLine().isValid()) {
+							cout << "        in " << (*iFailure)->sourceLine().fileName()
+								<< ":" << (*iFailure)->sourceLine().lineNumber() << endl;
+						}
+					}
 				}
 			}
 
@@ -444,31 +512,32 @@ BTestShell::LoadDynamicSuites() {
 	}
 
 	set<string>::iterator i;
+	int count = 0;
 	for (i = fLibDirs.begin(); i != fLibDirs.end(); i++) {
 		BDirectory libDir((*i).c_str());
 		if (Verbosity() >= v3)
 			cout << "Checking " << *i << endl;
-/*		int count =*/ LoadSuitesFrom(&libDir);
+		count += LoadSuitesFrom(&libDir);
 		if (Verbosity() >= v3) {
-//			cout << "Loaded " << count << " suite" << (count == 1 ? "" : "s");
-//			cout << " from " << *i << endl;
+			cout << "Loaded " << count << " suite" << (count == 1 ? "" : "s");
+			cout << " from " << *i << endl;
 		}
 	}
 
-	if (Verbosity() >= v3)
+	if (Verbosity() >= v3) {
 		cout << endl;
+	}
 
 	// Look for suites and tests with the same name and give a
 	// warning, as this is only asking for trouble... :-)
 	for (SuiteMap::const_iterator i = fSuites.begin(); i != fSuites.end(); i++) {
 		if (fTests.find(i->first) != fTests.end() && Verbosity() > v0) {
 			cout << "WARNING: '" << i->first << "' refers to both a test suite *and* an individual" <<
-			endl << "         test. Both will be executed, but it is reccommended you rename" <<
+			endl << "         test. Both will be executed, but it is recommended you rename" <<
 			endl << "         one of them to resolve the conflict." <<
 			endl << endl;
 		}
 	}
-
 }
 
 _EXPORT

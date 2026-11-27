@@ -54,6 +54,7 @@ All rights reserved.
 #include <Locale.h>
 #include <Mime.h>
 #include <NodeInfo.h>
+#include <NodeMonitor.h>
 #include <Path.h>
 #include <Roster.h>
 #include <SpaceLayoutItem.h>
@@ -175,7 +176,7 @@ OpenWithContainerWindow::EntryList() const
 void
 OpenWithContainerWindow::OpenWithSelection()
 {
-	int32 count = PoseView()->SelectionList()->CountItems();
+	int32 count = PoseView()->CountSelected();
 	ASSERT(count == 1);
 	if (count == 0)
 		return;
@@ -258,7 +259,7 @@ SetDefaultAppForOneType(const BString& element, void* castToEntryRef)
 void
 OpenWithContainerWindow::MakeDefaultAndOpen()
 {
-	int32 count = PoseView()->SelectionList()->CountItems();
+	int32 count = PoseView()->CountSelected();
 	ASSERT(count == 1);
 	if (count == 0)
 		return;
@@ -321,8 +322,9 @@ OpenWithContainerWindow::KeyDownFilter(BMessage* message, BHandler**,
 	if (message->FindInt8("byte", (int8*)&key) != B_OK)
 		return B_DISPATCH_MESSAGE;
 
-	int32 modifiers = 0;
-	message->FindInt32("modifiers", &modifiers);
+	int32 modifiers = message->GetInt32("modifiers", 0);
+	modifiers &= B_COMMAND_KEY | B_OPTION_KEY | B_SHIFT_KEY | B_CONTROL_KEY | B_MENU_KEY;
+
 	if (modifiers == 0 && key == B_ESCAPE) {
 		filter->Looper()->PostMessage(kCancelButton);
 		return B_SKIP_MESSAGE;
@@ -548,8 +550,7 @@ OpenWithPoseView::~OpenWithPoseView()
 OpenWithContainerWindow*
 OpenWithPoseView::ContainerWindow() const
 {
-	OpenWithContainerWindow* window
-		= dynamic_cast<OpenWithContainerWindow*>(Window());
+	OpenWithContainerWindow* window = dynamic_cast<OpenWithContainerWindow*>(Window());
 	ASSERT(window != NULL);
 
 	return window;
@@ -557,32 +558,21 @@ OpenWithPoseView::ContainerWindow() const
 
 
 void
-OpenWithPoseView::AttachedToWindow()
+OpenWithPoseView::AdoptSystemColors()
 {
-	_inherited::AttachedToWindow();
-
 	SetViewUIColor(B_TOOL_TIP_BACKGROUND_COLOR);
 	SetLowUIColor(B_TOOL_TIP_BACKGROUND_COLOR);
+	SetHighUIColor(B_TOOL_TIP_TEXT_COLOR);
 }
 
 
-rgb_color
-OpenWithPoseView::TextColor(bool selected) const
+bool
+OpenWithPoseView::HasSystemColors() const
 {
-	if (selected)
-		return ui_color(B_TOOL_TIP_BACKGROUND_COLOR);
-	else
-		return ui_color(B_TOOL_TIP_TEXT_COLOR);
-}
-
-
-rgb_color
-OpenWithPoseView::BackColor(bool selected) const
-{
-	if (selected)
-		return InvertedBackColor(ui_color(B_TOOL_TIP_BACKGROUND_COLOR));
-	else
-		return ui_color(B_TOOL_TIP_BACKGROUND_COLOR);
+	float tint = B_NO_TINT;
+	return ViewUIColor(&tint) == B_TOOL_TIP_BACKGROUND_COLOR && tint == B_NO_TINT
+		&& LowUIColor(&tint) == B_TOOL_TIP_BACKGROUND_COLOR && tint == B_NO_TINT
+		&& HighUIColor(&tint) == B_TOOL_TIP_TEXT_COLOR && tint == B_NO_TINT;
 }
 
 
@@ -627,6 +617,7 @@ AddOneRefSignatures(const entry_ref* ref, void* castToIterator)
 	Model model(ref, true, true);
 	if (model.InitCheck() != B_OK)
 		return NULL;
+	model.SniffMimeIfNeeded();
 
 	BString mimeType(model.MimeType());
 
@@ -702,12 +693,19 @@ OpenWithPoseView::ReturnDirentIterator(EntryListBase* iterator)
 }
 
 
+uint32
+OpenWithPoseView::WatchNewNodeMask()
+{
+	return B_WATCH_STAT | B_WATCH_INTERIM_STAT | B_WATCH_ATTR;
+}
+
+
 void
 OpenWithPoseView::OpenSelection(BPose* pose, int32*)
 {
 	OpenWithContainerWindow* window = ContainerWindow();
 
-	int32 count = SelectionList()->CountItems();
+	int32 count = CountSelected();
 	if (count == 0)
 		return;
 
@@ -776,7 +774,7 @@ OpenWithPoseView::Pulse()
 
 	OpenWithContainerWindow* window = ContainerWindow();
 
-	if (!SelectionList()->CountItems()) {
+	if (!CountSelected()) {
 		window->SetCanSetAppAsDefault(false);
 		window->SetCanOpen(false);
 		_inherited::Pulse();
@@ -801,7 +799,7 @@ OpenWithPoseView::Pulse()
 		return;
 	}
 
-	ASSERT(SelectionList()->CountItems() == 1);
+	ASSERT(CountSelected() == 1);
 
 	// enable the Open and make default if selected application different
 	// from preferred app ref
@@ -921,7 +919,7 @@ OpenWithPoseView::MoveSelectionToTrash(bool)
 
 
 void
-OpenWithPoseView::MoveSelectionTo(BPoint, BPoint, BContainerWindow*)
+OpenWithPoseView::MoveSelectionTo(Model*, BPoint, BContainerWindow*, BPoint, uint32)
 {
 }
 
@@ -1589,6 +1587,7 @@ SearchForSignatureEntryList::Relation(const BMessage* entriesToOpen,
 		Model model(&ref, true, true);
 		if (model.InitCheck())
 			continue;
+		model.SniffMimeIfNeeded();
 
 		int32 result = Relation(&model, applicationModel);
 		if (result != kNoRelation) {
@@ -1629,6 +1628,7 @@ SearchForSignatureEntryList::RelationDescription(const BMessage* entriesToOpen,
 		Model model(&ref, true, true);
 		if (model.InitCheck())
 			continue;
+		model.SniffMimeIfNeeded();
 
 		BMimeType mimeType;
 		int32 result = Relation(&model, applicationModel);

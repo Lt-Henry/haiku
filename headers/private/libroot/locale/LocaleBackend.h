@@ -10,11 +10,11 @@
 
 #include <locale.h>
 #include <time.h>
+#include <wchar.h>
 #include <wctype.h>
 
 
 struct lc_time_t;
-struct locale_data;		// glibc
 
 
 namespace BPrivate {
@@ -26,11 +26,13 @@ private:
 	const unsigned short*		localClassInfoTable;
 	const int*					localToLowerTable;
 	const int*					localToUpperTable;
+	unsigned short				localMbCurMax;
 
 public:
 	const unsigned short**		addrOfClassInfoTable;
 	const int**					addrOfToLowerTable;
 	const int**					addrOfToUpperTable;
+	unsigned short*				addrOfMbCurMax;
 
 	const unsigned short* const	posixClassInfo;
 	const int* const			posixToLowerMap;
@@ -40,7 +42,6 @@ public:
 
 	LocaleCtypeDataBridge(bool isGlobal);
 
-	void setMbCurMax(unsigned short mbCurMax);
 	void ApplyToCurrentThread();
 };
 
@@ -60,37 +61,11 @@ struct LocaleMonetaryDataBridge {
 
 
 struct LocaleNumericDataBridge {
-private:
-	// struct used by glibc to store numeric locale data
-	struct GlibcNumericLocale {
-		const char* name;
-		const char* filedata;
-		off_t filesize;
-		int mmaped;
-		unsigned int usage_count;
-		int use_translit;
-		const char *options;
-		unsigned int nstrings;
-		union locale_data_value
-		{
-			const uint32_t* wstr;
-			const char* string;
-			unsigned int word;
-		}
-		values[6];
-	};
-	locale_data* originalGlibcLocale;
-	GlibcNumericLocale  		glibcNumericLocaleData;
-
 public:
 	const struct lconv* const 	posixLocaleConv;
-	GlibcNumericLocale*  		glibcNumericLocale;
-	bool						isGlobal;
 
 	LocaleNumericDataBridge(bool isGlobal);
 	~LocaleNumericDataBridge();
-
-	void ApplyToCurrentThread();
 };
 
 
@@ -115,7 +90,6 @@ public:
 	int*					addrOfDaylight;
 	long*					addrOfTimezone;
 	char**					addrOfTZName;
-	bool					isGlobal;
 
 	TimeConversionDataBridge(bool isGlobal);
 };
@@ -129,7 +103,6 @@ struct LocaleDataBridge {
 	LocaleTimeDataBridge		timeDataBridge;
 	TimeConversionDataBridge	timeConversionDataBridge;
 	const char** const			posixLanginfo;
-	bool						isGlobal;
 
 	LocaleDataBridge(bool isGlobal);
 
@@ -139,7 +112,6 @@ struct LocaleDataBridge {
 
 class LocaleBackend {
 public:
-								LocaleBackend();
 	virtual						~LocaleBackend();
 
 	virtual	const char*			SetLocale(int category, const char* locale) = 0;
@@ -207,6 +179,7 @@ void SetCurrentLocaleInfo(LocaleBackendData* newLocale);
 LocaleBackend* GetCurrentLocaleBackend();
 extern LocaleBackend* gGlobalLocaleBackend;
 extern LocaleDataBridge gGlobalLocaleDataBridge;
+
 
 }	// namespace Libroot
 }	// namespace BPrivate

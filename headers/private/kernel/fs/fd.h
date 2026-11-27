@@ -84,6 +84,7 @@ extern status_t close_fd_index(struct io_context *context, int fd);
 extern void put_fd(struct file_descriptor *descriptor);
 extern void disconnect_fd(struct file_descriptor *descriptor);
 extern void inc_fd_ref_count(struct file_descriptor *descriptor);
+extern void inc_fd_open_count(struct file_descriptor *descriptor);
 extern int dup_foreign_fd(team_id fromTeam, int fd, bool kernel);
 extern status_t select_fd(int32 fd, struct select_info *info, bool kernel);
 extern status_t deselect_fd(int32 fd, struct select_info *info, bool kernel);
@@ -93,6 +94,9 @@ extern bool fd_is_file(struct file_descriptor* descriptor);
 
 extern bool fd_close_on_exec(const struct io_context *context, int fd);
 extern void fd_set_close_on_exec(struct io_context *context, int fd,
+	bool closeFD);
+extern bool fd_close_on_fork(const struct io_context *context, int fd);
+extern void fd_set_close_on_fork(struct io_context *context, int fd,
 	bool closeFD);
 
 static struct io_context *get_current_io_context(bool kernel);

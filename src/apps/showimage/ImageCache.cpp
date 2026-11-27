@@ -1,6 +1,11 @@
 /*
+ * Copyright 2003-2026, Haiku, Inc. All Rights Reserved.
  * Copyright 2010-2011, Axel Dörfler, axeld@pinc-software.de.
  * Distributed under the terms of the MIT License.
+ *
+ * Authors:
+ *		Axel Dörfler, axeld@pinc-software.de
+ *		Philippe Houdoin
  */
 
 
@@ -228,7 +233,7 @@ ImageCache::_RetrieveImage(QueueEntry* queueEntry, CacheEntry** _entry)
 
 	BTranslatorRoster* roster = BTranslatorRoster::Default();
 	if (roster == NULL)
-		return B_ERROR;
+		return B_TRANSLATION_BASE_ERROR;
 
 	BFile file;
 	status_t status = file.SetTo(&queueEntry->ref, B_READ_ONLY);
@@ -240,8 +245,25 @@ ImageCache::_RetrieveImage(QueueEntry* queueEntry, CacheEntry** _entry)
 	BMessage ioExtension;
 
 	if (queueEntry->page != 0
-		&& ioExtension.AddInt32("/documentIndex", queueEntry->page) != B_OK)
+		&& ioExtension.AddInt32(B_TRANSLATOR_EXT_DOCUMENT_INDEX, queueEntry->page) != B_OK) {
 		return B_NO_MEMORY;
+	}
+
+	// lookup in cache entries if we already know the pageCount
+	int32 cachedPageCount = 0;
+	CacheEntry* cacheEntry = fCacheEntriesByAge.Tail();
+	while (cacheEntry != NULL) {
+		if (cacheEntry->ref == queueEntry->ref) {
+			cachedPageCount = cacheEntry->pageCount;
+			break;
+		}
+		cacheEntry = fCacheEntriesByAge.GetPrevious(cacheEntry);
+	}
+
+	if (cachedPageCount != 0
+		&& ioExtension.AddInt32(B_TRANSLATOR_EXT_DOCUMENT_COUNT, cachedPageCount) != B_OK) {
+		return B_NO_MEMORY;
+	}
 
 	// TODO: this doesn't work for images that already are in the queue...
 	if (!queueEntry->listeners.empty()) {
@@ -283,10 +305,10 @@ ImageCache::_RetrieveImage(QueueEntry* queueEntry, CacheEntry** _entry)
 
 	// get the number of documents (pages) if it has been supplied
 	int32 documentCount = 0;
-	if (ioExtension.FindInt32("/documentCount", &documentCount) == B_OK
-		&& documentCount > 0)
+	if (ioExtension.FindInt32(B_TRANSLATOR_EXT_DOCUMENT_COUNT, &documentCount) == B_OK
+		&& documentCount > 0) {
 		entry->pageCount = documentCount;
-	else
+	} else
 		entry->pageCount = 1;
 
 	deleter.Detach();

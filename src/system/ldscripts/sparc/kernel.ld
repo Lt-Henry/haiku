@@ -13,12 +13,13 @@ PHDRS
 
 SECTIONS
 {
-	. = 0xFFFFFFFF80000000 + SIZEOF_HEADERS;
+	. = 0x80000000 + SIZEOF_HEADERS;
 
 	.interp : { *(.interp) } : text
 	.hash : { *(.hash) }
 	.dynsym : { *(.dynsym) }
 	.dynstr : { *(.dynstr) }
+	.gnu.hash : { *(.gnu.hash) }
 	.rela.text : { *(.rela.text .rela.text.* .rela.gnu.linkonce.t.*) }
 	.rela.data : { *(.rela.data .rela.data.* .rela.gnu.linkonce.d.*) }
 	.rela.rodata : { *(.rela.rodata .rela.rodata.* .rela.gnu.linkonce.r.*) }

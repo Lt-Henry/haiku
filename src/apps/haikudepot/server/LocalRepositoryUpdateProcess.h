@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2020, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2018-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
@@ -10,10 +10,7 @@
 
 #include "AbstractProcess.h"
 
-#include <File.h>
-#include <Path.h>
 #include <String.h>
-#include <Url.h>
 
 #include <package/Context.h>
 #include <package/PackageRoster.h>
@@ -37,7 +34,7 @@ public:
 	virtual						~LocalRepositoryUpdateProcess();
 
 			const char*			Name() const;
-			const char*			Description() const;
+			const BString		Description();
 
 protected:
 	virtual status_t			RunInternal();

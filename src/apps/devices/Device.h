@@ -9,6 +9,7 @@
 #define DEVICE_H
 
 
+#include "device_manager_defs.h"
 #include <map>
 #include <vector>
 
@@ -83,23 +84,30 @@ public:
 								const BString& devPathsPublished = "unknown");
 	virtual					~Device();
 
-	virtual BString			GetName();
-	virtual BString			GetManufacturer();
-	virtual BString			GetDriverUsed();
-	virtual BString			GetDevPathsPublished();
+	virtual BString			GetName() const;
+	virtual BString			GetManufacturer() const;
+	virtual BString			GetDriverUsed() const;
+	virtual BString			GetDevPathsPublished() const;
 	virtual Category		GetCategory() const
 								{ return fCategory; }
 	virtual Device*			GetPhysicalParent() const
 								{ return fPhysicalParent; }
 	virtual BusType			GetBusType() const
 								{ return fBusType; }
+	virtual device_node_cookie	NodeCookie() const
+								{ return fNodeCookie; }
+	virtual void				SetNodeCookie(device_node_cookie cookie)
+								{ fNodeCookie = cookie; }
+	virtual Attributes		GetAllAttributes() const;
+	virtual BString			GetAllStrings() const;
 
-	virtual Attributes		GetAllAttributes();
-	virtual BString			GetAllStrings();
-
-	virtual Attribute		GetAttribute(const BString& name)
-								{ return Attribute(name.String(),
-									 fAttributeMap[name]); }
+	virtual Attribute		GetAttribute(const BString& name) const
+								{
+									AttributeMapIterator it = fAttributeMap.find(name);
+									if (it != fAttributeMap.end())
+										return Attribute(name.String(), it->second);
+									return Attribute(name.String(), "");
+								}
 
 	virtual void 			SetAttribute(const BString& name,
 								const BString& value);
@@ -107,10 +115,11 @@ public:
 	virtual void			InitFromAttributes() { return; }
 
 protected:
-			AttributeMap	fAttributeMap;
-			BusType			fBusType;
-			Category		fCategory;
-			Device*			fPhysicalParent;
+			AttributeMap		fAttributeMap;
+			BusType				fBusType;
+			Category			fCategory;
+			Device*				fPhysicalParent;
+			device_node_cookie	fNodeCookie;
 };
 
 #endif /* DEVICE_H */

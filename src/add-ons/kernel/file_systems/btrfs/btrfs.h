@@ -258,6 +258,7 @@ struct btrfs_super_block {
 	void Initialize(const char* name, off_t numBlocks,
 			uint32 blockSize, uint32 sectorSize);
 	uint64 TotalSize() const { return B_LENDIAN_TO_HOST_INT64(total_size); }
+	uint64 UsedSize() const { return B_LENDIAN_TO_HOST_INT64(used_size); }
 	uint32 BlockSize() const { return B_LENDIAN_TO_HOST_INT32(node_size); }
 	uint32 SectorSize() const { return B_LENDIAN_TO_HOST_INT32(sector_size); }
 	uint64 RootDirObjectID() const
@@ -497,6 +498,7 @@ struct btrfs_extent_data_ref {
 #define BTRFS_EXTENT_COMPRESS_NONE			0
 #define BTRFS_EXTENT_COMPRESS_ZLIB			1
 #define BTRFS_EXTENT_COMPRESS_LZO			2
+#define BTRFS_EXTENT_COMPRESS_ZSTD			3
 #define BTRFS_EXTENT_DATA_INLINE			0
 #define BTRFS_EXTENT_DATA_REGULAR			1
 #define BTRFS_EXTENT_DATA_PRE				2

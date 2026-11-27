@@ -363,34 +363,27 @@ fd_zero(fd_set *set, int numFDs)
 static status_t
 create_select_sync(int numFDs, wait_for_objects_sync*& _sync)
 {
-	// create sync structure
 	wait_for_objects_sync* sync = new(nothrow) wait_for_objects_sync;
 	if (sync == NULL)
 		return B_NO_MEMORY;
 	ObjectDeleter<wait_for_objects_sync> syncDeleter(sync);
 
-	// create info set
 	sync->set = new(nothrow) select_info[numFDs];
 	if (sync->set == NULL)
 		return B_NO_MEMORY;
-	ArrayDeleter<select_info> setDeleter(sync->set);
+	sync->count = numFDs;
 
-	// create select event semaphore
 	sync->sem = create_sem(0, "select");
 	if (sync->sem < 0)
 		return sync->sem;
-
-	sync->count = numFDs;
 
 	for (int i = 0; i < numFDs; i++) {
 		sync->set[i].next = NULL;
 		sync->set[i].sync = sync;
 	}
 
-	setDeleter.Detach();
 	syncDeleter.Detach();
 	_sync = sync;
-
 	return B_OK;
 }
 
@@ -584,8 +577,7 @@ common_poll(struct pollfd *fds, nfds_t numFDs, bigtime_t timeout,
 		int fd = fds[i].fd;
 
 		// initialize events masks
-		fds[i].events |= POLLNVAL | POLLERR | POLLHUP;
-		sync->set[i].selected_events = fds[i].events;
+		sync->set[i].selected_events = fds[i].events | SELECT_OUTPUT_ONLY_FLAGS;
 		sync->set[i].events = 0;
 		fds[i].revents = 0;
 
@@ -638,7 +630,7 @@ common_poll(struct pollfd *fds, nfds_t numFDs, bigtime_t timeout,
 					continue;
 
 				// POLLxxx flags and B_SELECT_xxx flags are compatible
-				fds[i].revents = sync->set[i].events & fds[i].events;
+				fds[i].revents = (fds[i].events | SELECT_OUTPUT_ONLY_FLAGS) & sync->set[i].events;
 				if (fds[i].revents != 0)
 					count++;
 			}
@@ -679,7 +671,7 @@ common_wait_for_objects(object_wait_info* infos, int numInfos, uint32 flags,
 		int32 object = infos[i].object;
 
 		// initialize events masks
-		infos[i].events |= B_EVENT_INVALID | B_EVENT_ERROR | B_EVENT_DISCONNECTED;
+		infos[i].events |= SELECT_OUTPUT_ONLY_FLAGS;
 		sync->set[i].selected_events = infos[i].events;
 		sync->set[i].events = 0;
 

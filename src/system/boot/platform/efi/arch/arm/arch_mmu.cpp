@@ -8,11 +8,13 @@
 
 #include <arm_mmu.h>
 #include <kernel.h>
+#include <arch/generic/debug_uart.h>
 #include <arch_kernel.h>
 #include <boot/platform.h>
 #include <boot/stage2.h>
 #include <efi/types.h>
 #include <efi/boot-services.h>
+
 
 #include "efi_platform.h"
 #include "generic_mmu.h"
@@ -29,6 +31,8 @@
 
 static constexpr bool kTraceMemoryMap = false;
 static constexpr bool kTracePageDirectory = false;
+
+extern DebugUART* gUART;
 
 
 // Ignore memory above 512GB
@@ -219,7 +223,7 @@ static void
 arch_mmu_allocate_page_tables(void)
 {
 	if (platform_allocate_region((void **)&sPageDirectory,
-		ARM_MMU_L1_TABLE_SIZE + ALIGN_PAGEDIR + PAGE_TABLE_AREA_SIZE, 0, false) != B_OK)
+			ARM_MMU_L1_TABLE_SIZE + ALIGN_PAGEDIR + PAGE_TABLE_AREA_SIZE, 0) != B_OK)
 		panic("Failed to allocate page directory.");
 	sPageDirectory = (uint32 *)ROUNDUP((uint32)sPageDirectory, ALIGN_PAGEDIR);
 	memset(sPageDirectory, 0, ARM_MMU_L1_TABLE_SIZE);
@@ -238,10 +242,13 @@ arch_mmu_allocate_page_tables(void)
 static void
 arch_mmu_allocate_vector_table(void)
 {
-	if (platform_allocate_region((void **)&sVectorTable, B_PAGE_SIZE, 0, false) != B_OK)
+	void *vectorTable = NULL;
+	if (platform_allocate_region(&vectorTable, B_PAGE_SIZE, 0) != B_OK)
 		panic("Failed to allocate vector table.");
+	if (platform_assign_kernel_address_for_region(vectorTable, (addr_t)sVectorTable) != B_OK)
+		panic("Failed to assign vector table address");
 
-	memset(sVectorTable, 0, B_PAGE_SIZE);
+	memset(vectorTable, 0, B_PAGE_SIZE);
 }
 
 
@@ -278,6 +285,7 @@ arch_mmu_generate_post_efi_page_tables(size_t memoryMapSize,
 
 	map_range_to_new_area(gKernelArgs.arch_args.uart.regs,
 		ARM_MMU_L2_FLAG_B | ARM_MMU_L2_FLAG_HAIKU_KERNEL_RW | ARM_MMU_L2_FLAG_XN);
+	gUART->SetBase(gKernelArgs.arch_args.uart.regs.start);
 
 	sort_address_ranges(gKernelArgs.virtual_allocated_range,
 		gKernelArgs.num_virtual_allocated_ranges);

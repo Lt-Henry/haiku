@@ -262,15 +262,14 @@ arch_debug_stack_trace(void)
 
 
 bool
-arch_debug_contains_call(Thread *thread, const char *symbol,
-	addr_t start, addr_t end)
+arch_debug_walk_stack(Thread* thread, bool (*callback)(void*, addr_t), void* context)
 {
 	return false;
 }
 
 
 int32
-arch_debug_get_stack_trace(addr_t* returnAddresses, int32 maxCount,
+arch_get_stack_trace(addr_t* returnAddresses, int32 maxCount,
 	int32 skipIframes, int32 skipFrames, uint32 flags)
 {
 	struct iframe_stack *frameStack;
@@ -390,6 +389,13 @@ arch_debug_gdb_get_registers(char* buffer, size_t bufferSize)
 {
 	// TODO: Implement!
 	return B_NOT_SUPPORTED;
+}
+
+
+void
+arch_debug_snooze(bigtime_t duration)
+{
+	spin(duration);
 }
 
 

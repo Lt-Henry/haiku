@@ -1,4 +1,4 @@
-1	english	x-vnd.Haiku.TextSearch	1757850908
+1	english	x-vnd.Haiku.TextSearch	4043418158
 Please select the files you wish to have selected for you in Tracker.	GrepWindow		请选择需要在文件浏览器中显示的文件。
 %appname% : %path%	GrepWindow		%appname% : %path%
 Failed to start xargs program!	Grepper		启动 xargs 程序失败！
@@ -7,14 +7,15 @@ Actions	GrepWindow		操作
 New window	GrepWindow		新建窗口
 Encoding	GrepWindow		编码
 Set target to parent folder	GrepWindow		设定目标为父文件夹
+Clear history	GrepWindow		清除历史
 OK	GrepWindow		确定
 %appname% : %path% : %searchtext%	GrepWindow		%appname% : %path% : %searchtext%
 Close	GrepWindow		关闭
 Look in sub-folders	GrepWindow		在子目录中搜索
 %s: Not enough room to escape the filename.	Grepper		%s：没有足够的空间以消除文件名。
+Text files only	GrepWindow		仅文本文件
 Follow symbolic links	GrepWindow		对符号链接有效
 Regular expression	GrepWindow		正则表达式
-Text files only	GrepWindow		仅文本文件
 Quit	GrepWindow		退出
 Show files in Tracker	GrepWindow		在文件浏览器中显示文件
 Please select the files you wish to keep searching.	GrepWindow		请您选择需要进一步搜索的文件。

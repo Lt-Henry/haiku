@@ -17,6 +17,16 @@
 #include "IOScheduler.h"
 
 
+struct WriteBlock : DoublyLinkedListLinkImpl<WriteBlock> {
+	off_t begin;
+	off_t end;
+	IOOperation* operation;
+};
+
+
+typedef DoublyLinkedList<WriteBlock> WriteBlockList;
+
+
 class IOSchedulerSimple : public IOScheduler {
 public:
 								IOSchedulerSimple(DMAResource* resource);
@@ -38,7 +48,8 @@ public:
 	virtual	void				Dump() const;
 
 private:
-			typedef DoublyLinkedList<IORequestOwner> RequestOwnerList;
+			struct RequestOwner;
+			typedef DoublyLinkedList<RequestOwner> RequestOwnerList;
 
 			struct RequestOwnerHashDefinition;
 			struct RequestOwnerHashTable;
@@ -47,7 +58,7 @@ private:
 			bool				_FinisherWorkPending();
 			off_t				_ComputeRequestOwnerBandwidth(
 									int32 priority) const;
-			bool				_NextActiveRequestOwner(IORequestOwner*& owner,
+			bool				_NextActiveRequestOwner(RequestOwner*& owner,
 									off_t& quantum);
 			bool				_PrepareRequestOperations(IORequest* request,
 									IOOperationList& operations,
@@ -56,6 +67,8 @@ private:
 									IOOperationList& operations,
 									int32& operationsPrepared, off_t quantum,
 									off_t& usedBandwidth);
+			bool				_CheckAndBlockWrites(IOOperationList& operations, IOOperation* operation);
+			void				_RemoveWriteBlocksForOperation(IOOperation* operation);
 			void				_SortOperations(IOOperationList& operations,
 									off_t& lastOffset);
 			status_t			_Scheduler();
@@ -64,7 +77,7 @@ private:
 	static	status_t			_RequestNotifierThread(void* self);
 
 			void				_AddRequestOwner(IORequestOwner* owner);
-			IORequestOwner*		_GetRequestOwner(team_id team, thread_id thread,
+			RequestOwner*		_GetRequestOwner(team_id team, thread_id thread,
 									bool allocate);
 
 private:
@@ -80,10 +93,8 @@ private:
 			IOOperation**		fOperationArray;
 			IOOperationList		fUnusedOperations;
 			IOOperationList		fCompletedOperations;
-			IORequestOwner*		fAllocatedRequestOwners;
-			int32				fAllocatedRequestOwnerCount;
+			WriteBlockList		fWriteBlocks;
 			RequestOwnerList	fActiveRequestOwners;
-			RequestOwnerList	fUnusedRequestOwners;
 			RequestOwnerHashTable* fRequestOwners;
 			generic_size_t		fBlockSize;
 			int32				fPendingOperations;

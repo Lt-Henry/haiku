@@ -576,6 +576,9 @@ guarded_heap_allocate(guarded_heap& heap, size_t size, size_t alignment)
 		alignment = 1;
 
 	size_t pagesNeeded = (size + B_PAGE_SIZE - 1) / B_PAGE_SIZE + 1;
+	if ((pagesNeeded * B_PAGE_SIZE) < size)
+		return NULL;
+
 	if (alignment > B_PAGE_SIZE
 		|| pagesNeeded * B_PAGE_SIZE >= GUARDED_HEAP_AREA_USE_THRESHOLD) {
 		// Don't bother, use an area directly. Since it will also fault once
@@ -712,6 +715,15 @@ guarded_heap_area_allocation_for(void* address, area_id& allocationArea)
 
 	area_info areaInfo;
 	if (get_area_info(allocationArea, &areaInfo) != B_OK)
+		return NULL;
+
+	if ((areaInfo.protection & B_STACK_AREA) != 0) {
+		panic("tried to free %p which is in a stack area (%d)",
+			address, allocationArea);
+		return NULL;
+	}
+
+	if (strncmp(areaInfo.name, "guarded_heap", strlen("guarded_heap")) != 0)
 		return NULL;
 
 	guarded_heap_page* page = (guarded_heap_page*)areaInfo.address;

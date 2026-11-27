@@ -505,7 +505,7 @@ RepositoriesView::_UpdateFromRepoConfig(RepoRow* rowItem)
 void
 RepositoriesView::AddManualRepository(BString url)
 {
-	BUrl newRepoUrl(url);
+	BUrl newRepoUrl(url, true);
 	if (!newRepoUrl.IsValid())
 		return;
 	
@@ -514,7 +514,7 @@ RepositoriesView::AddManualRepository(BString url)
 	int32 listCount = fListView->CountRows();
 	for (index = 0; index < listCount; index++) {
 		RepoRow* repoItem = dynamic_cast<RepoRow*>(fListView->RowAt(index));
-		BUrl rowRepoUrl(repoItem->Url());
+		BUrl rowRepoUrl(repoItem->Url(), true);
 		// Find an already existing URL
 		if (newRepoUrl == rowRepoUrl) {
 			(new BAlert("duplicate",
@@ -592,9 +592,10 @@ RepositoriesView::_UpdateListFromRoster()
 	BPackageKit::BPackageRoster pRoster;
 	status_t result = pRoster.GetRepositoryNames(repositoryNames);
 	if (result != B_OK) {
-		(new BAlert("error",
-			B_TRANSLATE_COMMENT("Repositories could not retrieve the names of "
-				"the currently enabled repositories.", "Alert error message"),
+		BString text(B_TRANSLATE_COMMENT("%prefname% could not retrieve the names of "
+			"the currently enabled repositories.", "Alert error message"));
+		text.ReplaceFirst("%prefname%", B_TRANSLATE_SYSTEM_NAME("Repositories"));
+		(new BAlert("error", text,
 			kOKLabel, NULL, NULL, B_WIDTH_AS_USUAL, B_WARNING_ALERT))->Go(NULL);
 		return;
 	}
@@ -637,7 +638,7 @@ RepoRow*
 RepositoriesView::_AddRepo(BString name, BString url, bool enabled)
 {
 	// URL must be valid
-	BUrl repoUrl(url);
+	BUrl repoUrl(url, true);
 	if (!repoUrl.IsValid())
 		return NULL;
 	int32 index;
@@ -645,7 +646,7 @@ RepositoriesView::_AddRepo(BString name, BString url, bool enabled)
 	// Find if the repo already exists in list
 	for (index = 0; index < listCount; index++) {
 		RepoRow* repoItem = dynamic_cast<RepoRow*>(fListView->RowAt(index));
-		BUrl itemUrl(repoItem->Url());
+		BUrl itemUrl(repoItem->Url(), true);
 		if (repoUrl == itemUrl) {
 			// update name and enabled values
 			if (name != repoItem->Name())

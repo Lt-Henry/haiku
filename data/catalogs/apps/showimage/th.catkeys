@@ -1,7 +1,5 @@
-1	thai	x-vnd.Haiku-ShowImage	575555985
-ShowImage	System name		แสดงภาพ
+1	thai	x-vnd.Haiku-ShowImage	621535342
 Page setup…	Menus		ตั้งค่าหน้า
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		เอกสาร '%s' (หน้า%d) มีการเปลี่ยนแปลง คุณต้องการปิดเอกสารหรือไม่?
 Previous file	Menus		ไฟล์ก่อนหน้า
 View	Menus		ดู
 Leave full screen	Menus		ออกจากเต็มหน้าจอ
@@ -26,7 +24,6 @@ Zoom in	Menus		ซูมเข้า
 Last page	Menus		หน้าสุดท้าย
 Cancel	ClosePrompt		ยกเลิก
 High-quality zooming	Menus		การซูมคุณภาพสูง
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		เอกสาร '%s' มีการเปลี่ยนแปลง คุณต้องการปิดเอกสารหรือไม่?
 Close	Menus		ปิด
 Selection mode	Menus		โหมดการเลือก
 DPI:	PrintOptionsWindow		DPI:
@@ -43,13 +40,11 @@ Stretch to window	Menus		ขยายเต็มหน้าต่าง
 Job setup	PrintOptionsWindow		ตั้งค่างาน
 Clear selection	Menus		ลบการเลือก
 Rotate clockwise	Menus		หมุนตามเข็มนาฬิกา
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		ไม่สามารถโหลดภาพ! อาจไม่มีไฟล์หรือโปรแกรมแปลรูปภาพสำหรับไฟล์
 Rotate counterclockwise	Menus		หมุนทวนเข็มนาฬิกา
 Previous page	Menus		หน้าก่อนหน้า
 Fit to window	Menus		พอดีกับหน้าต่าง
 Go to page	Menus		ไปที่หน้า
 Browse	Menus		เบราวส์
-Progress monitor	ProgressWindow		ตรวจสอบกระบวนการ
 Edit	Menus		แก้ไข
 Move to Trash	Menus		ย้ายไปถังขยะ
 Use as background…	Menus		ใช้เป็นพื้นหลัง

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2018, Axel Dörfler, axeld@pinc-software.de.
+ * Copyright 2015-2026, Axel Dörfler, axeld@pinc-software.de.
  * Distributed under the terms of the MIT License.
  */
 
@@ -31,7 +31,7 @@
 #include <locks.h>
 #include <MessengerPrivate.h>
 #include <RosterPrivate.h>
-#include <syscalls.h>
+#include <drivers/safemode_settings.h>
 #include <system_info.h>
 
 #include "multiuser_utils.h"
@@ -360,6 +360,7 @@ LaunchDaemon::LaunchDaemon(bool userMode, status_t& error)
 	BServer(kLaunchDaemonSignature, NULL,
 		create_port(B_LOOPER_PORT_DEFAULT_CAPACITY,
 			userMode ? "AppPort" : B_LAUNCH_DAEMON_PORT_NAME), false, &error),
+	fJobQueue(false),
 	fInitTarget(userMode ? NULL : new Target("init")),
 #ifdef TEST_MODE
 	fUserMode(true)
@@ -1563,12 +1564,18 @@ LaunchDaemon::_AddRunTargets(BMessage& message)
 void
 LaunchDaemon::_AddRunTargets(BMessage& message, const char* name)
 {
-	BMessage targets;
-	if (name != NULL && message.FindMessage(name, &targets) != B_OK)
-		return;
+	BMessage targetsMessage;
+	BMessage* targets;
+	if (name != NULL) {
+		targets = &targetsMessage;
+		if (message.FindMessage(name, &targetsMessage) != B_OK)
+			return;
+	} else {
+		targets = &message;
+	}
 
 	const char* target;
-	for (int32 index = 0; targets.FindString("target", index, &target) == B_OK;
+	for (int32 index = 0; targets->FindString("target", index, &target) == B_OK;
 			index++) {
 		fRunTargets.Add(target);
 	}
@@ -1734,10 +1741,9 @@ LaunchDaemon::_CanLaunchJob(Job* job, uint32 options, bool testOnly)
 	if (job == NULL || !job->CanBeLaunched())
 		return false;
 
-	return (options & FORCE_NOW) != 0
-		|| (job->EventHasTriggered() && job->CheckCondition(*this)
-			&& ((options & TRIGGER_DEMAND) == 0
-				|| Events::TriggerDemand(job->Event(), testOnly)));
+	if ((options & FORCE_NOW) != 0 || job->EventHasTriggered())
+		return true;
+	return (options & TRIGGER_DEMAND) != 0 && Events::TriggerDemand(job->Event(), testOnly);
 }
 
 
@@ -1751,13 +1757,17 @@ LaunchDaemon::_CanLaunchJobRequirements(Job* job, uint32 options)
 	int32 count = job->Requirements().CountStrings();
 	for (int32 index = 0; index < count; index++) {
 		Job* requirement = FindJob(job->Requirements().StringAt(index));
-		if (requirement != NULL
-			&& !requirement->IsRunning() && !requirement->IsLaunching()
-			&& (!_CanLaunchJob(requirement, options, true)
-				|| _CanLaunchJobRequirements(requirement, options))) {
-			requirement->AddPending(job->Name());
-			return false;
+		// running already?
+		if (requirement == NULL || requirement->IsRunning() || requirement->IsLaunching())
+			continue;
+		// can be launched?
+		if (_CanLaunchJob(requirement, options, true)
+			&& _CanLaunchJobRequirements(requirement, options)) {
+			continue;
 		}
+		// launch again when required job is launched
+		requirement->AddPending(job->Name());
+		return false;
 	}
 
 	return true;
@@ -1791,6 +1801,9 @@ LaunchDaemon::_LaunchJob(Job* job, uint32 options)
 	for (int32 index = 0; index < count; index++) {
 		Job* requirement = FindJob(job->Requirements().StringAt(index));
 		if (requirement != NULL) {
+			if (requirement->IsLaunching() || requirement->IsRunning())
+				continue;
+
 			// TODO: For jobs that have their communication channels set up,
 			// we would not need to trigger demand at this point
 			if (!_LaunchJob(requirement, options | TRIGGER_DEMAND)) {
@@ -1805,13 +1818,22 @@ LaunchDaemon::_LaunchJob(Job* job, uint32 options)
 	if (job->Event() != NULL)
 		job->Event()->ResetTrigger();
 
-	job->SetLaunching(true);
+	if (!job->IsLaunching() && !job->IsRunning()) {
 
-	status_t status = fJobQueue.AddJob(job);
-	if (status != B_OK) {
-		debug_printf("Adding job %s to queue failed: %s\n", job->Name(),
-			strerror(status));
-		return false;
+		if (job->CheckCondition(*this)) {
+			job->SetLaunching(true);
+			status_t status = fJobQueue.AddJob(job);
+			if (status != B_OK) {
+				debug_printf("Adding job %s to queue failed: %s\n", job->Name(), strerror(status));
+				return false;
+			}
+		} else {
+			fLog.JobSkipped(job);
+
+			// job conditions not present, launch
+			while (BJob* dependantJob = job->DependantJobAt(0))
+				fJobQueue.RemoveDependency(dependantJob, job);
+		}
 	}
 
 	// Try to launch pending jobs as well
@@ -1851,7 +1873,7 @@ LaunchDaemon::_StopJob(Job* job, bool force)
 	}
 	// TODO: allow custom shutdown
 
-	send_signal(-job->Team(), SIGINT);
+	send_signal(job->Team(), SIGTERM);
 	// TODO: this would be the next step, again, after a delay
 	//send_signal(job->Team(), SIGKILL);
 }
@@ -2016,17 +2038,7 @@ LaunchDaemon::_StartSession(const char* login)
 void
 LaunchDaemon::_RetrieveKernelOptions()
 {
-	char buffer[32];
-	size_t size = sizeof(buffer);
-	status_t status = _kern_get_safemode_option(B_SAFEMODE_SAFE_MODE, buffer,
-		&size);
-	if (status == B_OK) {
-		fSafeMode = !strncasecmp(buffer, "true", size)
-			|| !strncasecmp(buffer, "yes", size)
-			|| !strncasecmp(buffer, "on", size)
-			|| !strncasecmp(buffer, "enabled", size);
-	} else
-		fSafeMode = false;
+	fSafeMode = __get_safemode_boolean(B_SAFEMODE_SAFE_MODE, false);
 }
 
 

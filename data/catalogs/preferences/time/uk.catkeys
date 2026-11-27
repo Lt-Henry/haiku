@@ -1,4 +1,4 @@
-1	ukrainian	x-vnd.Haiku-Time	3691539601
+1	ukrainian	x-vnd.Haiku-Time	1111403326
 OK	Time		ОК
 Message receiving failed	Time		Не вдалось отримати повідомлення
 Australia	Time		Австралія
@@ -10,13 +10,12 @@ Set time zone	Time		Встановити часову зону
 Waiting for answer failed	Time		Відповідь не отримана
 <Other>	Time		<Інше>
 Received invalid time	Time		Отримано неправильний час
-Remove	Time		Вилучити
+Remove	Time		Прибрати
 Synchronize again	Time		Синхронізувати знову
 Asia	Time		Азія
 Try all servers	Time		Випробувати всі сервери
 Time	Time		Час
 Current time:	Time		Поточний час:
-The following error occured while synchronizing:\n%s: %s	Time		При синхронізації сталася наступна помилка:\n%s: %s
 Europe	Time		Європа
 Show day of week	Time		Показувати день тижня
 Local time (Windows compatible)	Time		Місцевий час (сумісний з Windows)

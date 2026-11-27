@@ -38,6 +38,7 @@
 #include "fssh_api_wrapper.h"
 #else
 #include <fs_interface.h>
+#include <interrupts.h>
 #include <lock.h>
 #endif
 
@@ -108,7 +109,6 @@ struct vnode {
 
 	// Members added for Haiku port
 	ino_t v_parent; /* v inode of parent directory */
-	const char* v_mime; /* v mime type for VREG nodes, otherwise NULL */
 	void* v_cache; /* v file cache for VREG nodes, otherwise NULL */
 	void* v_file_map; /* v file map for VREG nodes, otherwise NULL */
 	bool v_resizing; /* v disable IO (see comment in dosfs_wstat) */
@@ -147,6 +147,11 @@ assert_vop_elocked(struct vnode* vp, const char* str)
 {
 	if (vp == NULL)
 		return;
+#ifdef _KERNEL_MODE
+	// skip the assert when in the kernel debugger where the lock can't be acquired
+	if (!are_interrupts_enabled())
+		return;
+#endif // _KERNEL_MODE
 	ASSERT_WRITE_LOCKED_RW_LOCK(&vp->v_vnlock->haikuRW);
 }
 
@@ -246,7 +251,11 @@ init_va_filerev(void)
 static inline void
 vput(struct vnode* vp)
 {
-	put_vnode(vp->v_mount->mnt_fsvolume, VTODE(vp)->de_inode);
+	// The driver might call vput to balance a getnewvnode() call. The getnewvnode stand-in
+	// written for the Haiku port, which leaves the node in VSTATE_UNINITIALIZED, doesn't get a
+	// ref to the node though.
+	if (vp->v_state != VSTATE_UNINITIALIZED)
+		put_vnode(vp->v_mount->mnt_fsvolume, VTODE(vp)->de_inode);
 
 	rw_lock_write_unlock(&vp->v_vnlock->haikuRW);
 }

@@ -1,4 +1,4 @@
-1	japanese	x-vnd.Haiku-libtracker	1516006117
+1	japanese	x-vnd.Haiku-libtracker	1752805840
 Created	ContainerWindow		作成日時
 Icon	AttributesView		アイコン
 Open and make preferred	OpenWithWindow		関連付けて開く
@@ -38,12 +38,11 @@ Type	AttributesView		型
 Prompt	FSUtils		プロンプト
 Error in regular expression:\n\n'%errstring'	PoseView		正規表現にエラーがあります:\n\n'%errstring'
 Small bitmap icon	AttributesView		小ビットマップアイコン
-Would you like to find a suitable application to open the file?	FSUtils		このファイルを開くことのできるアプリケーションを検索しますか?
+Would you like to find a suitable application to open the file?	FSUtils		このファイルを開らけるアプリケーションを検索しますか?
 You cannot replace a folder or a symbolic link with a file.	FSUtils		フォルダーをリンクまたはファイルと置き換えることはできません。
 (unknown)	InfoWindow		(不明)
 {0, plural, other{<# dates>}}	AttributesView		{0, plural, other{<# 日>}}
 Trailing \\.	libtracker		行末に \\ があります。
-At %func \nfind_directory() failed. \nReason: %error	Email Query Columns		%func にて\nfind_directory() が失敗。\nエラー: %error
 Handles any file	OpenWithWindow		すべてのファイルに対応
 save text	FilePanelPriv		テキストの保存
 Raw data	AttributesView		生データ
@@ -58,6 +57,7 @@ Identify	ContainerWindow		ファイル形式を判別
 Create link	ContainerWindow		リンクの作成
 starts with	FindPanel		指定文字列で始まる
 Replace	FSUtils		置換
+At %func \nfind_directory() failed. \nReason: %error	TrackerInitialState		At %func \nfind_directory() failed. \nReason: %error
 ?+* follows nothing.	libtracker		?+* のうしろに何もありません。
 Include Trash	FindPanel		ごみ箱を含める
 Rectangle	AttributesView		四角
@@ -103,6 +103,7 @@ Affine transform	AttributesView		アフィン変換
 Window	ContainerWindow		ウィンドウ
 %BytesPerSecond/s	StatusWindow		%BytesPerSecond/秒
 Remove	FindPanel		削除
+You cannot create a link to the %trash% directory.	FSUtils		%trash%ディレクトリへのリンクは作成できません。
 Company	Person Query Columns		会社
 Select folders…	FindPanel		フォルダーの選択…
 Recent documents	FavoritesMenu		最近使ったドキュメント
@@ -127,7 +128,7 @@ Owner	FilePermissionsView		所有者
 Cancel	FSClipBoard		中止
 Modified	PoseView		更新日時
 Save as template…	FindPanel		テンプレートとして保存…
-Move to Trash	ContainerWindow		ごみ箱に捨てる
+Move to Trash	ContainerWindow		ごみ箱に移動する
 All files and folders	FindPanel		すべてのファイルとフォルダー
 Add-ons	ContainerWindow		アドオン
 Too many parenthesis.	libtracker		括弧が多すぎます。
@@ -138,13 +139,11 @@ URL	Bookmark Query Columns		URL
 Floating point number	AttributesView		浮動小数点数
 Cancel	ContainerWindow		中止
 Attributes	ContainerWindow		属性
-Error deleting items	FSUtils		ファイル削除中にエラーが発生しました
 Cut	ContainerWindow		切り取り
 Disks	Model		ディスク
-Create a Query template	FindPanel		クエリ雛型の作成
+Create a Query template	FindPanel		クエリテンプレートの作成
 Size	FindPanel		サイズ
 New submenu	ContainerWindow	Folder name of New-template submenu	新規サブメニュー
-OK	Email Query Columns		OK
 Location	QueryPoseView		場所
 Edit query	ContainerWindow		クエリの編集
 {0, plural, one{(# byte)} other{(# bytes)}}	InfoWindow		{0, plural, one{(# バイト)} other{(# バイト)}}
@@ -164,13 +163,16 @@ Could not open \"%name\" (%error). 	FSUtils		\"%name\" を開けません (%err
 Media parameter group	AttributesView		メディアパラメーターグループ
 %name info	InfoWindow	InfoWindow Title	%name の情報
 If you move the home folder, %osName may not behave properly!\n\nAre you sure you want to do this?\n\nTo move the home folder anyway, hold down the Shift key and click \"Move\".	FSUtils		ホームフォルダーを移動すると、%osName は正しく動作しないかもしれません!\n\n移動しますか?\n\nそれでもホームフォルダーを移動するなら、シフトキーを押しながら \"移動\" を押してください。
+{0, plural, other{#/%total selected}}	CountView	Number of selected items out of a total: \"10/30 selected\"	{0, plural, other{#/%個のアイテムが選択されました}}
 Property info	AttributesView		プロパティ情報
 Sorry, you can't create links in the Trash.	PoseView		ごみ箱にリンクを作成できません。
 From	Email Query Columns		差出人
 Open selection with:	OpenWithWindow		選択ファイルをアプリケーションで開く:
+Preferences…	ContainerWindow		設定…
 Could not open \"%document\" because application \"%app\" is in the Trash. 	FSUtils		\"%app\" はごみ箱にあるため、\"%document\" を開けません。
 Work Phone	Person Query Columns		勤務先の電話番号
 Select folders	FindPanel		フォルダーの選択
+OK	TrackerInitialState		OK
 Close	ContainerWindow		閉じる
 Get info	ContainerWindow		詳細情報...
 MIME Type	AttributesView		MIMEタイプ
@@ -195,8 +197,8 @@ Media parameter web	AttributesView		メディアパラメーターウェブ
 Sorry, you can't save things at the root of your system.	FilePanelPriv		システムのルートフォルダーへの保存は許可されていません。
 Restore	ContainerWindow		元に戻す
 Location	ContainerWindow		場所
-Skip	FSUtils		スキップ
 Warning space color	SettingsView		空き容量警告の色
+Skip	FSUtils		スキップ
 Text list	AttributesView		テキストリスト
 Used space color	SettingsView		使用済容量の色
 Cancel	FSUtils		中止
@@ -260,6 +262,7 @@ New folder %d	FSUtils		新規フォルダー %d
 Extended attribute	AttributesView		拡張属性
 Error %error loading Add-On %name.	ContainerWindow		アドオン %name の読み込み中に %error エラーが発生。
 Unmatched brackets.	libtracker		角括弧が不一致です。
+You cannot copy or move the 'printers' directory.	FSUtils		'printers' ディレクトリをコピーまたは移動はできません。
 You are trying to replace the item:\n\t%name%dest\nwith:\n\t%name%src\n\nWould you like to replace it with the one you are %movemode?	FSUtils		下記の項目:\n\t%name%dest\nを\n\t%name%src\nで置き換えようとしています。\n\n%movemode の項目と置き換えますか?
 Empty Trash	ContainerWindow		ごみ箱を空にする
 no supporting apps	OpenWithWindow		対応するアプリケーションはありません
@@ -272,10 +275,12 @@ label too long	PoseView		ラベルが長すぎます
 Error creating link to \"%name\".	FSUtils		\"%name\"へのリンク作成時にエラーが発生しました。
 Unknown	FilePermissionsView		不明
 Paste links	ContainerWindow		リンクを貼り付ける
+You cannot copy or move the %trash% directory.	FSUtils		%trash%ディレクトリをコピーまたは移動はできません。
 Restoring: 	StatusWindow		元に戻しています:
 The Tracker must be running to set the default printer.	PoseView		デフォルトプリンターを設定するにはTrackerが動作している必要があります。
 calculating…	InfoWindow		計算中...
 Preferred for file	OpenWithWindow		関連付けの第一優先
+{0, plural, one{# selected} other{# selected}}	FindPanel	\"1 selected (singular)\" or \"2 selected (plural)\"	{0, plural, one{# 個選択済} other{# 個選択済}}
 OK	AutoMounterSettings		OK
 copying	FSUtils		コピー中
 MIME String	AttributesView		MIME文字列
@@ -284,8 +289,10 @@ Execute	FilePermissionsView		実行
 no	AttributesView		no
 Show volumes on Desktop	SettingsView		ディスクをデスクトップに表示
 Recent folders	ContainerWindow		最近使ったフォルダー
+Error deleting items: %error	FSUtils		アイテム削除時にエラー: %error
 Desktop	Model		デスクトップ
 Select all	ContainerWindow		すべて選択
+{0, plural, other{#/%total %filter}}	CountView	Number of selected items from a filtered set: \"10/30 view\"	{0, plural, other{#/%選択済 %filter}}
 apps	B_APPS_DIRECTORY		アプリケーション
 Error calculating folder size.	InfoWindow		フォルダーサイズの計算中にエラー発生。
 Delete	FSUtils		削除
@@ -298,6 +305,7 @@ Error moving \"%name\".	FSUtils		\"%name\" の移動中にエラーが発生し
 Open	ContainerWindow		開く
 Settings…	MountMenu		設定...
 You cannot put the selected item(s) into the trash.	FSUtils		選択した項目をごみ箱に移動できません
+Target:	FindPanel	The disks/folders that are searched. Similar to TextSearch's 'Set target'.	検索対象:
 starts with	SelectionWindow		指定文字列で始まる
 Any	AttributesView		任意の
 Invert	SelectionWindow		反転
@@ -317,8 +325,8 @@ Could not open \"%document\" with application \"%app\" (%error). 	FSUtils		ア�
 Create %s clipping	PoseView		%s クリップの作成
 Error moving \"%name\"	FSUtils		\"%name\" の移動中にエラーが発生
 To: %dir	StatusWindow		%dir
-Cancel	Tracker		中止
 Paste layout	ContainerWindow		レイアウトを貼り付け
+Cancel	Tracker		中止
 yes	AttributesView		はい
 Make active printer	ContainerWindow		プリンターを有効にする
 Copy to	ContainerWindow		次へコピー
@@ -335,14 +343,16 @@ Messenger	AttributesView		Messenger
 {0, plural, one{<# data byte>} other{<# bytes of data>}}	AttributesView		{0, plural, one{<# バイト>} other{<# バイト>}}
 Version	OpenWithWindow		バージョン
 The entered file name is too long.	FSUtils		入力されたファイル名が長すぎます。
-Some of the selected items cannot be moved to the Trash. Would you like to delete them instead? (This operation cannot be reverted.)	PoseView		いくつかの選択項目はごみ箱に捨てられません。完全に削除してもよろしいですか?元に戻せないので、ご注意ください。
+Some of the selected items cannot be moved to the Trash. Would you like to delete them instead? (This operation cannot be reverted.)	PoseView		いくつかの選択項目はごみ箱に移動できません。完全に削除してもよろしいですか?元に戻せないので、ご注意ください。
 Add printer…	ContainerWindow		プリンターの追加...
 Permissions	ContainerWindow		アクセス権
+Trash	FSUtils		ごみ箱
 Size:	InfoWindow		サイズ:
 Copy	ContainerWindow		コピー
-The selected item cannot be moved to the Trash. Would you like to delete it instead? (This operation cannot be reverted.)	PoseView		選択した項目をごみ箱に捨てられません。完全に削除しても良いでしょうか? 元には戻せないので、ご注意ください。
+The selected item cannot be moved to the Trash. Would you like to delete it instead? (This operation cannot be reverted.)	PoseView		選択した項目をごみ箱に移動できません。完全に削除しても良いでしょうか? 元には戻せないので、ご注意ください。
 Sorry, the 'Character' attribute cannot store a multi-byte glyph.	WidgetAttributeText		「文字」属性にはマルチバイト文字を保存できません。
 And	FindPanel		かつ
+copy	PoseView	filename copy	コピー
 Palette-indexed picture	AttributesView		パレット付き画像
 Drawing pattern	AttributesView		図柄
 File offset	AttributesView		ファイルオフセット
@@ -357,7 +367,6 @@ Create link here	ContainerWindow		ここにリンクを作成
 Force identify	ContainerWindow		ファイル形式の判別
 no items	CountView		0 項目
 Time	AttributesView		時間
-Disks	DirMenu		ディスク
 Open parent	ContainerWindow		親フォルダーを開く
 Find…	ContainerWindow		検索...
 moving	FSUtils		移動中
@@ -374,9 +383,9 @@ Proceed	FSUtils		続行
 Edit favorites…	FilePanelPriv		お気に入りの編集...
 You can't move a folder into itself or any of its own sub-folders.	FSUtils		フォルダーを同じフォルダーやそのサブフォルダーに移動できません。
 New	ContainerWindow		新規
-You must drop items on one of the disk icons in the \"Disks\" window.	FSClipBoard		\"Disks\"  ウィンドウ内のディスクアイコンの上に項目をドラッグ＆ドロップしてください。
+You must drop items on one of the disk icons in the \"Disks\" window.	FSClipBoard		\"Disks\" ウィンドウ内のディスクアイコンの上に項目をドラッグ＆ドロップしてください。
 If you alter %target, %osName may not behave properly!\n\nAre you sure you want to do this?	FSUtils		%target を変更すると、%osName は正しく動作しないかもしれません!\n\n変更しますか?
-Sorry, you can't copy items to the Trash.	FSClipBoard		ごみ箱にコピーできません。
+Sorry, you can't copy items to the Trash.	FSClipBoard		すみません、ごみ箱にコピーできません。
 Some items already exist in this folder with the same names as the items you are %verb.\n \nWould you like to replace them with the ones you are %verb or be prompted for each one?	FSUtils		%verbしようとしているものと同じ名前の項目がすでにフォルダー内に存在します。\n \n%verbして置き換えますか？それとも、一つずつ確認しますか?
 When	Email Query Columns		受信日
 Object	AttributesView		オブジェクト
@@ -419,6 +428,7 @@ Move here	ContainerWindow		ここに移動
 the config folder	FSUtils		config フォルダー
 Sorry, could not create a new folder.	FSUtils		新しいフォルダーを作成できません。
 MIME Signature	AttributesView		MIME 署名
+%ld × %ld	ContainerWindow	The '×' is the Unicode multiplication sign U+00D7	%ld × %ld
 Rename	FSUtils	button label	名前の変更
 Clean up all	ContainerWindow		すべてを整列
 Add current folder	FilePanelPriv		このフォルダーを追加
@@ -465,7 +475,7 @@ Defaults	TrackerSettingsWindow		デフォルト
 Sorry, there is not enough free space on the destination volume to copy the selection.	FSUtils		コピー先ディスクの空き容量が不足しています。コピーができません。
 True-color picture	AttributesView		トゥルーカラー画像
 Alignment	AttributesView		配置
-Move to Trash	FSUtils		ごみ箱に捨てる
+Move to Trash	FSUtils		ごみ箱に移動する
 Handles %type	OpenWithWindow		%type に対応
 Cancel	PoseView		中止
 Options	FindPanel		オプション

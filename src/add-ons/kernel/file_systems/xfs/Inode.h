@@ -140,10 +140,86 @@ struct ExtentMapEntry {
 };
 
 
-struct xfs_timestamp_t {
+/*
+ * Legacy ondisk inode timestamps consist of signed 32-bit counters for
+ * seconds and nanoseconds; time zero is unix epoch, Jan 1 00:00::00 UTC
+ * 1970, which means that timestamp epoch is same as unix epoch. Therefore,
+ * the ondisk min and max defined here can be used directly to constrain the
+ * incore timestamps on a unix system. Note that we actually encode a uint64
+ * value on disk.
+ *
+ * When the bigtime feature is enabled, ondisk inode timestamps become an
+ * uint64 nanoseconds counter. This means that the bigtime inode timestamp
+ * epoch is the start of the classic timestamp range, which is Dec 13 20:45:52
+ * UTC 1901. Since epochs are different callers must use the bigtime conversion
+ * functions when encoding and decoding ondisk timestamps.
+ */
+typedef uint64 xfs_timestamp_t;
+
+
+/* Legacy timestamp encoding format */
+struct xfs_legacy_timestamp {
 		int32				t_sec;
 		int32				t_nsec;
 };
+
+
+#define NSEC_PER_SEC 1000000000L
+
+/*
+ * Smallest possible ondisk seconds value with legacy timestamps.
+ * The timestamp is exact Dec 13 20:45:52 UTC 1901.
+ */
+#define XFS_LEGACY_TIME_MIN ((int64_t)INT32_MIN)
+
+
+/*
+ * Largets possible ondisk seconds value with legacy timestamps.
+ * The timestamp value is exact Jan 19 03:14:07 UTC 2038.
+ */
+#define XFS_LEGACY_TIME_MAX ((int64_t)INT32_MAX)
+
+
+/*
+ * Smallest possible ondisk seconds value with bigtime timestamps.
+ * The timestamp value is exact (after conversion to unix timestamp)
+ * Dec 13 20:45:52 UTC 1901.
+ */
+#define XFS_BIGTIME_TIME_MIN ((int64_t)0)
+
+
+/*
+ * Largest supported ondisk seconds value with bigtime timestamps.
+ * The timestamp value is exact (after conversion to unix timestamp)
+ * Jul 2 20:20:24 UTC 2486.
+ */
+#define XFS_BIGTIME_TIME_MAX ((int64_t)((-1ULL / NSEC_PER_SEC) & ~0x3ULL))
+
+
+/*
+ * Bigtime epoch is set exactly to the minimum time value that a legacy
+ * 32-bit timestamp can represent when using unix epoch as a reference.
+ * Hence the unix epoch is at a fixed offset into the supported bigtime
+ * timestamp range.
+ *
+ * The following conversion factor converts a seconds counter from the
+ * unix epoch to the bigtime epoch
+ */
+#define XFS_BIGTIME_EPOCH_OFFSET (-(int64_t)INT32_MIN)
+
+
+static inline uint64
+xfs_unix_to_bigtime(time_t unix_seconds)
+{
+	return (uint64)unix_seconds + XFS_BIGTIME_EPOCH_OFFSET;
+}
+
+
+static inline time_t
+xfs_bigtime_to_unix(uint64 ondisk_seconds)
+{
+	return (time_t)ondisk_seconds - XFS_BIGTIME_EPOCH_OFFSET;
+}
 
 
 enum xfs_dinode_fmt_t {
@@ -178,45 +254,69 @@ enum xfs_dinode_fmt_t {
 #define XFS_DIR3_FT_MAX			9
 
 
+// Values for di_flags2
+#define XFS_DIFLAG2_BIGTIME_BIT 3
+#define XFS_DIFLAG2_NREXT64_BIT 4
+#define XFS_DIFLAG2_BIGTIME (1ULL << XFS_DIFLAG2_BIGTIME_BIT)
+#define XFS_DIFLAG2_NREXT64 (1ULL << XFS_DIFLAG2_NREXT64_BIT)
+
+
 /*
  * The dinode is the same for all types of inodes, the data and attribute
  * fork might be different and that is to be handled accordingly.
  */
 class Inode {
 public:
-	typedef struct Dinode{
+	struct Dinode{
 	public:
 		uint16				di_magic;
 		uint16				di_mode;
-		// uses standard S_Ixxx
 		int8				di_version;
-		//This either would be 1 or 2
 		int8				di_format;
 		uint16				di_onlink;
 		uint32				di_uid;
 		uint32				di_gid;
 		uint32				di_nlink;
-		uint16				di_projid;
-		uint8				di_pad[8];
-		uint16				di_flushiter;
+		uint16				di_projid_lo;
+		uint16				di_projid_hi;
+		union {
+			uint64			di_big_nextents;
+				// Number of extents if NREXT64 is set
+			uint64			di_v3_pad;
+				// Padding for V3 inodes without NREXT64 set
+
+			// Padding and inode flush counter for V2 inodes
+			struct {
+				uint8		di_v2_pad[6];
+				uint16		di_flushiter;
+			};
+		};
 		xfs_timestamp_t		di_atime;
 		xfs_timestamp_t		di_mtime;
 		xfs_timestamp_t		di_ctime;
 		xfs_fsize_t			di_size;
-		// size in bytes or length if link
+			// size in bytes or length if link
 		xfs_rfsblock_t		di_nblocks;
-		// blocks used including metadata
-		// extended attributes not included
+			// blocks used including metadata, extended attributes not included
 		xfs_extlen_t		di_extsize;
-		// extent size
-		xfs_extnum_t		di_nextents;
-		// number of data extents
-		xfs_aextnum_t		di_naextents;
-		// number of EA extents
+			// extent size
+		union {
+			// Number of extents for V2 inodes and V3 inodes without NREXT63 set
+			struct {
+				uint32		di_nextents;
+				uint16		di_naextents;
+			} __attribute__((packed));
+
+			// Number of attribute extents if NREXT64 is set
+			struct {
+				uint32		di_big_anextents;
+				uint16		di_nrext64_pad;
+			} __attribute__((packed));
+		} __attribute__((packed));
 		uint8				di_forkoff;
-		// decides where di_a starts
+			// decides where di_a starts
 		int8				di_aformat;
-		// similar to di_format
+			// similar to di_format
 		uint32				di_dmevmask;
 		uint16				di_dmstate;
 		uint16				di_flags;
@@ -306,10 +406,8 @@ public:
 			uint32				UserId() const { return fNode->di_uid; }
 			uint32				GroupId() const { return fNode->di_gid; }
 			bool				HasFileTypeField() const;
-			xfs_extnum_t		DataExtentsCount() const
-									{ return fNode->di_nextents; }
-			xfs_extnum_t		AttrExtentsCount() const
-									{ return fNode->di_naextents; }
+			xfs_extnum_t		DataExtentsCount() const;
+			xfs_aextnum_t		AttrExtentsCount() const;
 			uint64				FileSystemBlockToAddr(uint64 block);
 			uint8				ForkOffset() const
 									{ return fNode->di_forkoff; }
@@ -332,9 +430,16 @@ public:
 			size_t				GetPtrOffsetIntoNode(int pos);
 			uint32				SizeOfLongBlock();
 private:
-			void				SwapEndian();
-private:
-			status_t			GetFromDisk();
+			xfs_timestamp_t		_ConvertLegacyToBigTimestamp(xfs_legacy_timestamp* lts) const;
+			bool				_IsBigtimeEnabled() const
+									{ return Version() == 3
+										&& fNode->di_flags2 & XFS_DIFLAG2_BIGTIME; }
+			bool				_IsLargeExtentsEnabled() const
+									{ return Version() == 3
+										&& fNode->di_flags2 & XFS_DIFLAG2_NREXT64; }
+			void				_SwapEndian();
+			status_t			_GetFromDisk();
+
 			Dinode*				fNode;
 			xfs_ino_t			fId;
 			Volume*				fVolume;
@@ -343,32 +448,5 @@ private:
 			ExtentMapEntry*		fExtents;
 };
 
-
-uint32 hashfunction(const char* name, int length);
-
-
-// A common function to return given hash lowerbound
-template<class T> void
-hashLowerBound(T* entry, int& left, int& right, uint32 hashValueOfRequest)
-{
-	int mid;
-
-	/*
-	* Trying to find the lowerbound of hashValueOfRequest
-	* This is slightly different from bsearch(), as we want the first
-	* instance of hashValueOfRequest and not any instance.
-	*/
-	while (left < right) {
-		mid = (left + right) / 2;
-		uint32 hashval = B_BENDIAN_TO_HOST_INT32(entry[mid].hashval);
-		if (hashval >= hashValueOfRequest) {
-			right = mid;
-			continue;
-		}
-		if (hashval < hashValueOfRequest)
-			left = mid+1;
-	}
-	TRACE("left:(%" B_PRId32 "), right:(%" B_PRId32 ")\n", left, right);
-}
 
 #endif

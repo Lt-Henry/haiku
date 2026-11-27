@@ -6,6 +6,7 @@
 
 #include "Node.h"
 
+#include "Utility.h"
 #include "VerifyHeader.h"
 
 
@@ -27,17 +28,15 @@ NodeDirectory::~NodeDirectory()
 {
 	delete fDataMap;
 	delete fLeafMap;
-	delete fDataBuffer;
-	delete fLeafBuffer;
+	delete[] fDataBuffer;
+	delete[] fLeafBuffer;
 }
 
 
 xfs_extnum_t
 NodeDirectory::FirstLeafMapIndex()
 {
-	int len = fInode->DataExtentsCount();
-
-	for (int i = 0; i < len; i++) {
+	for (xfs_extnum_t i = 0; i < fInode->DataExtentsCount(); i++) {
 		void* directoryFork = DIR_DFORK_PTR(fInode->Buffer(), fInode->CoreInodeSize());
 		void* pointerToMap = (void*)((char*)directoryFork + i * EXTENT_SIZE);
 
@@ -77,7 +76,7 @@ NodeDirectory::Init()
 bool
 NodeDirectory::IsNodeType()
 {
-	if (fFirstLeafMapIndex == -1)
+	if (fFirstLeafMapIndex == -1UL)
 		return false;
 	return true;
 }
@@ -138,7 +137,7 @@ NodeDirectory::FillBuffer(int type, char* blockBuffer, int howManyBlocksFurthur)
 	if (type == DATA) {
 		fDataBuffer = blockBuffer;
 		ExtentDataHeader* header = ExtentDataHeader::Create(fInode, fDataBuffer);
-		if(header == NULL)
+		if (header == NULL)
 			return B_NO_MEMORY;
 		if (!VerifyHeader<ExtentDataHeader>(header, fDataBuffer, fInode,
 				howManyBlocksFurthur, fDataMap, XFS_NODE)) {
@@ -240,15 +239,22 @@ NodeDirectory::EntrySize(int len) const
 void
 NodeDirectory::SearchAndFillDataMap(uint64 blockNo)
 {
-	int len = fInode->DataExtentsCount();
-
-	for (int i = 0; i <= len - fFirstLeafMapIndex; i++) {
+	for (xfs_extnum_t i = 0; i <= fInode->DataExtentsCount() - fFirstLeafMapIndex; i++) {
 		FillMapEntry(i, fDataMap);
 		if (fDataMap->br_startoff <= blockNo
 			&& (blockNo <= fDataMap->br_startoff + fDataMap->br_blockcount - 1))
 			// Map found
 			return;
 	}
+}
+
+
+status_t
+NodeDirectory::Rewind()
+{
+	fOffset = 0;
+	fCurBlockNumber = -1;
+	return B_OK;
 }
 
 
@@ -369,7 +375,7 @@ NodeDirectory::Lookup(const char* name, size_t length, xfs_ino_t* ino)
 	/* Leaf now has the nodes. */
 	uint32 rightMapOffset;
 	status = FindHashInNode(hashValueOfRequest, &rightMapOffset);
-	if(status != B_OK)
+	if (status != B_OK)
 		return status;
 
 	if (rightMapOffset == 1) {
@@ -379,8 +385,7 @@ NodeDirectory::Lookup(const char* name, size_t length, xfs_ino_t* ino)
 
 	TRACE("rightMapOffset:(%" B_PRIu32 ")\n", rightMapOffset);
 
-	for(int i = fFirstLeafMapIndex; i < fInode->DataExtentsCount(); i++)
-	{
+	for (xfs_extnum_t i = fFirstLeafMapIndex; i < fInode->DataExtentsCount(); i++) {
 		FillMapEntry(i, fLeafMap);
 		fCurLeafMapNumber = 2;
 		status = FillBuffer(LEAF, fLeafBuffer,
@@ -389,7 +394,7 @@ NodeDirectory::Lookup(const char* name, size_t length, xfs_ino_t* ino)
 			return status;
 		fCurLeafBufferNumber = 2;
 		ExtentLeafHeader* leafHeader = ExtentLeafHeader::Create(fInode, fLeafBuffer);
-		if(leafHeader == NULL)
+		if (leafHeader == NULL)
 			return B_NO_MEMORY;
 		ExtentLeafEntry* leafEntry =
 			(ExtentLeafEntry*)(void*)(fLeafBuffer + ExtentLeafHeader::Size(fInode));
@@ -430,8 +435,7 @@ NodeDirectory::Lookup(const char* name, size_t length, xfs_ino_t* ino)
 			TRACE("offset:(%" B_PRIu32 ")\n", offset);
 			ExtentDataEntry* entry = (ExtentDataEntry*)(fDataBuffer + offset);
 
-			int retVal = strncmp(name, (char*)entry->name, entry->namelen);
-			if (retVal == 0) {
+			if (xfs_name_comp(name, length, entry->name, entry->namelen)) {
 				*ino = B_BENDIAN_TO_HOST_INT64(entry->inumber);
 				TRACE("ino:(%" B_PRIu64 ")\n", *ino);
 				return B_OK;

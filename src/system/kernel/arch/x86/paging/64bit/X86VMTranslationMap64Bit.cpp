@@ -11,7 +11,7 @@
 
 #include "paging/64bit/X86VMTranslationMap64Bit.h"
 
-#include <int.h>
+#include <interrupts.h>
 #include <slab/Slab.h>
 #include <thread.h>
 #include <util/AutoLock.h>
@@ -51,14 +51,34 @@ X86VMTranslationMap64Bit::~X86VMTranslationMap64Bit()
 	if (fPagingStructures == NULL)
 		return;
 
-	if (fPageMapper != NULL) {
-		vm_page_reservation reservation = {};
-		phys_addr_t address;
-		vm_page* page;
+	if (fPageMapper == NULL) {
+		fPagingStructures->RemoveReference();
+		return;
+	}
 
-		// Free all structures in the bottom half of the PMLTop (user memory).
-		uint64* virtualPML4 = fPagingStructures->VirtualPMLTop();
-		for (uint32 i = 0; i < 256; i++) {
+	vm_page_reservation reservation = {};
+	phys_addr_t address;
+	vm_page* page;
+
+	// Free all structures in the bottom half of the PMLTop (user memory).
+	uint64* virtualPML5 = NULL;
+	if (fLA57)
+		virtualPML5 = fPagingStructures->VirtualPMLTop();
+	for (uint32 p = 0; p < 256; p++) {
+		uint64* virtualPML4 = NULL;
+		uint32 limitPML4 = 256;
+		if (fLA57) {
+			if ((virtualPML5[p] & X86_64_PML5E_PRESENT) == 0)
+				continue;
+
+			virtualPML4 = (uint64*)fPageMapper->GetPageTableAt(
+				virtualPML5[p] & X86_64_PML5E_ADDRESS_MASK);
+			limitPML4 = 512;
+		} else {
+			virtualPML4 = fPagingStructures->VirtualPMLTop();
+		}
+
+		for (uint32 i = 0; i < limitPML4; i++) {
 			if ((virtualPML4[i] & X86_64_PML4E_PRESENT) == 0)
 				continue;
 
@@ -107,10 +127,24 @@ X86VMTranslationMap64Bit::~X86VMTranslationMap64Bit()
 			vm_page_free_etc(NULL, page, &reservation);
 		}
 
-		vm_page_unreserve_pages(&reservation);
+		if (fLA57) {
+			address = virtualPML5[p] & X86_64_PML5E_ADDRESS_MASK;
+			page = vm_lookup_page(address / B_PAGE_SIZE);
+			if (page == NULL) {
+				panic("PML4 %u on invalid page %#" B_PRIxPHYSADDR "\n", p,
+					address);
+			}
 
-		fPageMapper->Delete();
+			DEBUG_PAGE_ACCESS_START(page);
+			vm_page_free_etc(NULL, page, &reservation);
+		} else {
+			break;
+		}
 	}
+
+	vm_page_unreserve_pages(&reservation);
+
+	fPageMapper->Delete();
 
 	fPagingStructures->RemoveReference();
 }
@@ -205,6 +239,7 @@ X86VMTranslationMap64Bit::Map(addr_t virtualAddress, phys_addr_t physicalAddress
 {
 	TRACE("X86VMTranslationMap64Bit::Map(%#" B_PRIxADDR ", %#" B_PRIxPHYSADDR
 		")\n", virtualAddress, physicalAddress);
+	ASSERT_LOCKED_RECURSIVE(&fLock);
 
 	ThreadCPUPinner pinner(thread_get_current_thread());
 
@@ -265,8 +300,8 @@ X86VMTranslationMap64Bit::Unmap(addr_t start, addr_t end)
 				B_PRIxADDR " (%#" B_PRIxPHYSADDR ")\n", start,
 				pageTable[index] & X86_64_PTE_ADDRESS_MASK);
 
-			uint64 oldEntry = X86PagingMethod64Bit::ClearTableEntryFlags(
-				&pageTable[index], X86_64_PTE_PRESENT);
+			uint64 oldEntry = X86PagingMethod64Bit::ClearTableEntry(
+				&pageTable[index]);
 			fMapCount--;
 
 			if ((oldEntry & X86_64_PTE_ACCESSED) != 0) {
@@ -274,59 +309,6 @@ X86VMTranslationMap64Bit::Unmap(addr_t start, addr_t end)
 				// accessed flags was set, since only then the entry could have
 				// been in any TLB.
 				InvalidatePage(start);
-			}
-		}
-	} while (start != 0 && start < end);
-
-	return B_OK;
-}
-
-
-status_t
-X86VMTranslationMap64Bit::DebugMarkRangePresent(addr_t start, addr_t end,
-	bool markPresent)
-{
-	start = ROUNDDOWN(start, B_PAGE_SIZE);
-	if (start >= end)
-		return B_OK;
-
-	TRACE("X86VMTranslationMap64Bit::DebugMarkRangePresent(%#" B_PRIxADDR
-		", %#" B_PRIxADDR ")\n", start, end);
-
-	ThreadCPUPinner pinner(thread_get_current_thread());
-
-	do {
-		uint64* pageTable = X86PagingMethod64Bit::PageTableForAddress(
-			fPagingStructures->VirtualPMLTop(), start, fIsKernelMap, false,
-			NULL, fPageMapper, fMapCount);
-		if (pageTable == NULL) {
-			// Move on to the next page table.
-			start = ROUNDUP(start + 1, k64BitPageTableRange);
-			continue;
-		}
-
-		for (uint32 index = start / B_PAGE_SIZE % k64BitTableEntryCount;
-				index < k64BitTableEntryCount && start < end;
-				index++, start += B_PAGE_SIZE) {
-			if ((pageTable[index] & X86_64_PTE_PRESENT) == 0) {
-				if (!markPresent)
-					continue;
-
-				X86PagingMethod64Bit::SetTableEntryFlags(&pageTable[index],
-					X86_64_PTE_PRESENT);
-			} else {
-				if (markPresent)
-					continue;
-
-				uint64 oldEntry = X86PagingMethod64Bit::ClearTableEntryFlags(
-					&pageTable[index], X86_64_PTE_PRESENT);
-
-				if ((oldEntry & X86_64_PTE_ACCESSED) != 0) {
-					// Note, that we only need to invalidate the address, if the
-					// accessed flags was set, since only then the entry could
-					// have been in any TLB.
-					InvalidatePage(start);
-				}
 			}
 		}
 	} while (start != 0 && start < end);
@@ -487,6 +469,8 @@ status_t
 X86VMTranslationMap64Bit::Query(addr_t virtualAddress,
 	phys_addr_t* _physicalAddress, uint32* _flags)
 {
+	ASSERT((virtualAddress % B_PAGE_SIZE) == 0);
+
 	*_flags = 0;
 	*_physicalAddress = 0;
 
@@ -731,63 +715,87 @@ bool
 X86VMTranslationMap64Bit::DebugGetReverseMappingInfo(phys_addr_t physicalAddress,
 	ReverseMappingInfoCallback& callback)
 {
-	if (fLA57) {
-		kprintf("X86VMTranslationMap64Bit::DebugGetReverseMappingInfo not implemented for LA57\n");
-		return false;
-	}
-
-	const uint64* virtualPML4 = fPagingStructures->VirtualPMLTop();
-	for (uint32 i = 0; i < (fIsKernelMap ? 512 : 256); i++) {
-		if ((virtualPML4[i] & X86_64_PML4E_PRESENT) == 0)
-			continue;
-		const uint64 addressMask = (i >= 256) ? 0xffffff0000000000LL : 0;
-
-		const uint64* virtualPDPT = (uint64*)fPageMapper->GetPageTableAt(
-			virtualPML4[i] & X86_64_PML4E_ADDRESS_MASK);
-		for (uint32 j = 0; j < 512; j++) {
-			if ((virtualPDPT[j] & X86_64_PDPTE_PRESENT) == 0)
+	uint64* virtualPML5 = NULL;
+	if (fLA57)
+		virtualPML5 = fPagingStructures->VirtualPMLTop();
+	for (uint32 p = 0; p < (fIsKernelMap ? 512 : 256); p++) {
+		uint64* virtualPML4 = NULL;
+		uint32 limitPML4 = (fIsKernelMap ? 512 : 256);
+		if (fLA57) {
+			if ((virtualPML5[p] & X86_64_PML5E_PRESENT) == 0)
 				continue;
 
-			const uint64* virtualPageDir = (uint64*)fPageMapper->GetPageTableAt(
-				virtualPDPT[j] & X86_64_PDPTE_ADDRESS_MASK);
-			for (uint32 k = 0; k < 512; k++) {
-				if ((virtualPageDir[k] & X86_64_PDE_PRESENT) == 0)
+			virtualPML4 = (uint64*)fPageMapper->GetPageTableAt(
+				virtualPML5[p] & X86_64_PML5E_ADDRESS_MASK);
+			limitPML4 = 512;
+		} else {
+			virtualPML4 = fPagingStructures->VirtualPMLTop();
+		}
+
+		for (uint32 i = 0; i < limitPML4; i++) {
+			if ((virtualPML4[i] & X86_64_PML4E_PRESENT) == 0)
+				continue;
+			uint64 addressMask = 0;
+			if (fLA57) {
+				if (p >= 256)
+					addressMask = 0xff00000000000000LL;
+			} else {
+				if (i >= 256)
+					addressMask = 0xfffff00000000000LL;
+			}
+
+			const uint64* virtualPDPT = (uint64*)fPageMapper->GetPageTableAt(
+				virtualPML4[i] & X86_64_PML4E_ADDRESS_MASK);
+			for (uint32 j = 0; j < 512; j++) {
+				if ((virtualPDPT[j] & X86_64_PDPTE_PRESENT) == 0)
 					continue;
 
-				if ((virtualPageDir[k] & X86_64_PDE_LARGE_PAGE) != 0) {
-					phys_addr_t largeAddress = virtualPageDir[k] & X86_64_PDE_ADDRESS_MASK;
-					if (physicalAddress >= largeAddress
-							&& physicalAddress < (largeAddress + k64BitPageTableRange)) {
-						off_t offset = physicalAddress - largeAddress;
-						addr_t virtualAddress = i * k64BitPDPTRange
-							+ j * k64BitPageDirectoryRange
-							+ k * k64BitPageTableRange
-							+ offset;
-						virtualAddress |= addressMask;
-						if (callback.HandleVirtualAddress(virtualAddress))
-							return true;
-					}
-					continue;
-				}
-
-				const uint64* virtualPageTable = (uint64*)fPageMapper->GetPageTableAt(
-					virtualPageDir[k] & X86_64_PDE_ADDRESS_MASK);
-				for (uint32 l = 0; l < 512; l++) {
-					if ((virtualPageTable[l] & X86_64_PTE_PRESENT) == 0)
+				const uint64* virtualPageDir = (uint64*)fPageMapper->GetPageTableAt(
+					virtualPDPT[j] & X86_64_PDPTE_ADDRESS_MASK);
+				for (uint32 k = 0; k < 512; k++) {
+					if ((virtualPageDir[k] & X86_64_PDE_PRESENT) == 0)
 						continue;
 
-					if ((virtualPageTable[l] & X86_64_PTE_ADDRESS_MASK) == physicalAddress) {
-						addr_t virtualAddress = i * k64BitPDPTRange
-							+ j * k64BitPageDirectoryRange
-							+ k * k64BitPageTableRange
-							+ l * B_PAGE_SIZE;
-						virtualAddress |= addressMask;
-						if (callback.HandleVirtualAddress(virtualAddress))
-							return true;
+					if ((virtualPageDir[k] & X86_64_PDE_LARGE_PAGE) != 0) {
+						phys_addr_t largeAddress = virtualPageDir[k] & X86_64_PDE_ADDRESS_MASK;
+						if (physicalAddress >= largeAddress
+								&& physicalAddress < (largeAddress + k64BitPageTableRange)) {
+							off_t offset = physicalAddress - largeAddress;
+							addr_t virtualAddress = p * k64BitPML4TRange
+								+ i * k64BitPDPTRange
+								+ j * k64BitPageDirectoryRange
+								+ k * k64BitPageTableRange
+								+ offset;
+							virtualAddress |= addressMask;
+							if (callback.HandleVirtualAddress(virtualAddress))
+								return true;
+						}
+						continue;
+					}
+
+					const uint64* virtualPageTable = (uint64*)fPageMapper->GetPageTableAt(
+						virtualPageDir[k] & X86_64_PDE_ADDRESS_MASK);
+					for (uint32 l = 0; l < 512; l++) {
+						if ((virtualPageTable[l] & X86_64_PTE_PRESENT) == 0)
+							continue;
+
+						if ((virtualPageTable[l] & X86_64_PTE_ADDRESS_MASK) == physicalAddress) {
+							addr_t virtualAddress = p * k64BitPML4TRange
+								+ i * k64BitPDPTRange
+								+ j * k64BitPageDirectoryRange
+								+ k * k64BitPageTableRange
+								+ l * B_PAGE_SIZE;
+							virtualAddress |= addressMask;
+							if (callback.HandleVirtualAddress(virtualAddress))
+								return true;
+						}
 					}
 				}
 			}
 		}
+
+		if (!fLA57)
+			break;
 	}
 
 	return false;

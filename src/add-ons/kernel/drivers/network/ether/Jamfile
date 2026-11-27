@@ -2,16 +2,16 @@ SubDir HAIKU_TOP src add-ons kernel drivers network ether ;
 
 # Haiku-native drivers
 HaikuSubInclude etherpci ;
-HaikuSubInclude pegasus ;
 HaikuSubInclude virtio ;
-HaikuSubInclude usb_asix ;
 HaikuSubInclude usb_davicom ;
 HaikuSubInclude usb_ecm ;
+HaikuSubInclude usb_ncm ;
 HaikuSubInclude usb_rndis ;
 HaikuSubInclude wb840 ;
 
 # FreeBSD drivers
 HaikuSubInclude 3com ;
+HaikuSubInclude asix88xxx ;
 HaikuSubInclude atheros81xx ;
 HaikuSubInclude atheros813x ;
 HaikuSubInclude attansic_l1 ;
@@ -26,6 +26,7 @@ HaikuSubInclude jmicron2x0 ;
 HaikuSubInclude marvell_yukon ;
 HaikuSubInclude nforce ;
 HaikuSubInclude pcnet ;
+HaikuSubInclude pegasus ;
 HaikuSubInclude rdc ;
 HaikuSubInclude rtl8139 ;
 HaikuSubInclude rtl81xx ;

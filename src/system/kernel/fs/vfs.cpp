@@ -51,6 +51,7 @@
 #include <syscalls.h>
 #include <syscall_restart.h>
 #include <tracing.h>
+#include <usergroup.h>
 #include <util/atomic.h>
 #include <util/AutoLock.h>
 #include <util/ThreadAutoLock.h>
@@ -143,6 +144,8 @@ struct fs_mount {
 
 	~fs_mount()
 	{
+		ASSERT(vnodes.IsEmpty());
+
 		mutex_destroy(&lock);
 		free(device_name);
 
@@ -336,6 +339,11 @@ object_cache* sFileDescriptorCache;
 static VnodeTable* sVnodeTable;
 static struct vnode* sRoot;
 
+static UnusedVnodeList sToBeFreedVnodes;
+static spinlock sToBeFreedVnodesLock;
+static int32 sFreeUnusedVnodes;
+static ConditionVariable sVnodeUndertakerCondition;
+
 #define MOUNTS_HASH_TABLE_SIZE 16
 static MountTable* sMountsTable;
 static dev_t sNextMountID = 1;
@@ -347,6 +355,7 @@ static dev_t sNextMountID = 1;
 #define BUSY_VNODE_DELAY 5000
 
 mode_t __gUmask = 022;
+
 
 /* function declarations */
 
@@ -430,6 +439,7 @@ static status_t dec_vnode_ref_count(struct vnode* vnode, bool alwaysFree,
 static inline void put_vnode(struct vnode* vnode);
 static status_t fs_unmount(char* path, dev_t mountID, uint32 flags,
 	bool kernel);
+static status_t fs_sync(dev_t device);
 static int open_vnode(struct vnode* vnode, int openMode, bool kernel);
 
 
@@ -764,7 +774,7 @@ get_file_system(const char* fsName)
 	if (strncmp(fsName, "file_systems/", strlen("file_systems/"))) {
 		// construct module name if we didn't get one
 		// (we currently support only one API)
-		snprintf(name, sizeof(name), "file_systems/%s/v1", fsName);
+		snprintf(name, sizeof(name), "file_systems/%s" B_CURRENT_FS_API_VERSION, fsName);
 		fsName = NULL;
 	}
 
@@ -988,7 +998,7 @@ free_vnode(struct vnode* vnode, bool reenter)
 	// will be discarded
 
 	if (!vnode->IsRemoved() && HAS_FS_CALL(vnode, fsync))
-		FS_CALL_NO_PARAMS(vnode, fsync);
+		FS_CALL(vnode, fsync, false);
 
 	// Note: If this vnode has a cache attached, there will still be two
 	// references to that cache at this point. The last one belongs to the vnode
@@ -1025,9 +1035,8 @@ free_vnode(struct vnode* vnode, bool reenter)
 	rw_lock_write_unlock(&sVnodeLock);
 
 	// if we have a VMCache attached, remove it
-	if (vnode->cache)
+	if (vnode->cache != NULL)
 		vnode->cache->ReleaseRef();
-
 	vnode->cache = NULL;
 
 	remove_vnode_from_mount_list(vnode, vnode->mount);
@@ -1045,9 +1054,9 @@ free_vnode(struct vnode* vnode, bool reenter)
 
 	\param vnode the vnode.
 	\param alwaysFree don't move this vnode into the unused list, but really
-		   delete it if possible.
+		   delete it (directly) if possible.
 	\param reenter \c true, if this function is called (indirectly) from within
-		   a file system. This will be passed to file system hooks only.
+		   a file system. This will be passed to file system hooks.
 	\return \c B_OK, if everything went fine, an error code otherwise.
 */
 static status_t
@@ -1071,22 +1080,30 @@ dec_vnode_ref_count(struct vnode* vnode, bool alwaysFree, bool reenter)
 	bool freeNode = false;
 	bool freeUnusedNodes = false;
 
-	// Just insert the vnode into an unused list if we don't need
-	// to delete it
-	if (vnode->IsRemoved() || alwaysFree) {
+	if (vnode->IsRemoved() || alwaysFree || vnode->mount->unmounting) {
 		vnode_to_be_freed(vnode);
 		vnode->SetBusy(true);
 		freeNode = true;
-	} else
+	} else {
 		freeUnusedNodes = vnode_unused(vnode);
+	}
 
 	nodeLocker.Unlock();
 	locker.Unlock();
 
-	if (freeNode)
-		free_vnode(vnode, reenter);
-	else if (freeUnusedNodes)
-		free_unused_vnodes();
+	if (freeNode) {
+		if (alwaysFree || reenter) {
+			free_vnode(vnode, reenter);
+		} else {
+			InterruptsSpinLocker locker(sToBeFreedVnodesLock);
+			sToBeFreedVnodes.Add(vnode);
+			locker.Unlock();
+			sVnodeUndertakerCondition.NotifyOne();
+		}
+	} else if (freeUnusedNodes) {
+		atomic_add(&sFreeUnusedVnodes, 1);
+		sVnodeUndertakerCondition.NotifyOne();
+	}
 
 	return B_OK;
 }
@@ -1358,7 +1375,7 @@ free_unused_vnodes(int32 level)
 		if (vnode != sUnusedVnodeList.First())
 			continue;
 
-		ASSERT(!vnode->IsBusy());
+		ASSERT(!vnode->IsBusy() && vnode->ref_count == 0);
 
 		// grab a reference
 		inc_vnode_ref_count(vnode);
@@ -1376,6 +1393,40 @@ free_unused_vnodes(int32 level)
 	}
 
 	unused_vnodes_check_done();
+}
+
+
+/*!	\brief Thread that frees vnodes.
+
+	Freeing vnodes usually requires acquiring filesystem locks and sometimes doing
+	disk writes. To avoid that expensive operation occurring at arbitrary places
+	and causing slowdowns (or, for page writer threads, potential deadlocks), we
+	use this dedicated thread for most of them.
+*/
+static status_t
+vnode_undertaker(void*)
+{
+	while (true) {
+		{
+			ConditionVariableEntry entry;
+			sVnodeUndertakerCondition.Add(&entry);
+			if (sToBeFreedVnodes.IsEmpty() && atomic_get(&sFreeUnusedVnodes) == 0)
+				entry.Wait();
+		}
+
+		while (true) {
+			InterruptsSpinLocker listLocker(sToBeFreedVnodesLock);
+			Vnode* node = sToBeFreedVnodes.RemoveHead();
+			listLocker.Unlock();
+			if (node == NULL)
+				break;
+
+			free_vnode(node, false);
+		}
+
+		if (atomic_get_and_set(&sFreeUnusedVnodes, 0) != 0)
+			free_unused_vnodes();
+	}
 }
 
 
@@ -2046,21 +2097,18 @@ get_dir_path_and_leaf(char* path, char* filename)
 		if (strlcpy(filename, path, B_FILE_NAME_LENGTH) >= B_FILE_NAME_LENGTH)
 			return B_NAME_TOO_LONG;
 
-		strcpy(path, ".");
+		strcpy(path, "./");
 	} else {
 		last++;
 		if (last[0] == '\0') {
 			// special case: the path ends in one or more '/' - remove them
 			while (*--last == '/' && last != path);
-			last[1] = '\0';
+			last[2] = '\0';
 
-			if (last == path && last[0] == '/') {
-				// This path points to the root of the file system
-				strcpy(filename, ".");
-				return B_OK;
-			}
-			for (; last != path && *(last - 1) != '/'; last--);
-				// rewind to the start of the leaf before the '/'
+			// pathnames that end with one or more trailing slash characters
+			// must refer to directory paths
+			strcpy(filename, ".");
+			return B_OK;
 		}
 
 		// normal leaf: replace the leaf portion of the path with a '.'
@@ -2068,7 +2116,8 @@ get_dir_path_and_leaf(char* path, char* filename)
 			return B_NAME_TOO_LONG;
 
 		last[0] = '.';
-		last[1] = '\0';
+		last[1] = '/';
+		last[2] = '\0';
 	}
 	return B_OK;
 }
@@ -2157,7 +2206,7 @@ vnode_path_to_vnode(struct vnode* start, char* path, bool traverseLeafLink,
 	int count, struct io_context* ioContext, VnodePutter& _vnode,
 	ino_t* _parentID, char* leafName)
 {
-	FUNCTION(("vnode_path_to_vnode(vnode = %p, path = %s)\n", vnode, path));
+	FUNCTION(("vnode_path_to_vnode(vnode = %p, path = %s)\n", start, path));
 	ASSERT(!_vnode.IsSet());
 
 	VnodePutter vnode(start);
@@ -2255,7 +2304,7 @@ vnode_path_to_vnode(struct vnode* start, char* path, bool traverseLeafLink,
 				status = B_BAD_VALUE;
 
 			if (status != B_OK) {
-				free(buffer);
+				object_cache_free(sPathNameCache, buffer, 0);
 				return status;
 			}
 			nextVnode.Unset();
@@ -2302,6 +2351,10 @@ vnode_path_to_vnode(struct vnode* start, char* path, bool traverseLeafLink,
 		} else {
 			lastParentID = vnode->id;
 		}
+
+		// if next path component is empty, check next vnode is actually a directory
+		if (directoryFound && *nextPath == '\0' && !S_ISDIR(nextVnode->Type()))
+			return B_NOT_A_DIRECTORY;
 
 		// decrease the ref count on the old dir we just looked up into
 		vnode.Unset();
@@ -2839,11 +2892,6 @@ get_new_fd(struct fd_ops* ops, struct fs_mount* mount, struct vnode* vnode,
 			&& (ops == &sFileOps || ops == &sDirectoryOps))
 		return B_BUSY;
 
-	if ((openMode & O_RDWR) != 0 && (openMode & O_WRONLY) != 0)
-		return B_BAD_VALUE;
-	if ((openMode & O_RWMASK) == O_RDONLY && (openMode & O_TRUNC) != 0)
-		return B_NOT_ALLOWED;
-
 	descriptor = alloc_fd();
 	if (!descriptor)
 		return B_NO_MEMORY;
@@ -2874,17 +2922,17 @@ get_new_fd(struct fd_ops* ops, struct fs_mount* mount, struct vnode* vnode,
 	}
 
 	io_context* context = get_current_io_context(kernel);
+	WriteLocker contextLocker(context->lock);
 	fd = new_fd(context, descriptor);
 	if (fd < 0) {
+		contextLocker.Unlock();
 		descriptor->ops = NULL;
 		put_fd(descriptor);
 		return B_NO_MORE_FDS;
 	}
 
-	rw_lock_write_lock(&context->lock);
 	fd_set_close_on_exec(context, fd, (openMode & O_CLOEXEC) != 0);
-	rw_lock_write_unlock(&context->lock);
-
+	fd_set_close_on_fork(context, fd, (openMode & O_CLOFORK) != 0);
 	return fd;
 }
 
@@ -3197,12 +3245,11 @@ dump_mount(int argc, char** argv)
 		return 0;
 	}
 
-	ulong val = parse_expression(argv[1]);
-	uint32 id = val;
+	uint64 val = parse_expression(argv[1]);
 
-	struct fs_mount* mount = sMountsTable->Lookup(id);
+	struct fs_mount* mount = sMountsTable->Lookup(val);
 	if (mount == NULL) {
-		if (IS_USER_ADDRESS(id)) {
+		if (IS_USER_ADDRESS(val)) {
 			kprintf("fs_mount not found\n");
 			return 0;
 		}
@@ -3360,7 +3407,7 @@ dump_vnode_caches(int argc, char** argv)
 }
 
 
-int
+static int
 dump_io_context(int argc, char** argv)
 {
 	if (argc > 2 || !strcmp(argv[1], "--help")) {
@@ -3418,7 +3465,7 @@ dump_io_context(int argc, char** argv)
 }
 
 
-int
+static int
 dump_vnode_usage(int argc, char** argv)
 {
 	if (argc != 1) {
@@ -3435,6 +3482,7 @@ dump_vnode_usage(int argc, char** argv)
 		count - sUnusedVnodes);
 	return 0;
 }
+
 
 #endif	// ADD_DEBUGGER_COMMANDS
 
@@ -3469,27 +3517,34 @@ common_file_io_vec_pages(struct vnode* vnode, void* cookie,
 
 	size_t numBytes = *_numBytes;
 	uint32 fileVecIndex;
+	off_t fileVecOffset;
 	size_t vecOffset = *_vecOffset;
 	uint32 vecIndex = *_vecIndex;
 	status_t status;
 	size_t size;
 
-	if (!doWrite && vecOffset == 0) {
+	if (!doWrite && vecOffset == 0 && fileVecs[0].length >= (off_t)vecs[vecIndex].iov_len) {
 		// now directly read the data from the device
 		// the first file_io_vec can be read directly
 		// TODO: we could also write directly
 
-		if (fileVecs[0].length < (off_t)numBytes)
-			size = fileVecs[0].length;
-		else
-			size = numBytes;
+		size = 0;
+		uint32 directVecCount = 0;
+		for (uint32 i = vecIndex; i < vecCount; i++) {
+			size_t nextSize = size + vecs[i].iov_len;
+			if ((off_t)nextSize > fileVecs[0].length)
+				break;
+
+			size = nextSize;
+			directVecCount++;
+		}
 
 		if (fileVecs[0].offset >= 0) {
 			status = FS_CALL(vnode, read_pages, cookie, fileVecs[0].offset,
-				&vecs[vecIndex], vecCount - vecIndex, &size);
+				&vecs[vecIndex], directVecCount, &size);
 		} else {
 			// sparse read
-			zero_iovecs(&vecs[vecIndex], vecCount - vecIndex, size);
+			zero_iovecs(&vecs[vecIndex], directVecCount, size);
 			status = B_OK;
 		}
 		if (status != B_OK)
@@ -3502,24 +3557,23 @@ common_file_io_vec_pages(struct vnode* vnode, void* cookie,
 			return B_OK;
 
 		// if we reached the end of the file, we can return as well
-		if ((off_t)size != fileVecs[0].length) {
+		if ((off_t)size == fileVecs[0].length && fileVecCount == 1) {
 			*_numBytes = size;
 			return B_OK;
 		}
 
-		fileVecIndex = 1;
-
-		// first, find out where we have to continue in our iovecs
-		for (; vecIndex < vecCount; vecIndex++) {
-			if (size < vecs[vecIndex].iov_len)
-				break;
-
-			size -= vecs[vecIndex].iov_len;
+		// prepare to continue
+		if ((off_t)size == fileVecs[0].length) {
+			fileVecIndex = 1;
+			fileVecOffset = 0;
+		} else {
+			fileVecIndex = 0;
+			fileVecOffset = size;
 		}
-
-		vecOffset = size;
+		vecIndex += directVecCount;
 	} else {
 		fileVecIndex = 0;
+		fileVecOffset = 0;
 		size = 0;
 	}
 
@@ -3530,8 +3584,9 @@ common_file_io_vec_pages(struct vnode* vnode, void* cookie,
 
 	for (; fileVecIndex < fileVecCount; fileVecIndex++) {
 		const file_io_vec &fileVec = fileVecs[fileVecIndex];
-		off_t fileOffset = fileVec.offset;
-		off_t fileLeft = min_c(fileVec.length, (off_t)bytesLeft);
+		off_t fileOffset = fileVec.offset + fileVecOffset;
+		off_t fileLeft = min_c(fileVec.length - fileVecOffset, (off_t)bytesLeft);
+		fileVecOffset = 0;
 
 		TRACE(("FILE VEC [%" B_PRIu32 "] length %" B_PRIdOFF "\n", fileVecIndex,
 			fileLeft));
@@ -3617,23 +3672,6 @@ common_file_io_vec_pages(struct vnode* vnode, void* cookie,
 }
 
 
-static bool
-is_user_in_group(gid_t gid)
-{
-	if (gid == getegid())
-		return true;
-
-	gid_t groups[NGROUPS_MAX];
-	int groupCount = getgroups(NGROUPS_MAX, groups);
-	for (int i = 0; i < groupCount; i++) {
-		if (gid == groups[i])
-			return true;
-	}
-
-	return false;
-}
-
-
 static status_t
 free_io_context(io_context* context)
 {
@@ -3659,6 +3697,7 @@ free_io_context(io_context* context)
 	remove_node_monitors(context);
 
 	free(context->fds_close_on_exec);
+	free(context->fds_close_on_fork);
 	free(context->select_infos);
 	free(context->fds);
 	free(context);
@@ -3874,10 +3913,17 @@ acquire_vnode(fs_volume* volume, ino_t vnodeID)
 	ReadLocker nodeLocker(sVnodeLock);
 
 	struct vnode* vnode = lookup_vnode(volume->id, vnodeID);
-	if (vnode == NULL)
+	if (vnode == NULL) {
+		KDEBUG_ONLY(panic("acquire_vnode(%p, %" B_PRIdINO "): not found!", volume, vnodeID));
 		return B_BAD_VALUE;
+	}
 
-	inc_vnode_ref_count(vnode);
+	if (inc_vnode_ref_count(vnode) == 0) {
+		// It isn't valid to acquire another reference to a vnode that
+		// you don't already have a reference to, so this should never happen.
+		panic("acquire_vnode(%p, %" B_PRIdINO "): node wasn't used!", volume, vnodeID);
+	}
+
 	return B_OK;
 }
 
@@ -3891,8 +3937,10 @@ put_vnode(fs_volume* volume, ino_t vnodeID)
 	vnode = lookup_vnode(volume->id, vnodeID);
 	rw_lock_read_unlock(&sVnodeLock);
 
-	if (vnode == NULL)
+	if (vnode == NULL) {
+		KDEBUG_ONLY(panic("put_vnode(%p, %" B_PRIdINO "): not found!", volume, vnodeID));
 		return B_BAD_VALUE;
+	}
 
 	dec_vnode_ref_count(vnode, false, true);
 	return B_OK;
@@ -4005,7 +4053,7 @@ check_access_permissions(int accessMode, mode_t mode, gid_t nodeGroupID,
 	} else if (uid == nodeUserID) {
 		// user is node owner
 		permissions = userPermissions;
-	} else if (is_user_in_group(nodeGroupID)) {
+	} else if (is_in_group(thread_get_current_thread()->team, nodeGroupID)) {
 		// user is in owning group
 		permissions = groupPermissions;
 	} else {
@@ -4017,44 +4065,51 @@ check_access_permissions(int accessMode, mode_t mode, gid_t nodeGroupID,
 }
 
 
-#if 0
 extern "C" status_t
-read_pages(int fd, off_t pos, const iovec* vecs, size_t count,
-	size_t* _numBytes)
+check_write_stat_permissions(gid_t nodeGroupID, uid_t nodeUserID, mode_t nodeMode,
+	uint32 mask, const struct stat* stat)
 {
-	struct file_descriptor* descriptor;
-	struct vnode* vnode;
+	uid_t uid = geteuid();
 
-	descriptor = get_fd_and_vnode(fd, &vnode, true);
-	if (descriptor == NULL)
-		return B_FILE_ERROR;
+	// root has all permissions
+	if (uid == 0)
+		return B_OK;
 
-	status_t status = vfs_read_pages(vnode, descriptor->cookie, pos, vecs,
-		count, 0, _numBytes);
+	const bool hasWriteAccess = check_access_permissions(W_OK,
+		nodeMode, nodeGroupID, nodeUserID) == B_OK;
 
-	put_fd(descriptor);
-	return status;
+	if ((mask & B_STAT_SIZE) != 0) {
+		if (!hasWriteAccess)
+			return B_NOT_ALLOWED;
+	}
+
+	if ((mask & B_STAT_UID) != 0) {
+		if (nodeUserID == uid && stat->st_uid == uid) {
+			// No change.
+		} else
+			return B_NOT_ALLOWED;
+	}
+
+	if ((mask & B_STAT_GID) != 0) {
+		if (nodeUserID != uid)
+			return B_NOT_ALLOWED;
+
+		if (!is_in_group(thread_get_current_thread()->team, stat->st_gid))
+			return B_NOT_ALLOWED;
+	}
+
+	if ((mask & B_STAT_MODE) != 0) {
+		if (nodeUserID != uid)
+			return B_NOT_ALLOWED;
+	}
+
+	if ((mask & (B_STAT_CREATION_TIME | B_STAT_MODIFICATION_TIME | B_STAT_CHANGE_TIME)) != 0) {
+		if (!hasWriteAccess && nodeUserID != uid)
+			return B_NOT_ALLOWED;
+	}
+
+	return B_OK;
 }
-
-
-extern "C" status_t
-write_pages(int fd, off_t pos, const iovec* vecs, size_t count,
-	size_t* _numBytes)
-{
-	struct file_descriptor* descriptor;
-	struct vnode* vnode;
-
-	descriptor = get_fd_and_vnode(fd, &vnode, true);
-	if (descriptor == NULL)
-		return B_FILE_ERROR;
-
-	status_t status = vfs_write_pages(vnode, descriptor->cookie, pos, vecs,
-		count, 0, _numBytes);
-
-	put_fd(descriptor);
-	return status;
-}
-#endif
 
 
 extern "C" status_t
@@ -4065,6 +4120,8 @@ read_file_io_vec_pages(int fd, const file_io_vec* fileVecs, size_t fileVecCount,
 	struct vnode* vnode;
 	FileDescriptorPutter descriptor(get_fd_and_vnode(fd, &vnode, true));
 	if (!descriptor.IsSet())
+		return B_FILE_ERROR;
+	if ((descriptor->open_mode & O_RWMASK) == O_WRONLY)
 		return B_FILE_ERROR;
 
 	status_t status = common_file_io_vec_pages(vnode, descriptor->cookie,
@@ -4083,6 +4140,8 @@ write_file_io_vec_pages(int fd, const file_io_vec* fileVecs, size_t fileVecCount
 	struct vnode* vnode;
 	FileDescriptorPutter descriptor(get_fd_and_vnode(fd, &vnode, true));
 	if (!descriptor.IsSet())
+		return B_FILE_ERROR;
+	if ((descriptor->open_mode & O_RWMASK) == O_RDONLY)
 		return B_FILE_ERROR;
 
 	status_t status = common_file_io_vec_pages(vnode, descriptor->cookie,
@@ -4722,10 +4781,14 @@ vfs_get_vnode_cache(struct vnode* vnode, VMCache** _cache, bool allocate)
 			bool wasBusy = vnode->IsBusy();
 			vnode->SetBusy(true);
 
+			ModifiedPageQueue* queue = NULL;
+			if (vnode->mount->partition != NULL)
+				queue = vnode->mount->partition->Device()->ModifiedQueue();
+
 			vnode->Unlock();
 			rw_lock_read_unlock(&sVnodeLock);
 
-			status = vm_create_vnode_cache(vnode, &vnode->cache);
+			status = vm_create_vnode_cache(vnode, queue, &vnode->cache);
 
 			rw_lock_read_lock(&sVnodeLock);
 			vnode->Lock();
@@ -4939,6 +5002,7 @@ vfs_new_io_context(const io_context* parentContext, bool purgeCloseOnExec)
 	context->ref_count = 1;
 	rw_lock_init(&context->lock, "I/O context");
 
+	WriteLocker contextLocker(context->lock);
 	ReadLocker parentLocker;
 
 	size_t tableSize;
@@ -4949,6 +5013,7 @@ vfs_new_io_context(const io_context* parentContext, bool purgeCloseOnExec)
 		tableSize = DEFAULT_FD_TABLE_SIZE;
 
 	if (vfs_resize_fd_table(context, tableSize) != B_OK) {
+		contextLocker.Unlock();
 		free(context);
 		return NULL;
 	}
@@ -4974,18 +5039,21 @@ vfs_new_io_context(const io_context* parentContext, bool purgeCloseOnExec)
 			}
 
 			const bool closeOnExec = fd_close_on_exec(parentContext, i);
-			if (closeOnExec && purgeCloseOnExec)
+			const bool closeOnFork = fd_close_on_fork(parentContext, i);
+			if ((closeOnExec && purgeCloseOnExec) || (closeOnFork && !purgeCloseOnExec))
 				continue;
 
 			TFD(InheritFD(context, i, descriptor, parentContext));
 
 			context->fds[i] = descriptor;
 			context->num_used_fds++;
-			atomic_add(&descriptor->ref_count, 1);
-			atomic_add(&descriptor->open_count, 1);
+			inc_fd_ref_count(descriptor);
+			inc_fd_open_count(descriptor);
 
 			if (closeOnExec)
 				fd_set_close_on_exec(context, i, true);
+			if (closeOnFork)
+				fd_set_close_on_fork(context, i, true);
 		}
 
 		parentLocker.Unlock();
@@ -5048,6 +5116,7 @@ vfs_resize_fd_table(struct io_context* context, uint32 newSize)
 	file_descriptor** oldFDs = context->fds;
 	select_info** oldSelectInfos = context->select_infos;
 	uint8* oldCloseOnExecTable = context->fds_close_on_exec;
+	uint8* oldCloseOnForkTable = context->fds_close_on_fork;
 
 	// allocate new tables (separately to reduce the chances of needing a raw allocation)
 	file_descriptor** newFDs = (file_descriptor**)malloc(
@@ -5055,16 +5124,20 @@ vfs_resize_fd_table(struct io_context* context, uint32 newSize)
 	select_info** newSelectInfos = (select_info**)malloc(
 		+ sizeof(select_info**) * newSize);
 	uint8* newCloseOnExecTable = (uint8*)malloc(newCloseOnExitBitmapSize);
-	if (newFDs == NULL || newSelectInfos == NULL || newCloseOnExecTable == NULL) {
+	uint8* newCloseOnForkTable = (uint8*)malloc(newCloseOnExitBitmapSize);
+	if (newFDs == NULL || newSelectInfos == NULL || newCloseOnExecTable == NULL
+		|| newCloseOnForkTable == NULL) {
 		free(newFDs);
 		free(newSelectInfos);
 		free(newCloseOnExecTable);
+		free(newCloseOnForkTable);
 		return B_NO_MEMORY;
 	}
 
 	context->fds = newFDs;
 	context->select_infos = newSelectInfos;
 	context->fds_close_on_exec = newCloseOnExecTable;
+	context->fds_close_on_fork = newCloseOnForkTable;
 	context->table_size = newSize;
 
 	if (oldSize != 0) {
@@ -5075,6 +5148,8 @@ vfs_resize_fd_table(struct io_context* context, uint32 newSize)
 		memcpy(context->select_infos, oldSelectInfos, sizeof(void*) * toCopy);
 		memcpy(context->fds_close_on_exec, oldCloseOnExecTable,
 			min_c(oldCloseOnExitBitmapSize, newCloseOnExitBitmapSize));
+		memcpy(context->fds_close_on_fork, oldCloseOnForkTable,
+			min_c(oldCloseOnExitBitmapSize, newCloseOnExitBitmapSize));
 	}
 
 	// clear additional entries, if the tables grow
@@ -5084,11 +5159,14 @@ vfs_resize_fd_table(struct io_context* context, uint32 newSize)
 			sizeof(void*) * (newSize - oldSize));
 		memset(context->fds_close_on_exec + oldCloseOnExitBitmapSize, 0,
 			newCloseOnExitBitmapSize - oldCloseOnExitBitmapSize);
+		memset(context->fds_close_on_fork + oldCloseOnExitBitmapSize, 0,
+			newCloseOnExitBitmapSize - oldCloseOnExitBitmapSize);
 	}
 
 	free(oldFDs);
 	free(oldSelectInfos);
 	free(oldCloseOnExecTable);
+	free(oldCloseOnForkTable);
 
 	return B_OK;
 }
@@ -5242,6 +5320,7 @@ vfs_setrlimit(int resource, const struct rlimit* rlp)
 		case RLIMIT_NOFILE:
 			/* TODO: check getuid() */
 			if (rlp->rlim_max != RLIM_SAVED_MAX
+				&& rlp->rlim_max != UINT32_MAX
 				&& rlp->rlim_max != MAX_FD_TABLE_SIZE)
 				return B_NOT_ALLOWED;
 
@@ -5251,6 +5330,7 @@ vfs_setrlimit(int resource, const struct rlimit* rlp)
 		case RLIMIT_NOVMON:
 			/* TODO: check getuid() */
 			if (rlp->rlim_max != RLIM_SAVED_MAX
+				&& rlp->rlim_max != UINT32_MAX
 				&& rlp->rlim_max != MAX_NODE_MONITORS)
 				return B_NOT_ALLOWED;
 
@@ -5271,6 +5351,15 @@ vfs_init(kernel_args* args)
 	sVnodeTable = new(std::nothrow) VnodeTable();
 	if (sVnodeTable == NULL || sVnodeTable->Init(VNODE_HASH_TABLE_SIZE) != B_OK)
 		panic("vfs_init: error creating vnode hash table\n");
+
+	sVnodeUndertakerCondition.Init(NULL, "vnode undertaker");
+	thread_id vnodeUndertaker = spawn_kernel_thread(vnode_undertaker, "vnode undertaker",
+		B_NORMAL_PRIORITY, NULL);
+	if (vnodeUndertaker < 0)
+		panic("vfs_init: error creating vnode undertaker");
+	vnodeUndertaker = resume_thread(vnodeUndertaker);
+	if (vnodeUndertaker < 0)
+		panic("vfs_init: error creating vnode undertaker");
 
 	sMountsTable = new(std::nothrow) MountTable();
 	if (sMountsTable == NULL
@@ -5340,6 +5429,23 @@ vfs_init(kernel_args* args)
 //	#pragma mark - fd_ops implementations
 
 
+static status_t
+check_open_mode(struct vnode* vnode, int openMode)
+{
+	if ((openMode & O_RDWR) != 0 && (openMode & O_WRONLY) != 0)
+		return B_BAD_VALUE;
+	if ((openMode & O_RWMASK) == O_RDONLY && (openMode & O_TRUNC) != 0)
+		return B_BAD_VALUE;
+
+	if ((openMode & O_NOFOLLOW) != 0 && S_ISLNK(vnode->Type()))
+		return B_LINK_LIMIT;
+	if ((openMode & O_DIRECTORY) != 0 && !S_ISDIR(vnode->Type()))
+		return B_NOT_A_DIRECTORY;
+
+	return B_OK;
+}
+
+
 /*!
 	Calls fs_open() on the given vnode and returns a new
 	file descriptor for it
@@ -5347,8 +5453,12 @@ vfs_init(kernel_args* args)
 static int
 open_vnode(struct vnode* vnode, int openMode, bool kernel)
 {
+	status_t status = check_open_mode(vnode, openMode);
+	if (status != B_OK)
+		return status;
+
 	void* cookie;
-	status_t status = FS_CALL(vnode, open, openMode, &cookie);
+	status = FS_CALL(vnode, open, openMode, &cookie);
 	if (status != B_OK)
 		return status;
 
@@ -5362,11 +5472,13 @@ open_vnode(struct vnode* vnode, int openMode, bool kernel)
 
 
 /*!
-	Calls fs_open() on the given vnode and returns a new
-	file descriptor for it
+	Creates a new regular file and returns a new file descriptor for it.
+
+	If O_EXCL is not specified and an entry already exists at the path,
+	then that entry will be opened and returned instead.
 */
 static int
-create_vnode(struct vnode* directory, const char* name, int openMode,
+file_create_vnode(struct vnode* directory, const char* name, int openMode,
 	int perms, bool kernel)
 {
 	bool traverse = ((openMode & (O_NOTRAVERSE | O_NOFOLLOW)) == 0);
@@ -5375,6 +5487,9 @@ create_vnode(struct vnode* directory, const char* name, int openMode,
 	void* cookie;
 	ino_t newID;
 	char clonedName[B_FILE_NAME_LENGTH + 1];
+
+	if (strcmp(name, ".") == 0)
+		return B_IS_A_DIRECTORY;
 
 	// This is somewhat tricky: If the entry already exists, the FS responsible
 	// for the directory might not necessarily also be the one responsible for
@@ -5427,8 +5542,8 @@ create_vnode(struct vnode* directory, const char* name, int openMode,
 			}
 
 			if (!create) {
-				if ((openMode & O_NOFOLLOW) != 0 && S_ISLNK(vnode->Type()))
-					return B_LINK_LIMIT;
+				if (S_ISDIR(vnode->Type()))
+					return B_IS_A_DIRECTORY;
 
 				int fd = open_vnode(vnode.Get(), openMode & ~O_CREAT, kernel);
 				// on success keep the vnode reference for the FD
@@ -5551,7 +5666,7 @@ file_create_entry_ref(dev_t mountID, ino_t directoryID, const char* name,
 	if (status != B_OK)
 		return status;
 
-	status = create_vnode(directory, name, openMode, perms, kernel);
+	status = file_create_vnode(directory, name, openMode, perms, kernel);
 	put_vnode(directory);
 
 	return status;
@@ -5572,7 +5687,7 @@ file_create(int fd, char* path, int openMode, int perms, bool kernel)
 	if (status < 0)
 		return status;
 
-	return create_vnode(directory.Get(), name, openMode, perms, kernel);
+	return file_create_vnode(directory.Get(), name, openMode, perms, kernel);
 }
 
 
@@ -5594,9 +5709,6 @@ file_open_entry_ref(dev_t mountID, ino_t directoryID, const char* name,
 		kernel, vnode);
 	if (status != B_OK)
 		return status;
-
-	if ((openMode & O_NOFOLLOW) != 0 && S_ISLNK(vnode->Type()))
-		return B_LINK_LIMIT;
 
 	int newFD = open_vnode(vnode.Get(), openMode, kernel);
 	if (newFD >= 0) {
@@ -5626,9 +5738,6 @@ file_open(int fd, char* path, int openMode, bool kernel)
 		&parentID, kernel);
 	if (status != B_OK)
 		return status;
-
-	if ((openMode & O_NOFOLLOW) != 0 && S_ISLNK(vnode->Type()))
-		return B_LINK_LIMIT;
 
 	// open the vnode
 	int newFD = open_vnode(vnode.Get(), openMode, kernel);
@@ -5848,7 +5957,7 @@ file_seek(struct file_descriptor* descriptor, off_t pos, int seekType)
 					break;
 				}
 			}
-			if (status != B_BAD_VALUE && status != B_DEV_INVALID_IOCTL)
+			if (status != B_BAD_VALUE && status != B_DEV_INVALID_IOCTL && status != B_UNSUPPORTED)
 				return status;
 
 			// basic implementation with stat() the node
@@ -5897,7 +6006,13 @@ file_select(struct file_descriptor* descriptor, uint8 event,
 		return B_UNSUPPORTED;
 	}
 
-	return FS_CALL(vnode, select, descriptor->cookie, event, sync);
+	status_t result = FS_CALL(vnode, select, descriptor->cookie, event, sync);
+
+	// A FS may have a select() hook but may not support it in some cases (e.g. write_overlay)
+	if (result == B_UNSUPPORTED && !SELECT_TYPE_IS_OUTPUT_ONLY(event))
+		notify_select_event(sync, event);
+
+	return result;
 }
 
 
@@ -5911,6 +6026,24 @@ file_deselect(struct file_descriptor* descriptor, uint8 event,
 		return B_OK;
 
 	return FS_CALL(vnode, deselect, descriptor->cookie, event, sync);
+}
+
+
+static status_t
+dir_create_vnode(struct vnode* vnode, const char* name, int perms)
+{
+	status_t status;
+	if (HAS_FS_CALL(vnode, create_dir)) {
+		status = FS_CALL(vnode, create_dir, name, perms);
+	} else {
+		struct vnode* entry = NULL;
+		if (lookup_dir_entry(vnode, name, &entry) == B_OK) {
+			status = B_FILE_EXISTS;
+			put_vnode(entry);
+		} else
+			status = B_READ_ONLY_DEVICE;
+	}
+	return status;
 }
 
 
@@ -5931,10 +6064,7 @@ dir_create_entry_ref(dev_t mountID, ino_t parentID, const char* name, int perms,
 	if (status != B_OK)
 		return status;
 
-	if (HAS_FS_CALL(vnode, create_dir))
-		status = FS_CALL(vnode, create_dir, name, perms);
-	else
-		status = B_READ_ONLY_DEVICE;
+	status = dir_create_vnode(vnode, name, perms);
 
 	put_vnode(vnode);
 	return status;
@@ -5950,17 +6080,23 @@ dir_create(int fd, char* path, int perms, bool kernel)
 	FUNCTION(("dir_create: path '%s', perms %d, kernel %d\n", path, perms,
 		kernel));
 
+	char* p = strrchr(path, '/');
+	if (p != NULL) {
+		p++;
+		if (p[0] == '\0') {
+			// special case: the path ends in one or more '/' - remove them
+			while (*--p == '/' && p != path)
+				;
+			p[1] = '\0';
+		}
+	}
+
 	VnodePutter vnode;
 	status = fd_and_path_to_dir_vnode(fd, path, vnode, filename, kernel);
 	if (status < 0)
 		return status;
 
-	if (HAS_FS_CALL(vnode, create_dir)) {
-		status = FS_CALL(vnode.Get(), create_dir, filename, perms);
-	} else
-		status = B_READ_ONLY_DEVICE;
-
-	return status;
+	return dir_create_vnode(vnode.Get(), filename, perms);
 }
 
 
@@ -5969,13 +6105,13 @@ dir_open_entry_ref(dev_t mountID, ino_t parentID, const char* name, bool kernel)
 {
 	FUNCTION(("dir_open_entry_ref()\n"));
 
-	if (name && name[0] == '\0')
+	if (name != NULL && name[0] == '\0')
 		return B_BAD_VALUE;
 
 	// get the vnode matching the entry_ref/node_ref
 	VnodePutter vnode;
 	status_t status;
-	if (name) {
+	if (name != NULL) {
 		status = entry_ref_to_vnode(mountID, parentID, name, true, kernel,
 			vnode);
 	} else {
@@ -6228,9 +6364,10 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 		{
 			// Set file descriptor flags
 
-			// O_CLOEXEC is the only flag available at this time
+			// O_CLOEXEC and O_CLOFORK are the only flags available at this time
 			rw_lock_write_lock(&context->lock);
 			fd_set_close_on_exec(context, fd, (argument & FD_CLOEXEC) != 0);
+			fd_set_close_on_fork(context, fd, (argument & FD_CLOFORK) != 0);
 			rw_lock_write_unlock(&context->lock);
 
 			status = B_OK;
@@ -6242,6 +6379,7 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 			// Get file descriptor flags
 			rw_lock_read_lock(&context->lock);
 			status = fd_close_on_exec(context, fd) ? FD_CLOEXEC : 0;
+			status |= fd_close_on_fork(context, fd) ? FD_CLOFORK : 0;
 			rw_lock_read_unlock(&context->lock);
 			break;
 		}
@@ -6278,14 +6416,17 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 
 		case F_DUPFD:
 		case F_DUPFD_CLOEXEC:
+		case F_DUPFD_CLOFORK:
 		{
+			WriteLocker contextLocker(context->lock);
 			status = new_fd_etc(context, descriptor.Get(), (int)argument);
 			if (status >= 0) {
-				rw_lock_write_lock(&context->lock);
-				fd_set_close_on_exec(context, status, op == F_DUPFD_CLOEXEC);
-				rw_lock_write_unlock(&context->lock);
+				if (op == F_DUPFD_CLOEXEC)
+					fd_set_close_on_exec(context, status, true);
+				else if (op == F_DUPFD_CLOFORK)
+					fd_set_close_on_fork(context, status, true);
 
-				atomic_add(&descriptor->ref_count, 1);
+				inc_fd_ref_count(descriptor.Get());
 			}
 			break;
 		}
@@ -6381,9 +6522,9 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 
 
 static status_t
-common_sync(int fd, bool kernel)
+common_sync(int fd, bool dataOnly, bool kernel)
 {
-	FUNCTION(("common_fsync: entry. fd %d kernel %d\n", fd, kernel));
+	FUNCTION(("common_sync: entry. fd %d kernel %d, data only %d\n", fd, kernel, dataOnly));
 
 	struct vnode* vnode;
 	FileDescriptorPutter descriptor(get_fd_and_vnode(fd, &vnode, kernel));
@@ -6392,7 +6533,7 @@ common_sync(int fd, bool kernel)
 
 	status_t status;
 	if (HAS_FS_CALL(vnode, fsync))
-		status = FS_CALL_NO_PARAMS(vnode, fsync);
+		status = FS_CALL(vnode, fsync, dataOnly);
 	else
 		status = B_UNSUPPORTED;
 
@@ -6815,8 +6956,9 @@ attr_create(int fd, char* path, const char* name, uint32 type,
 	if (status != B_OK)
 		return status;
 
-	if ((openMode & O_NOFOLLOW) != 0 && S_ISLNK(vnode->Type()))
-		return B_LINK_LIMIT;
+	status = check_open_mode(vnode.Get(), openMode);
+	if (status != B_OK)
+		return status;
 
 	if (!HAS_FS_CALL(vnode, create_attr))
 		return B_READ_ONLY_DEVICE;
@@ -6856,8 +6998,9 @@ attr_open(int fd, char* path, const char* name, int openMode, bool kernel)
 	if (status != B_OK)
 		return status;
 
-	if ((openMode & O_NOFOLLOW) != 0 && S_ISLNK(vnode->Type()))
-		return B_LINK_LIMIT;
+	status = check_open_mode(vnode.Get(), openMode);
+	if (status != B_OK)
+		return status;
 
 	if (!HAS_FS_CALL(vnode, open_attr))
 		return B_UNSUPPORTED;
@@ -7416,7 +7559,7 @@ fs_mount(char* path, const char* device, const char* fsName, uint32 flags,
 	KPath normalizedDevice;
 	bool newlyCreatedFileDevice = false;
 
-	if (!(flags & B_MOUNT_VIRTUAL_DEVICE) && device != NULL) {
+	if ((flags & B_MOUNT_VIRTUAL_DEVICE) == 0 && device != NULL) {
 		// normalize the device path
 		status = normalizedDevice.SetTo(device, true);
 		if (status != B_OK)
@@ -7437,7 +7580,7 @@ fs_mount(char* path, const char* device, const char* fsName, uint32 flags,
 			}
 		}
 
-		if (!partition) {
+		if (partition == NULL) {
 			TRACE(("fs_mount(): Partition `%s' not found.\n",
 				normalizedDevice.Path()));
 			return B_ENTRY_NOT_FOUND;
@@ -7453,16 +7596,15 @@ fs_mount(char* path, const char* device, const char* fsName, uint32 flags,
 	// interfering.
 	// TODO: Just mark the partition busy while mounting!
 	KDiskDevice* diskDevice = NULL;
-	if (partition) {
+	if (partition != NULL) {
 		diskDevice = ddm->WriteLockDevice(partition->Device()->ID());
-		if (!diskDevice) {
+		if (diskDevice == NULL) {
 			TRACE(("fs_mount(): Failed to lock disk device!\n"));
 			return B_ERROR;
 		}
 	}
-
+	PartitionRegistrar diskDeviceRegistrar(diskDevice, true);
 	DeviceWriteLocker writeLocker(diskDevice, true);
-		// this takes over the write lock acquired before
 
 	if (partition != NULL) {
 		// make sure, that the partition is not busy
@@ -7471,10 +7613,15 @@ fs_mount(char* path, const char* device, const char* fsName, uint32 flags,
 			return B_BUSY;
 		}
 
+		if (partition->IsMounted()) {
+			TRACE(("fs_mount(): Partition is already mounted.\n"));
+			return B_BUSY;
+		}
+
 		// if no FS name had been supplied, we get it from the partition
 		if (fsName == NULL) {
 			KDiskSystem* diskSystem = partition->DiskSystem();
-			if (!diskSystem) {
+			if (diskSystem == NULL) {
 				TRACE(("fs_mount(): No FS name was given, and the DDM didn't "
 					"recognize it.\n"));
 				return B_BAD_VALUE;
@@ -7657,6 +7804,7 @@ fs_mount(char* path, const char* device, const char* fsName, uint32 flags,
 
 		coveredNode->covered_by = mount->root_vnode;
 		coveredNode->SetCovered(true);
+		inc_vnode_ref_count(mount->root_vnode);
 	}
 	rw_lock_write_unlock(&sVnodeLock);
 
@@ -7669,7 +7817,7 @@ fs_mount(char* path, const char* device, const char* fsName, uint32 flags,
 	}
 
 	// supply the partition (if any) with the mount ID and mark it mounted
-	if (partition) {
+	if (partition != NULL) {
 		partition->SetVolumeID(mount->id);
 
 		// keep a partition reference as long as the partition is mounted
@@ -7717,6 +7865,11 @@ fs_unmount(char* path, dev_t mountID, uint32 flags, bool kernel)
 			return B_ENTRY_NOT_FOUND;
 	}
 
+	// sync() first, so there's less to write during teardown
+	err = fs_sync(path != NULL ? pathVnode->device : mountID);
+	if (err != B_OK)
+		return err;
+
 	RecursiveLocker mountOpLocker(sMountOpLock);
 	ReadLocker mountLocker(sMountLock);
 
@@ -7748,11 +7901,12 @@ fs_unmount(char* path, dev_t mountID, uint32 flags, bool kernel)
 			return B_ERROR;
 		}
 		diskDevice = ddm->WriteLockDevice(partition->Device()->ID());
-		if (!diskDevice) {
+		if (diskDevice == NULL) {
 			TRACE(("fs_unmount(): Failed to lock disk device!\n"));
 			return B_ERROR;
 		}
 	}
+	PartitionRegistrar diskDeviceRegistrar(diskDevice, true);
 	DeviceWriteLocker writeLocker(diskDevice, true);
 
 	// make sure, that the partition is not busy
@@ -7788,6 +7942,8 @@ fs_unmount(char* path, dev_t mountID, uint32 flags, bool kernel)
 			if (vnode->covers != NULL)
 				refCount--;
 			if (vnode->covered_by != NULL)
+				refCount--;
+			if (vnode == mount->root_vnode)
 				refCount--;
 
 			if (refCount != 0) {
@@ -7880,6 +8036,9 @@ fs_unmount(char* path, dev_t mountID, uint32 flags, bool kernel)
 			}
 		}
 
+		if (vnode == mount->root_vnode)
+			continue;
+
 		vnode->SetBusy(true);
 		vnode_to_be_freed(vnode);
 	}
@@ -7887,8 +8046,6 @@ fs_unmount(char* path, dev_t mountID, uint32 flags, bool kernel)
 	vnodesWriteLocker.Unlock();
 
 	// Free all vnodes associated with this mount.
-	// They will be removed from the mount list by free_vnode(), so
-	// we don't have to do this.
 	while (struct vnode* vnode = mount->vnodes.Head()) {
 		// Put the references to external covered/covering vnodes we kept above.
 		if (Vnode* coveredNode = vnode->covers)
@@ -7896,8 +8053,17 @@ fs_unmount(char* path, dev_t mountID, uint32 flags, bool kernel)
 		if (Vnode* coveringNode = vnode->covered_by)
 			put_vnode(coveringNode);
 
-		free_vnode(vnode, false);
+		// free_vnode() removes nodes from the mount list. However, the root
+		// will still be referenced by the FS, so we can't free it yet.
+		if (vnode == mount->root_vnode)
+			remove_vnode_from_mount_list(vnode, mount);
+		else
+			free_vnode(vnode, false);
 	}
+
+	// Re-add the root to the mount list, so it can be freed.
+	add_vnode_to_mount_list(mount->root_vnode, mount);
+	mount->root_vnode = NULL;
 
 	// remove the mount structure from the hash table
 	rw_lock_write_lock(&sMountLock);
@@ -8052,9 +8218,12 @@ fs_write_info(dev_t device, const struct fs_info* info, int mask)
 	if (status != B_OK)
 		return status;
 
-	if (HAS_FS_MOUNT_CALL(mount, write_fs_info))
+	if (HAS_FS_MOUNT_CALL(mount, write_fs_info)) {
 		status = FS_MOUNT_CALL(mount, write_fs_info, info, mask);
-	else
+
+		if ((mask & FS_WRITE_FSINFO_NAME) && status == B_OK)
+			mount->partition->SetContentName(info->volume_name);
+	} else
 		status = B_READ_ONLY_DEVICE;
 
 	put_mount(mount);
@@ -8404,9 +8573,9 @@ _kern_fcntl(int fd, int op, size_t argument)
 
 
 status_t
-_kern_fsync(int fd)
+_kern_fsync(int fd, bool dataOnly)
 {
-	return common_sync(fd, true);
+	return common_sync(fd, dataOnly, true);
 }
 
 
@@ -8822,6 +8991,9 @@ _user_mount(const char* userPath, const char* userDevice,
 	const char* userFileSystem, uint32 flags, const char* userArgs,
 	size_t argsLength)
 {
+	if (geteuid() != 0)
+		return B_NOT_ALLOWED;
+
 	char fileSystem[B_FILE_NAME_LENGTH];
 	KPath path, device;
 	char* args = NULL;
@@ -8890,6 +9062,9 @@ _user_mount(const char* userPath, const char* userDevice,
 status_t
 _user_unmount(const char* userPath, uint32 flags)
 {
+	if (geteuid() != 0)
+		return B_NOT_ALLOWED;
+
 	if (!IS_USER_ADDRESS(userPath))
 		return B_BAD_ADDRESS;
 
@@ -9237,9 +9412,9 @@ _user_fcntl(int fd, int op, size_t argument)
 
 
 status_t
-_user_fsync(int fd)
+_user_fsync(int fd, bool dataOnly)
 {
-	return common_sync(fd, false);
+	return common_sync(fd, dataOnly, false);
 }
 
 
@@ -9565,7 +9740,7 @@ status_t
 _user_create_pipe(int* userFDs, int flags)
 {
 	// check acceptable flags
-	if ((flags & ~(O_NONBLOCK | O_CLOEXEC)) != 0)
+	if ((flags & ~(O_NONBLOCK | O_CLOEXEC | O_CLOFORK)) != 0)
 		return B_BAD_VALUE;
 
 	// rootfs should support creating FIFOs, but let's be sure
@@ -9591,13 +9766,10 @@ _user_create_pipe(int* userFDs, int flags)
 	}
 
 	// Everything looks good so far. Open two FDs for reading respectively
-	// writing, O_NONBLOCK to avoid blocking on open with O_RDONLY
+	// writing, O_NONBLOCK to avoid blocking on open
 	int fds[2];
 	fds[0] = open_vnode(vnode, O_RDONLY | O_NONBLOCK | flags, false);
-	fds[1] = open_vnode(vnode, O_WRONLY | flags, false);
-	// Reset O_NONBLOCK if requested
-	if ((flags & O_NONBLOCK) == 0)
-		common_fcntl(fds[0], F_SETFL, flags & O_NONBLOCK, false);
+	fds[1] = open_vnode(vnode, O_WRONLY | O_NONBLOCK | flags, false);
 
 	FDCloser closer0(fds[0], false);
 	FDCloser closer1(fds[1], false);
@@ -9606,6 +9778,12 @@ _user_create_pipe(int* userFDs, int flags)
 
 	// copy FDs to userland
 	if (status == B_OK) {
+		// Reset O_NONBLOCK if requested
+		if ((flags & O_NONBLOCK) == 0) {
+			common_fcntl(fds[0], F_SETFL, flags & O_NONBLOCK, false);
+			common_fcntl(fds[1], F_SETFL, flags & O_NONBLOCK, false);
+		}
+
 		if (!IS_USER_ADDRESS(userFDs)
 			|| user_memcpy(userFDs, fds, sizeof(fds)) != B_OK) {
 			status = B_BAD_ADDRESS;
@@ -9616,6 +9794,12 @@ _user_create_pipe(int* userFDs, int flags)
 	if (status == B_OK) {
 		closer0.Detach();
 		closer1.Detach();
+	} else {
+		// release node references which aren't bound to a fd
+		if (fds[0] < 0)
+			put_vnode(vnode);
+		if (fds[1] < 0)
+			put_vnode(vnode);
 	}
 
 	return status;

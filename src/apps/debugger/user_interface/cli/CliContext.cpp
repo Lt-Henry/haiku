@@ -265,8 +265,8 @@ CliContext::SetCurrentThread(::Thread* thread)
 void
 CliContext::PrintCurrentThread()
 {
-	AutoLocker< ::Team> teamLocker(fTeam);
 	AutoLocker<BLocker> locker(fLock);
+	AutoLocker< ::Team> teamLocker(fTeam);
 
 	if (fCurrentThread != NULL) {
 		printf("current thread: %" B_PRId32 " \"%s\"\n", fCurrentThread->ID(),
@@ -382,22 +382,8 @@ CliContext::QuitSession(bool killTeam)
 
 
 void
-CliContext::WaitForThreadOrUser()
+CliContext::WaitForEvent(uint32 event)
 {
-// TODO: Deal with SIGINT as well!
-
-	AutoLocker<BLocker> locker(fLock);
-
-	while (fStoppedThread == NULL)
-		_WaitForEvent(MSG_THREAD_STATE_CHANGED);
-
-	if (fCurrentThread == NULL)
-		SetCurrentThread(fStoppedThread);
-}
-
-
-void
-CliContext::WaitForEvent(uint32 event) {
 	AutoLocker<BLocker> locker(fLock);
 	_WaitForEvent(event);
 }
@@ -438,7 +424,7 @@ CliContext::MessageReceived(BMessage* message)
 			break;
 		}
 		case MSG_THREAD_STACK_TRACE_CHANGED:
-			if (threadID == fCurrentThread->ID()) {
+			if (fCurrentThread != NULL && threadID == fCurrentThread->ID()) {
 				AutoLocker< ::Team> locker(fTeam);
 				::Thread* thread = fTeam->ThreadByID(threadID);
 

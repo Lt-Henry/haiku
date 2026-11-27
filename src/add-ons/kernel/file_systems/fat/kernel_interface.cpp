@@ -1,7 +1,7 @@
 /*
  * Copyright 1999-2001, Be Incorporated.   All Rights Reserved.
  * Copyright 2001-2020, Axel Dörfler, axeld@pinc-software.de.
- * Copyright 2024, Haiku, Inc. All rights reserved.
+ * Copyright 2024-2026, Haiku, Inc. All rights reserved.
  * This file may be used under the terms of the Be Sample Code License.
  */
 
@@ -90,6 +90,7 @@
 #include <kernel.h>
 #include <syscalls.h>
 #include <util/AutoLock.h>
+#include <util/Vector.h>
 #include <vfs.h>
 #endif // !FS_SHELL
 
@@ -121,6 +122,7 @@ extern "C"
 #ifdef FS_SHELL
 #include "fssh_defines.h"
 #endif // FS_SHELL
+#include "encodings.h"
 #include "mkdos.h"
 #include "support.h"
 #include "vcache.h"
@@ -143,14 +145,14 @@ status_t bsd_device_uninit(cdev* device);
 static status_t dev_bsd_node_init(cdev* bsdDevice, vnode** devNode);
 status_t dev_bsd_node_uninit(vnode* devNode);
 static status_t fat_volume_init(vnode* devvp, mount* bsdVolume, const uint64_t fatFlags,
-	const char* oemPref);
+	const char* userlandOemPref);
 status_t fat_volume_uninit(msdosfsmount* volume);
 
 
 typedef struct IdentifyCookie {
 	uint32 fBytesPerSector;
 	uint32 fTotalSectors;
-	char fName[12];
+	char fName[SHORT_TO_UTF8_SIZE];
 } IdentifyCookie;
 
 typedef struct FileCookie {
@@ -195,24 +197,36 @@ dosfs_mount(fs_volume* volume, const char* device, uint32 flags, const char* arg
 	status_t status = B_OK;
 
 	int opSyncMode = 0;
-	char oemPref[11] = "";
+	char userlandOemPref[11] = "";
+	int kernelOemPref = 1;
 	void* handle = load_driver_settings("dos");
 	if (handle != NULL) {
 		opSyncMode = strtoul(get_driver_parameter(handle, "op_sync_mode", "0", "0"), NULL, 0);
 		if (opSyncMode < 0 || opSyncMode > 2)
 			opSyncMode = 0;
 
-		strlcpy(oemPref, get_driver_parameter(handle, "OEM_code_page", "", ""), 11);
+		kernelOemPref
+			= strtoul(get_driver_parameter(handle, "kernel_code_page", "1", "1"), NULL, 0);
+		if (kernelOemPref < 0 || kernelOemPref > 2)
+			kernelOemPref = 1;
+
+		strlcpy(userlandOemPref, get_driver_parameter(handle, "userland_code_page", "", ""), 11);
 
 		unload_driver_settings(handle);
 	}
 
 	uint64 fatFlags = 0;
+
+	if (kernelOemPref == 0)
+		fatFlags |= MSDOSFS_CP850;
+	else if (kernelOemPref == 2)
+		fatFlags |= MSDOSFS_SJIS;
+
 	// libiconv support is implemented only for the userlandfs module
 #ifdef USER
 	fatFlags |= MSDOSFSMNT_KICONV;
-	if (strcmp(oemPref, "") == 0)
-		strlcpy(oemPref, "CP1252", 11);
+	if (strcmp(userlandOemPref, "") == 0)
+		strlcpy(userlandOemPref, "CP1252", 11);
 #endif // USER
 
 	// args is a command line option; dosfs doesn't use any so we can ignore it
@@ -279,7 +293,7 @@ dosfs_mount(fs_volume* volume, const char* device, uint32 flags, const char* arg
 	DevVnodeDeleter devVnodeDeleter(devNode);
 
 	// initialize the FAT private volume data
-	status = fat_volume_init(devNode, bsdVolume, fatFlags, oemPref);
+	status = fat_volume_init(devNode, bsdVolume, fatFlags, userlandOemPref);
 	if (status != B_OK)
 		RETURN_ERROR(status);
 	msdosfsmount* fatVolume = reinterpret_cast<msdosfsmount*>(bsdVolume->mnt_data);
@@ -317,6 +331,9 @@ dosfs_mount(fs_volume* volume, const char* device, uint32 flags, const char* arg
 	status = _dosfs_read_vnode(bsdVolume, rootInode, &bsdRootNode);
 	if (status != B_OK)
 		RETURN_ERROR(status);
+
+	bsdRootNode->v_parent = rootInode;
+
 	denode* fatRootNode = reinterpret_cast<denode*>(bsdRootNode->v_data);
 	ASSERT(fatRootNode->de_dirclust == dirClust && fatRootNode->de_diroffset == dirOffset);
 
@@ -388,6 +405,9 @@ dosfs_identify_partition(int fd, partition_data* partition, void** _cookie)
 		= dummyVolume.pm_bpb.bpbSecPerClust * dummyVolume.pm_BlkPerSec * DEV_BSIZE;
 	dummyVolume.pm_bnshift = ffs(DEV_BSIZE) - 1;
 	dummyVolume.pm_fatblk = dummyVolume.pm_ResSectors * dummyVolume.pm_BlkPerSec;
+	dummyVolume.pm_flags = 0;
+		// in this context we have no information on user encoding preference, so we
+		// will set the volume flags as if the kernel_code_page value is 1
 	if (type == fat32) {
 		// for FAT32, read_label depends on pm_firstcluster
 		dummyVolume.pm_firstcluster
@@ -398,7 +418,7 @@ dosfs_identify_partition(int fd, partition_data* partition, void** _cookie)
 			= dummyVolume.pm_fatblk + dummyVolume.pm_FATs * dummyVolume.pm_FATsecs;
 	}
 
-	char name[LABEL_CSTRING];
+	char name[SHORT_TO_UTF8_SIZE];
 	strcpy(name, "no name");
 	read_label(&dummyVolume, fd, buf, name);
 
@@ -407,7 +427,7 @@ dosfs_identify_partition(int fd, partition_data* partition, void** _cookie)
 		return -1;
 	cookie->fBytesPerSector = dummyVolume.pm_BytesPerSec;
 	cookie->fTotalSectors = dummyVolume.pm_HugeSectors;
-	strlcpy(cookie->fName, name, 12);
+	strlcpy(cookie->fName, name, SHORT_TO_UTF8_SIZE);
 
 	*_cookie = cookie;
 
@@ -459,6 +479,8 @@ dosfs_unmount(fs_volume* volume)
 	status_t status = B_OK;
 	status_t returnStatus = B_OK;
 
+	put_vnode(volume, root_inode(fatVolume));
+
 	MutexLocker locker(bsdVolume->mnt_mtx.haikuMutex);
 
 	status = fat_volume_uninit(fatVolume);
@@ -492,7 +514,7 @@ dosfs_read_fs_stat(fs_volume* volume, struct fs_info* info)
 
 	MutexLocker locker(bsdVolume->mnt_mtx.haikuMutex);
 
-	info->flags = B_FS_IS_PERSISTENT | B_FS_HAS_MIME;
+	info->flags = B_FS_IS_PERSISTENT;
 	if ((bsdVolume->mnt_flag & MNT_RDONLY) != 0)
 		info->flags |= B_FS_IS_READONLY;
 
@@ -540,9 +562,8 @@ dosfs_write_fs_stat(fs_volume* volume, const struct fs_info* info, uint32 mask)
 		return B_READ_ONLY_DEVICE;
 
 	PRINT("wfsstat: setting name to %s\n", info->volume_name);
-	char name[LABEL_CSTRING];
-	strlcpy(name, info->volume_name, LABEL_CSTRING);
-	status_t status = label_to_fat(name);
+	uint8 fatLabel[LABEL_LENGTH];
+	status_t status = label_to_fat(info->volume_name, fatLabel, fatVolume);
 	if (status != B_OK)
 		return status;
 
@@ -559,11 +580,10 @@ dosfs_write_fs_stat(fs_volume* volume, const struct fs_info* info, uint32 mask)
 	char* memoryLabel = fatVolume->pm_dev->si_name;
 	if (buffer[ebsOffset] == EXBOOTSIG) {
 		// double check the position by verifying the name presently stored there
-		char bpbLabel[LABEL_CSTRING];
-		memcpy(bpbLabel, buffer + labelOffset, LABEL_LENGTH);
-		label_from_fat(bpbLabel);
-		if (strncmp(bpbLabel, memoryLabel, LABEL_LENGTH) == 0) {
-			memcpy(buffer + labelOffset, name, LABEL_LENGTH);
+		char bpbLabel[SHORT_TO_UTF8_SIZE];
+		int length = label_from_fat(buffer + labelOffset, bpbLabel, fatVolume);
+		if (strncmp(bpbLabel, memoryLabel, length) == 0) {
+			memcpy(buffer + labelOffset, fatLabel, LABEL_LENGTH);
 		} else {
 			INFORM("wfsstat: BPB position check failed\n");
 			block_cache_set_dirty(blockCache, 0, false, -1);
@@ -575,36 +595,34 @@ dosfs_write_fs_stat(fs_volume* volume, const struct fs_info* info, uint32 mask)
 	// update the label file if there is one
 	if (bsdVolume->mnt_volentry >= 0) {
 		uint8* rootDirBuffer;
-		daddr_t rootDirBlock = fatVolume->pm_rootdirblk;
+		daddr_t rootDirSector = fatVolume->pm_rootdirblk;
 		if (FAT32(fatVolume) == true)
-			rootDirBlock = cntobn(fatVolume, fatVolume->pm_rootdirblk);
+			rootDirSector = cntobn(fatVolume, fatVolume->pm_rootdirblk);
+		rootDirSector = BLOCK_TO_SECTOR(fatVolume, rootDirSector);
 		daddr_t dirOffset = bsdVolume->mnt_volentry * sizeof(direntry);
-		rootDirBlock += dirOffset / DEV_BSIZE;
+		rootDirSector += dirOffset / fatVolume->pm_BytesPerSec;
 
-		status = block_cache_get_writable_etc(blockCache, rootDirBlock, -1,
+		status = block_cache_get_writable_etc(blockCache, rootDirSector, -1,
 			reinterpret_cast<void**>(&rootDirBuffer));
 		if (status == B_OK) {
 			direntry* label_direntry = reinterpret_cast<direntry*>(rootDirBuffer + dirOffset);
-
-			char rootLabel[LABEL_CSTRING];
-			memcpy(rootLabel, label_direntry->deName, LABEL_LENGTH);
-			label_from_fat(rootLabel);
-			if (strncmp(rootLabel, memoryLabel, LABEL_LENGTH) == 0) {
-				memcpy(label_direntry->deName, name, LABEL_LENGTH);
+			char rootLabel[SHORT_TO_UTF8_SIZE];
+			int length = label_from_fat(label_direntry->deName, rootLabel, fatVolume);
+			if (strncmp(rootLabel, memoryLabel, length) == 0) {
+				memcpy(label_direntry->deName, fatLabel, LABEL_LENGTH);
 			} else {
 				INFORM("wfsstat: root directory position check failed\n");
-				block_cache_set_dirty(blockCache, rootDirBlock, false, -1);
+				block_cache_set_dirty(blockCache, rootDirSector, false, -1);
 				status = B_ERROR;
 			}
-			block_cache_put(blockCache, rootDirBlock);
+			block_cache_put(blockCache, rootDirSector);
 		}
 	} else {
 		// A future enhancement could be to create a label direntry if none exists already.
 	}
 
 	if (status == B_OK) {
-		memcpy(memoryLabel, name, LABEL_LENGTH);
-		label_from_fat(memoryLabel);
+		label_from_fat(fatLabel, memoryLabel, fatVolume);
 	}
 
 	if ((bsdVolume->mnt_flag & MNT_SYNCHRONOUS) != 0)
@@ -725,10 +743,6 @@ _dosfs_read_vnode(mount* bsdVolume, const ino_t id, vnode** newNode, bool create
 
 	vnode* bsdNode = fatNode->de_vnode;
 	if (bsdNode->v_type == VREG) {
-		status = set_mime_type(bsdNode, false);
-		if (status != B_OK)
-			REPORT_ERROR(status);
-
 		if (createFileCache) {
 			bsdNode->v_cache
 				= file_cache_create(fatVolume->pm_dev->si_id, fatNode->de_inode, fatNode->de_FileSize);
@@ -736,16 +750,6 @@ _dosfs_read_vnode(mount* bsdVolume, const ino_t id, vnode** newNode, bool create
 				= file_map_create(fatVolume->pm_dev->si_id, fatNode->de_inode, fatNode->de_FileSize);
 		}
 	}
-
-	// identify the parent directory
-	if (id == root_inode(fatVolume)) {
-		bsdNode->v_parent = id;
-	} else if (bsdNode->v_type == VREG) {
-		bsdNode->v_parent = fatVolume->pm_bpcluster * dirClust;
-		assign_inode(bsdVolume, &bsdNode->v_parent);
-	}
-	// For a directory other than the root directory, there is no easy way to
-	// ID the parent. That Will be done in later (in dosfs_walk / dosfs_mkdir).
 
 	bsdNode->v_state = VSTATE_CONSTRUCTED;
 
@@ -808,11 +812,8 @@ dosfs_walk(fs_volume* volume, fs_vnode* dir, const char* name, ino_t* _id)
 		RETURN_ERROR(status);
 	denode* fatResult = reinterpret_cast<denode*>(bsdResult->v_data);
 
-	if (bsdResult->v_type == VDIR) {
-		// dosfs_read_vnode does not set this for directories because it does not know the
-		// parent inode
-		bsdResult->v_parent = fatDir->de_inode;
-	}
+	// dosfs_read_vnode does not set this because it does not know the parent inode
+	bsdResult->v_parent = fatDir->de_inode;
 
 	*_id = fatResult->de_inode;
 
@@ -930,7 +931,7 @@ dosfs_can_page(fs_volume* vol, fs_vnode* vnode, void* cookie)
 
 
 static status_t
-dosfs_read_pages(fs_volume* volume, fs_vnode* vnode, void* cookie, off_t pos, const iovec* vecs,
+dosfs_read_pages(fs_volume* volume, fs_vnode* vnode, void*, off_t pos, const iovec* vecs,
 	size_t count, size_t* _numBytes)
 {
 	mount* bsdVolume = reinterpret_cast<mount*>(volume->private_volume);
@@ -976,7 +977,7 @@ dosfs_read_pages(fs_volume* volume, fs_vnode* vnode, void* cookie, off_t pos, co
 
 
 static status_t
-dosfs_write_pages(fs_volume* volume, fs_vnode* vnode, void* cookie, off_t pos, const iovec* vecs,
+dosfs_write_pages(fs_volume* volume, fs_vnode* vnode, void*, off_t pos, const iovec* vecs,
 	size_t count, size_t* _numBytes)
 {
 	mount* bsdVolume = reinterpret_cast<mount*>(volume->private_volume);
@@ -1025,7 +1026,7 @@ dosfs_write_pages(fs_volume* volume, fs_vnode* vnode, void* cookie, off_t pos, c
 
 
 static status_t
-dosfs_io(fs_volume* volume, fs_vnode* vnode, void* cookie, io_request* request)
+dosfs_io(fs_volume* volume, fs_vnode* vnode, void*, io_request* request)
 {
 #if KDEBUG_RW_LOCK_DEBUG
 	// dosfs_io depends on read-locks being implicitly transferrable across threads.
@@ -1175,7 +1176,99 @@ dosfs_get_file_map(fs_volume* volume, fs_vnode* vnode, off_t position, size_t le
 
 
 static status_t
-dosfs_fsync(fs_volume* volume, fs_vnode* vnode)
+dosfs_ioctl(fs_volume* volume, fs_vnode* vnode, void* cookie, uint32 op, void* buffer,
+	size_t length)
+{
+	mount* bsdVolume = reinterpret_cast<mount*>(volume->private_volume);
+	struct vnode* bsdNode = reinterpret_cast<struct vnode*>(vnode->private_node);
+
+	status_t status = B_OK;
+	WriteLocker locker;
+
+	switch (op) {
+#ifdef _KERNEL_MODE
+		case FAT_IOCTL_DUMP_DIR:
+			FUNCTION_START("FAT_IOCTL_DUMP_DIR\n");
+
+			locker.SetTo(bsdNode->v_vnlock->haikuRW, false);
+
+			status = _dosfs_access(bsdVolume, bsdNode, R_OK | X_OK);
+			if (status != B_OK)
+				RETURN_ERROR(status);
+
+			size_t count;
+			status = dprintf_fat_dir(bsdVolume, bsdNode, count);
+			if (length >= sizeof(count))
+				memcpy(buffer, &count, sizeof(count));
+
+			break;
+
+		case FAT_IOCTL_GET_UTF16_LONGNAME:
+		{
+			FUNCTION_START("FAT_IOCTL_GET_UTF16_LONGNAME\n");
+
+			msdosfsmount* fatVolume = reinterpret_cast<msdosfsmount*>(bsdVolume->mnt_data);
+			denode* fatNode = reinterpret_cast<denode*>(bsdNode->v_data);
+
+			if ((bsdNode->v_vflag & VV_ROOT) != 0) {
+				INFORM("Root node has no name.\n");
+				RETURN_ERROR(B_ERROR);
+			}
+
+			struct vnode* parentBsdNode;
+			status = get_vnode(volume, bsdNode->v_parent, reinterpret_cast<void**>(&parentBsdNode));
+			if (status != B_OK)
+				RETURN_ERROR(status);
+			NodePutter nodePutter(parentBsdNode);
+			locker.SetTo(parentBsdNode->v_vnlock->haikuRW, false);
+
+			status = _dosfs_access(bsdVolume, parentBsdNode, R_OK | X_OK);
+			if (status != B_OK)
+				RETURN_ERROR(status);
+
+			// For directory nodes, fatNode->de_diroffset is always zero, indicating the '.' entry
+			// in the same directory file. What we want is the offset of the direntry in
+			// parentFatNode that holds the directory's short name. We use msdosfs_lookup_ino to set
+			// parentFatNode->de_fndoffset to that value.
+			if (bsdNode->v_type == VDIR) {
+				daddr_t dirClust;
+				u_long dirOffset;
+				ComponentName bsdName(0, NOCRED, LOOKUP, 0, reinterpret_cast<char*>(buffer));
+				status = B_FROM_POSIX_ERROR(
+					msdosfs_lookup_ino(parentBsdNode, NULL, bsdName.Data(), &dirClust, &dirOffset));
+				if (status != B_OK)
+					RETURN_ERROR(status);
+			}
+
+			denode* parentFatNode = reinterpret_cast<denode*>(parentBsdNode->v_data);
+
+			u_long direntryOffset = 0;
+			if (bsdNode->v_type == VDIR) {
+				direntryOffset = parentFatNode->de_fndoffset;
+			} else if (bsdNode->v_type == VREG) {
+				u_long cluster = parentFatNode->de_StartCluster;
+				uint32 clusterIndex = 0;
+				while (cluster != fatNode->de_dirclust) {
+					fatentry(FAT_GET, fatVolume, cluster, &cluster, 0);
+					++clusterIndex;
+				}
+				direntryOffset = clusterIndex * fatVolume->pm_bpcluster + fatNode->de_diroffset;
+			}
+
+			status = read_longname(parentBsdNode, direntryOffset, reinterpret_cast<uint16*>(buffer),
+				length / 2);
+		} break;
+#endif
+		default:
+			status = B_DEV_INVALID_IOCTL;
+	}
+
+	RETURN_ERROR(status);
+}
+
+
+static status_t
+dosfs_fsync(fs_volume* volume, fs_vnode* vnode, bool dataOnly)
 {
 	struct vnode* bsdNode = reinterpret_cast<struct vnode*>(vnode->private_node);
 
@@ -1213,9 +1306,11 @@ _dosfs_fsync(struct vnode* bsdNode)
 		if (externStatus != B_OK)
 			REPORT_ERROR(externStatus);
 	} else {
-		size_t fatBlocks = (fatVolume->pm_fatsize * fatVolume->pm_FATs) / DEV_BSIZE;
+		off_t fatFirstSector = fatVolume->pm_fatblk / fatVolume->pm_BytesPerSec;
+		size_t fatSectors = (fatVolume->pm_fatsize * fatVolume->pm_FATs)
+			/ fatVolume->pm_BytesPerSec;
 		status_t fatStatus
-			= block_cache_sync_etc(bsdVolume->mnt_cache, fatVolume->pm_fatblk, fatBlocks);
+			= block_cache_sync_etc(bsdVolume->mnt_cache, fatFirstSector, fatSectors);
 		if (fatStatus != B_OK) {
 			externStatus = fatStatus;
 			REPORT_ERROR(fatStatus);
@@ -1363,23 +1458,47 @@ dosfs_rename(fs_volume* volume, fs_vnode* fromDir, const char* fromName, fs_vnod
 	if (fromDir == toDir && !strcmp(fromName, toName))
 		return B_OK;
 
-	if (is_filename_legal(toName) == false) {
-		INFORM("file name '%s' is not permitted in the FAT filesystem\n", toName);
-		return B_BAD_VALUE;
+	bool permissiveRecycling = false;
+	bool strictlyLegal;
+	bool permissiveLegal = is_filename_legal(toName, true, &strictlyLegal);
+	if (!strictlyLegal) {
+		// for compatability with miscoded names, we might continue if the file is being recycled
+		if (permissiveLegal) {
+			ino_t recycle;
+			status_t status = recycle_bin_inode(bsdVolume, &recycle);
+			if (status == B_OK) {
+				denode* toDirFatNode = reinterpret_cast<denode*>(toDirBsdNode->v_data);
+				if (static_cast<ino_t>(toDirFatNode->de_inode) == recycle) {
+					PRINT("permitting illegal name %s\n", toName);
+					permissiveRecycling = true;
+				}
+			}
+		}
+
+		if (permissiveRecycling == false) {
+			INFORM("file name '%s' is not permitted in the FAT filesystem\n", toName);
+			return B_BAD_VALUE;
+		}
 	}
 
 	ComponentName fromBsdName(ISLASTCN, NOCRED, RENAME, 0, fromName);
 	ComponentName toBsdName(ISLASTCN, NOCRED, RENAME, 0, toName);
+	if (permissiveRecycling) {
+		status_t status = fix_miscoded_longname(toBsdName.Data()->cn_nameptr,
+			toBsdName.Data()->cn_namelen, toBsdName.Data()->cn_namelen + 1);
+		if (status != B_OK)
+			REPORT_ERROR(status);
+	}
 
-	// Don't do 2 renames at the same time on the same volume. If moving to a new directory,
-	// and the destination directory of one thread is the origin directory of the other,
-	// and vice versa, a deadlock can occur.
+	// Eliminate the possibility that two move operations could deadlock, if they are
+	// locking the same two directories in the reverse order.
 	MutexLocker volumeLocker(bsdVolume->mnt_mtx.haikuMutex);
 
 	WriteLocker fromDirLocker(fromDirBsdNode->v_vnlock->haikuRW);
 	WriteLocker toDirLocker;
 	if (fromDirBsdNode != toDirBsdNode)
 		toDirLocker.SetTo(toDirBsdNode->v_vnlock->haikuRW, false);
+	volumeLocker.Unlock();
 
 	status_t status = _dosfs_access(bsdVolume, fromDirBsdNode, W_OK);
 	if (status == B_OK && fromDirBsdNode != toDirBsdNode)
@@ -1694,8 +1813,6 @@ dosfs_rename(fs_volume* volume, fs_vnode* fromDir, const char* fromName, fs_vnod
 	if (status != B_OK)
 		REPORT_ERROR(status);
 
-	set_mime_type(fromBsdNode, true);
-
 	if ((bsdVolume->mnt_flag & MNT_SYNCHRONOUS) != 0) {
 		// sync the directory entry changes
 		status = block_cache_sync(bsdVolume->mnt_cache);
@@ -1778,7 +1895,7 @@ dosfs_rstat(fs_volume* volume, fs_vnode* vnode, struct stat* stat)
 
 	fattime2timespec(fatNode->de_CDate, fatNode->de_CTime, fatNode->de_CHun, 1, &stat->st_crtim);
 
-	stat->st_blocks = howmany(fatNode->de_FileSize, 512);
+	stat->st_blocks = howmany(fatNode->de_FileSize, DEV_BSIZE);
 
 	RETURN_ERROR(status);
 }
@@ -1965,7 +2082,7 @@ dosfs_create(fs_volume* volume, fs_vnode* dir, const char* name, int openMode, i
 	if ((openMode & O_NOCACHE) != 0)
 		RETURN_ERROR(B_UNSUPPORTED);
 
-	if (is_filename_legal(name) != true) {
+	if (is_filename_legal(name, false, NULL) != true) {
 		INFORM("invalid FAT file name '%s'\n", name);
 		RETURN_ERROR(B_UNSUPPORTED);
 	}
@@ -2100,6 +2217,10 @@ dosfs_create(fs_volume* volume, fs_vnode* dir, const char* name, int openMode, i
 	status = _dosfs_read_vnode(bsdVolume, inode, &bsdNode, false);
 	if (status != B_OK)
 		RETURN_ERROR(status);
+
+	// parent ino is not accessible in _dosfs_read_vnode
+	bsdNode->v_parent = fatDir->de_inode;
+
 	mode_t nodeType = 0;
 	if (bsdNode->v_type == VDIR)
 		nodeType = S_IFDIR;
@@ -2172,8 +2293,6 @@ dosfs_open(fs_volume* volume, fs_vnode* vnode, int openMode, void** _cookie)
 	// any data from it.
 	if (bsdNode->v_type == VDIR && (openMode & O_RWMASK) != O_RDONLY)
 		return B_IS_A_DIRECTORY;
-	if ((openMode & O_DIRECTORY) != 0 && bsdNode->v_type != VDIR)
-		return B_NOT_A_DIRECTORY;
 
 	if ((bsdVolume->mnt_flag & MNT_RDONLY) != 0 || (fatNode->de_Attributes & ATTR_READONLY) != 0)
 		openMode = (openMode & ~O_RWMASK) | O_RDONLY;
@@ -2204,6 +2323,11 @@ dosfs_open(fs_volume* volume, fs_vnode* vnode, int openMode, void** _cookie)
 		status = file_cache_set_size(bsdNode->v_cache, 0);
 		if (status != B_OK)
 			RETURN_ERROR(status);
+
+		if (cookie->fLastSize != 0) {
+			cookie->fLastSize = fatNode->de_FileSize;
+			notify_stat_changed(volume->id, bsdNode->v_parent, fatNode->de_inode, B_STAT_SIZE);
+		}
 	}
 
 	cookieDeleter.Detach();
@@ -2304,7 +2428,7 @@ dosfs_read(fs_volume* volume, fs_vnode* vnode, void* cookie, off_t pos, void* bu
 	}
 #endif
 
-	RETURN_ERROR(file_cache_read(bsdNode->v_cache, fatCookie, pos, buffer, length));
+	RETURN_ERROR(file_cache_read(bsdNode->v_cache, pos, buffer, length));
 }
 
 
@@ -2373,7 +2497,7 @@ dosfs_write(fs_volume* volume, fs_vnode* vnode, void* cookie, off_t pos, const v
 	locker.Unlock();
 	status = file_cache_set_size(bsdNode->v_cache, fatNode->de_FileSize);
 	if (status == B_OK) {
-		status = file_cache_write(bsdNode->v_cache, fatCookie, pos, buffer, length);
+		status = file_cache_write(bsdNode->v_cache, pos, buffer, length);
 		if (status != B_OK) {
 			REPORT_ERROR(status);
 			status = B_OK;
@@ -2433,7 +2557,7 @@ dosfs_mkdir(fs_volume* volume, fs_vnode* parent, const char* name, int perms)
 
 	FUNCTION_START("%" B_PRIu64 "/%s (perm %o)\n", fatParent->de_inode, name, perms);
 
-	if (is_filename_legal(name) == false)
+	if (is_filename_legal(name, false, NULL) == false)
 		RETURN_ERROR(B_BAD_VALUE);
 
 	ComponentName bsdName(ISLASTCN, NOCRED, CREATE, 0, name);
@@ -2573,7 +2697,7 @@ dosfs_mkdir(fs_volume* volume, fs_vnode* parent, const char* name, int perms)
 		clusterfree(fatVolume, newCluster);
 		RETURN_ERROR(status);
 	}
-	// parent is not accessible in _dosfs_read_vnode when the node is a directory.
+	// parent ino is not accessible in _dosfs_read_vnode
 	bsdNode->v_parent = fatParent->de_inode;
 
 	status = publish_vnode(volume, inode, bsdNode, &gFATVnodeOps, S_IFDIR, 0);
@@ -2720,8 +2844,10 @@ dosfs_readdir(fs_volume* volume, fs_vnode* vnode, void* cookie, struct dirent* b
 	struct vnode* bsdNode = reinterpret_cast<struct vnode*>(vnode->private_node);
 	denode* fatNode = reinterpret_cast<denode*>(bsdNode->v_data);
 
-	FUNCTION_START("vp %p(%" B_PRIu64 "), bufferSize %lu, entries to be read %" B_PRIu32 "\n",
-		bsdNode, fatNode->de_inode, bufferSize, *_num);
+	FUNCTION_START("vp %p(%" B_PRIu64
+				   "), bufferSize %lu, entryIndex %u, entries to be read %" B_PRIu32 "\n",
+		bsdNode, fatNode->de_inode, bufferSize, reinterpret_cast<DirCookie*>(cookie)->fIndex,
+		*_num);
 
 	WriteLocker locker(bsdNode->v_vnlock->haikuRW);
 
@@ -2798,6 +2924,8 @@ dosfs_readdir(fs_volume* volume, fs_vnode* vnode, void* cookie, struct dirent* b
 		// direntry
 	bool done = false;
 	status_t status = B_OK;
+	uint16 carryoverUnit = 0;
+
 	while (bufferSize > 0 && *_num < entriesRequested && done == false) {
 		int32 logicalCluster = de_cluster(fatVolume, (*entryIndex * sizeof(direntry)) - bias);
 			// file-relative cluster number containing the next entry to read
@@ -2858,11 +2986,8 @@ dosfs_readdir(fs_volume* volume, fs_vnode* vnode, void* cookie, struct dirent* b
 
 			// handle Win95 long directory entries
 			if (fatEntry->deAttributes == ATTR_WIN95) {
-				chkSum = win2unixfn(&longName, reinterpret_cast<winentry*>(fatEntry), chkSum,
-					fatVolume);
-#ifdef DEBUG
-				dprintf_winentry(fatVolume, reinterpret_cast<winentry*>(fatEntry), entryIndex);
-#endif
+				chkSum = winentry_to_utf8(&longName, reinterpret_cast<winentry*>(fatEntry), chkSum,
+					&carryoverUnit);
 				winChain++;
 				continue;
 			}
@@ -2897,7 +3022,6 @@ dosfs_readdir(fs_volume* volume, fs_vnode* vnode, void* cookie, struct dirent* b
 				break;
 			dirBuf->d_ino = ino;
 
-
 			dirBuf->d_dev = volume->id;
 
 			// Is this direntry associated with a chain of previous winentries?
@@ -2918,8 +3042,6 @@ dosfs_readdir(fs_volume* volume, fs_vnode* vnode, void* cookie, struct dirent* b
 					RETURN_ERROR(B_BUFFER_OVERFLOW);
 				} else {
 					done = true;
-					// rewind to the start of the chain of winentries that precedes this direntry
-					*entryIndex -= winChain;
 					break;
 				}
 			}
@@ -2937,6 +3059,13 @@ dosfs_readdir(fs_volume* volume, fs_vnode* vnode, void* cookie, struct dirent* b
 		}
 		brelse(entriesBuf);
 	}
+
+	// Rewind to the start of the chain of winentries that precedes this direntry. If winChain is
+	// not zero, we either quit in mid-chain because the output buffer is completely full, or
+	// finished a chain but then found there wasn't enough room for the dirent in the output
+	// buffer.
+	*entryIndex -= winChain;
+	PRINT("rewinding index by %d to %u\n", winChain, *entryIndex);
 
 #ifdef DEBUG
 	PRINT("dosfs_readdir returning %" B_PRIu32 " dirents:\n", *_num);
@@ -2965,241 +3094,6 @@ dosfs_rewinddir(fs_volume* volume, fs_vnode* vnode, void* cookie)
 	WriteLocker locker(bsdNode->v_vnlock->haikuRW);
 
 	fatCookie->fIndex = 0;
-
-	return B_OK;
-}
-
-
-static status_t
-dosfs_open_attrdir(fs_volume* volume, fs_vnode* vnode, void** _cookie)
-{
-	mount* bsdVolume = reinterpret_cast<mount*>(volume->private_volume);
-	struct vnode* bsdNode = reinterpret_cast<struct vnode*>(vnode->private_node);
-
-	FUNCTION_START("%p\n", bsdNode);
-
-	if (_dosfs_access(bsdVolume, bsdNode, O_RDONLY) != B_OK)
-		RETURN_ERROR(B_NOT_ALLOWED);
-
-	if ((*_cookie = new(std::nothrow) int32) == NULL)
-		RETURN_ERROR(B_NO_MEMORY);
-
-	*reinterpret_cast<int32*>(*_cookie) = 0;
-
-	return B_OK;
-}
-
-
-static status_t
-dosfs_close_attrdir(fs_volume* volume, fs_vnode* vnode, void* cookie)
-{
-	FUNCTION_START("%p\n", vnode->private_node);
-
-	*reinterpret_cast<int32*>(cookie) = 1;
-
-	return B_OK;
-}
-
-
-static status_t
-dosfs_free_attrdir_cookie(fs_volume* volume, fs_vnode* vnode, void* cookie)
-{
-	FUNCTION_START("%p\n", vnode->private_node);
-
-	if (cookie == NULL)
-		return B_BAD_VALUE;
-
-	delete reinterpret_cast<int32*>(cookie);
-
-	return B_OK;
-}
-
-
-static status_t
-dosfs_read_attrdir(fs_volume* volume, fs_vnode* vnode, void* cookie, struct dirent* buffer,
-	size_t bufferSize, uint32* _num)
-{
-	struct vnode* bsdNode = reinterpret_cast<struct vnode*>(vnode->private_node);
-	int32* fatCookie = reinterpret_cast<int32*>(cookie);
-
-	FUNCTION_START("%p\n", bsdNode);
-
-	*_num = 0;
-
-	ReadLocker locker(bsdNode->v_vnlock->haikuRW);
-
-	if ((*fatCookie == 0) && (bsdNode->v_mime != NULL)) {
-		*_num = 1;
-		strcpy(buffer->d_name, "BEOS:TYPE");
-		buffer->d_reclen = offsetof(struct dirent, d_name) + 10;
-	}
-
-	*fatCookie = 1;
-
-	return B_OK;
-}
-
-
-static status_t
-dosfs_rewind_attrdir(fs_volume* volume, fs_vnode* vnode, void* cookie)
-{
-	FUNCTION_START("%p\n", vnode->private_node);
-
-	if (cookie == NULL)
-		return B_BAD_VALUE;
-
-	*reinterpret_cast<int32*>(cookie) = 0;
-
-	return B_OK;
-}
-
-
-static status_t
-dosfs_create_attr(fs_volume* volume, fs_vnode* vnode, const char* name, uint32 type, int openMode,
-	void** _cookie)
-{
-	mount* bsdVolume = reinterpret_cast<mount*>(volume->private_volume);
-	struct vnode* bsdNode = reinterpret_cast<struct vnode*>(vnode->private_node);
-
-	FUNCTION_START("%p\n", bsdNode);
-
-	ReadLocker locker(bsdNode->v_vnlock->haikuRW);
-
-	if (_dosfs_access(bsdVolume, bsdNode, open_mode_to_access(openMode)) != B_OK)
-		RETURN_ERROR(B_NOT_ALLOWED);
-
-	if (strcmp(name, "BEOS:TYPE") != 0)
-		return B_UNSUPPORTED;
-
-	if (bsdNode->v_mime == NULL)
-		return B_BAD_VALUE;
-
-	AttrCookie* cookie = new(std::nothrow) AttrCookie;
-	cookie->fMode = openMode;
-	cookie->fType = FAT_ATTR_MIME;
-	*_cookie = cookie;
-
-	return B_OK;
-}
-
-
-static status_t
-dosfs_open_attr(fs_volume* volume, fs_vnode* vnode, const char* name, int openMode, void** _cookie)
-{
-	mount* bsdVolume = reinterpret_cast<mount*>(volume->private_volume);
-	struct vnode* bsdNode = reinterpret_cast<struct vnode*>(vnode->private_node);
-
-	FUNCTION_START("%p\n", bsdNode);
-
-	ReadLocker locker(bsdNode->v_vnlock->haikuRW);
-
-	if (_dosfs_access(bsdVolume, bsdNode, open_mode_to_access(openMode)) != B_OK)
-		RETURN_ERROR(B_NOT_ALLOWED);
-
-	if (strcmp(name, "BEOS:TYPE") != 0)
-		return B_UNSUPPORTED;
-
-	if (bsdNode->v_mime == NULL)
-		return B_BAD_VALUE;
-
-	AttrCookie* cookie = new(std::nothrow) AttrCookie;
-	cookie->fMode = openMode;
-	cookie->fType = FAT_ATTR_MIME;
-	*_cookie = cookie;
-
-	return B_OK;
-}
-
-
-static status_t
-dosfs_close_attr(fs_volume* volume, fs_vnode* vnode, void* cookie)
-{
-	return B_OK;
-}
-
-
-static status_t
-dosfs_free_attr_cookie(fs_volume* volume, fs_vnode* vnode, void* cookie)
-{
-	delete reinterpret_cast<AttrCookie*>(cookie);
-
-	return B_OK;
-}
-
-
-static status_t
-dosfs_read_attr(fs_volume* volume, fs_vnode* vnode, void* cookie, off_t pos, void* buffer,
-	size_t* length)
-{
-	struct vnode* bsdNode = reinterpret_cast<struct vnode*>(vnode->private_node);
-
-	FUNCTION_START("%p\n", bsdNode);
-
-	AttrCookie* fatCookie = reinterpret_cast<AttrCookie*>(cookie);
-	if (fatCookie->fType != FAT_ATTR_MIME)
-		return B_NOT_ALLOWED;
-	if ((fatCookie->fMode & O_RWMASK) == O_WRONLY)
-		return B_NOT_ALLOWED;
-
-	ReadLocker locker(bsdNode->v_vnlock->haikuRW);
-
-	if (bsdNode->v_mime == NULL)
-		return B_BAD_VALUE;
-
-	if ((pos < 0) || (pos > static_cast<off_t>(strlen(bsdNode->v_mime))))
-		return B_BAD_VALUE;
-
-	ssize_t copied = user_strlcpy(reinterpret_cast<char*>(buffer),
-		bsdNode->v_mime + pos, *length);
-	if (copied < 0)
-		return B_BAD_ADDRESS;
-
-	if (static_cast<size_t>(copied) < *length)
-		*length = copied + 1;
-
-	return B_OK;
-}
-
-
-/*! suck up application attempts to set mime types; this hides an unsightly
-	error message printed out by zip
-*/
-static status_t
-dosfs_write_attr(fs_volume* volume, fs_vnode* vnode, void* cookie, off_t pos, const void* buffer,
-	size_t* length)
-{
-	FUNCTION_START("%p\n", vnode->private_node);
-
-	AttrCookie* fatCookie = reinterpret_cast<AttrCookie*>(cookie);
-	if (fatCookie->fType != FAT_ATTR_MIME)
-		return B_NOT_ALLOWED;
-	if ((fatCookie->fMode & O_RWMASK) == O_RDONLY)
-		return B_NOT_ALLOWED;
-
-	return B_OK;
-}
-
-
-static status_t
-dosfs_read_attr_stat(fs_volume* volume, fs_vnode* vnode, void* cookie, struct stat* stat)
-{
-	struct vnode* bsdNode = reinterpret_cast<struct vnode*>(vnode->private_node);
-
-	FUNCTION_START("%p\n", bsdNode);
-
-	AttrCookie* fatCookie = reinterpret_cast<AttrCookie*>(cookie);
-	if (fatCookie->fType != FAT_ATTR_MIME)
-		return B_NOT_ALLOWED;
-	if ((fatCookie->fMode & O_RWMASK) == O_WRONLY)
-		return B_NOT_ALLOWED;
-
-	ReadLocker locker(bsdNode->v_vnlock->haikuRW);
-
-	if (bsdNode->v_mime == NULL)
-		return B_BAD_VALUE;
-
-	stat->st_type = B_MIME_STRING_TYPE;
-	stat->st_size = strlen(bsdNode->v_mime) + 1;
 
 	return B_OK;
 }
@@ -3239,7 +3133,7 @@ bsd_device_init(mount* bsdVolume, const dev_t devID, const char* deviceFile, cde
 	device->si_refcount = 0;
 	device->si_mountpt = bsdVolume;
 	device->si_name[0] = '\0';
-	strncpy(device->si_device, deviceFile, B_PATH_NAME_LENGTH - 1);
+	strlcpy(device->si_device, deviceFile, B_DEV_NAME_LENGTH);
 	device->si_mediasize = 0;
 	device->si_id = devID;
 
@@ -3309,14 +3203,6 @@ bsd_device_init(mount* bsdVolume, const dev_t devID, const char* deviceFile, cde
 		*_readOnly = true;
 	}
 
-	if (geometry->bytes_per_sector != 0x200) {
-		// FAT is compatible with 0x400, 0x800, and 0x1000 as well, but this driver has not
-		// been tested with those values
-		INFORM("The FAT driver does not currently support write access to volumes with > 1 block "
-			"per sector\n");
-		*_readOnly = true;
-	}
-
 	if (*_readOnly == false) {
 		// reopen it with read/write permissions
 		close(device->si_fd);
@@ -3324,15 +3210,6 @@ bsd_device_init(mount* bsdVolume, const dev_t devID, const char* deviceFile, cde
 		if (device->si_fd < 0)
 			RETURN_ERROR(B_FROM_POSIX_ERROR(errno));
 	}
-
-	// Prevent multiple simultaneous mounts.
-#ifndef FS_SHELL
-	status_t status = _kern_lock_node(device->si_fd);
-	if (status != B_OK) {
-		close(device->si_fd);
-		RETURN_ERROR(status);
-	}
-#endif
 
 	deviceDeleter.Detach();
 	geomDeleter.Detach();
@@ -3518,7 +3395,8 @@ bsd_volume_uninit(struct mount* volume)
 
 */
 static status_t
-fat_volume_init(vnode* devvp, mount* bsdVolume, const uint64_t fatFlags, const char* oemPref)
+fat_volume_init(vnode* devvp, mount* bsdVolume, const uint64_t fatFlags,
+	const char* userlandOemPref)
 {
 	// Read the boot sector of the filesystem, and then check the boot signature.
 	// If not a dos boot sector then error out.
@@ -3652,6 +3530,7 @@ fat_volume_init(vnode* devvp, mount* bsdVolume, const uint64_t fatFlags, const c
 		fatVolume->pm_fatblocksize = 3 * 512;
 	else
 		fatVolume->pm_fatblocksize = DEV_BSIZE;
+	fatVolume->pm_fatblocksize = roundup(fatVolume->pm_fatblocksize, fatVolume->pm_BytesPerSec);
 	fatVolume->pm_fatblocksec = fatVolume->pm_fatblocksize / DEV_BSIZE;
 	fatVolume->pm_bnshift = ffs(DEV_BSIZE) - 1;
 
@@ -3679,9 +3558,17 @@ fat_volume_init(vnode* devvp, mount* bsdVolume, const uint64_t fatFlags, const c
 		INFORM("si_geometry not initialized\n");
 		return B_ERROR;
 	}
+
+	// mkfs.fat sets the BytesPerSec value in the BPB based on the -S command line parameter,
+	// not on the properties of the underlying device.
+	if (dev->si_geometry->bytes_per_sector > fatVolume->pm_BytesPerSec) {
+		INFORM("Volume was formatted with %u-byte sectors, but device can support %" B_PRIu32
+			"-byte sectors.\n", fatVolume->pm_BytesPerSec, dev->si_geometry->bytes_per_sector);
+	}
+
 	uint32 fsSectors = fatVolume->pm_HugeSectors / fatVolume->pm_BlkPerSec;
 		// convert back from 512-byte blocks to sectors
-	if (fsSectors > dev->si_mediasize / dev->si_geometry->bytes_per_sector) {
+	if (fsSectors > dev->si_mediasize / fatVolume->pm_BytesPerSec) {
 		INFORM("dosfs: volume extends past end of partition, mounting read-only\n");
 		readOnly = true;
 	}
@@ -3691,9 +3578,10 @@ fat_volume_init(vnode* devvp, mount* bsdVolume, const uint64_t fatFlags, const c
 		// given the size of the FAT table, how many sectors do we expect to have in the volume?
 		uint32 fatSectors = fatVolume->pm_FATsecs / fatVolume->pm_BlkPerSec;
 			// convert back from 512-byte blocks to sectors
-		uint32 minUsedFatSectors = fatSectors - 8 - (SECTORS_PER_CLUSTER(fatVolume) - 1);
+		uint32 minUsedFatSectors = fatSectors - (fatSectors / 64)
+			- (SECTORS_PER_CLUSTER(fatVolume) - 1);
 			// The math recommended by Microsoft to estimate required FAT sectors at initialization
-			// may overestimate by up to 8 sectors; fsck.fat also aligns the FAT to cluster size
+			// may overestimate the requirement; mkfs.fat also aligns the FAT to cluster size
 		uint32 fatEntriesPerSector = fatVolume->pm_BytesPerSec / 4;
 		uint32 minFatEntries = minUsedFatSectors * fatEntriesPerSector - (fatEntriesPerSector - 1);
 			// the last utilized sector of a FAT contains at least one entry
@@ -3712,13 +3600,9 @@ fat_volume_init(vnode* devvp, mount* bsdVolume, const uint64_t fatFlags, const c
 	if (status != B_OK)
 		RETURN_ERROR(status);
 
-	// Set up the block cache.
-	// If the cached block size is ever changed, functions that work with the block cache
-	// will need to be re-examined because they assume a size of 512 bytes
-	// (e.g. dosfs_fsync, read_fsinfo, write_fsinfo, sync_clusters, discard_clusters,
-	// dosfs_write_fs_stat, and the functions defined in vfs_bio.c).
+	// set up the block cache to use sector-size blocks
 	bsdVolume->mnt_cache
-		= block_cache_create(dev->si_fd, fatVolume->pm_HugeSectors, CACHED_BLOCK_SIZE, readOnly);
+		= block_cache_create(dev->si_fd, fsSectors, fatVolume->pm_BytesPerSec, readOnly);
 	if (bsdVolume->mnt_cache == NULL)
 		return B_ERROR;
 
@@ -3785,7 +3669,7 @@ fat_volume_init(vnode* devvp, mount* bsdVolume, const uint64_t fatFlags, const c
 		fatVolume->pm_fmod = 1;
 	}
 
-	status = iconv_init(fatVolume, oemPref);
+	status = iconv_init(fatVolume, userlandOemPref);
 	if (status != B_OK) {
 		rw_lock_destroy(&fatVolume->pm_fatlock.haikuRW);
 		block_cache_delete(bsdVolume->mnt_cache, false);
@@ -3964,7 +3848,7 @@ fs_vnode_ops gFATVnodeOps = {
 
 	&dosfs_get_file_map,
 
-	NULL, // fs_ioctl()
+	&dosfs_ioctl,
 	NULL, // fs_set_flags,
 	NULL, // fs_select
 	NULL, // fs_deselect
@@ -4000,23 +3884,23 @@ fs_vnode_ops gFATVnodeOps = {
 	&dosfs_rewinddir,
 
 	// attribute directory operations
-	&dosfs_open_attrdir,
-	&dosfs_close_attrdir,
-	&dosfs_free_attrdir_cookie,
-	&dosfs_read_attrdir,
-	&dosfs_rewind_attrdir,
+	NULL, // fs_open_attrdir
+	NULL, // fs_close_attrdir
+	NULL, // fs_free_attrdircookie
+	NULL, // fs_read_attrdir
+	NULL, // fs_rewind_attrdir
 
 	// attribute operations
-	&dosfs_create_attr,
-	&dosfs_open_attr,
-	&dosfs_close_attr,
-	&dosfs_free_attr_cookie,
-	&dosfs_read_attr,
-	&dosfs_write_attr,
+	NULL, // fs_create_attr
+	NULL, // fs_open_attr
+	NULL, // fs_close_attr
+	NULL, // fs_free_attr_cookie
+	NULL, // fs_read_attr
+	NULL, // fs_write_attr
 
-	&dosfs_read_attr_stat,
-	NULL, // fs_write_attr_stat,
-	NULL, // fs_rename_attr,
+	NULL, // fs_read_attr_stat,
+	NULL, // fs_write_attr_stat
+	NULL, // fs_rename_attr
 	NULL, // fs_remove_attr
 };
 

@@ -122,17 +122,16 @@ net_socket_private::~net_socket_private()
 	if (is_in_socket_list) {
 		MutexLocker _(sSocketLock);
 		sSocketList.Remove(this);
+		is_in_socket_list = false;
 	}
 
 	mutex_lock(&lock);
 
 	// also delete all children of this socket
-	while (net_socket_private* child = pending_children.RemoveHead()) {
+	while (net_socket_private* child = pending_children.RemoveHead())
 		child->RemoveFromParent();
-	}
-	while (net_socket_private* child = connected_children.RemoveHead()) {
+	while (net_socket_private* child = connected_children.RemoveHead())
 		child->RemoveFromParent();
-	}
 
 	mutex_unlock(&lock);
 
@@ -233,13 +232,14 @@ add_ancillary_data(net_socket* socket, ancillary_data_container* container,
 
 static status_t
 process_ancillary_data(net_socket* socket, ancillary_data_container* container,
-	msghdr* messageHeader)
+	msghdr* messageHeader, int flags)
 {
 	uint8* dataBuffer = (uint8*)messageHeader->msg_control;
 	int dataBufferLen = messageHeader->msg_controllen;
 
 	if (container == NULL || dataBuffer == NULL) {
 		messageHeader->msg_controllen = 0;
+		messageHeader->msg_flags |= MSG_CTRUNC;
 		return B_OK;
 	}
 
@@ -247,7 +247,8 @@ process_ancillary_data(net_socket* socket, ancillary_data_container* container,
 		return B_NOT_SUPPORTED;
 
 	ssize_t bytesWritten = socket->first_info->process_ancillary_data(
-		socket->first_protocol, container, dataBuffer, dataBufferLen);
+		socket->first_protocol, container, dataBuffer, dataBufferLen, flags,
+		&messageHeader->msg_flags);
 	if (bytesWritten < 0)
 		return bytesWritten;
 
@@ -258,7 +259,7 @@ process_ancillary_data(net_socket* socket, ancillary_data_container* container,
 
 static status_t
 process_ancillary_data(net_socket* socket,
-	net_buffer* buffer, msghdr* messageHeader)
+	net_buffer* buffer, msghdr* messageHeader, int flags)
 {
 	void *dataBuffer = messageHeader->msg_control;
 	ssize_t bytesWritten;
@@ -268,8 +269,10 @@ process_ancillary_data(net_socket* socket,
 		return B_OK;
 	}
 
-	if (socket->first_info->process_ancillary_data_no_container == NULL)
-		return B_NOT_SUPPORTED;
+	if (socket->first_info->process_ancillary_data_no_container == NULL) {
+		messageHeader->msg_controllen = 0;
+		return B_OK;
+	}
 
 	bytesWritten = socket->first_info->process_ancillary_data_no_container(
 		socket->first_protocol, buffer, dataBuffer,
@@ -279,6 +282,22 @@ process_ancillary_data(net_socket* socket,
 	messageHeader->msg_controllen = bytesWritten;
 
 	return B_OK;
+}
+
+
+static size_t
+calculate_total_length(msghdr* header, void* data, size_t length)
+{
+	size_t totalLength = length;
+	if (header != NULL) {
+		ASSERT((header->msg_iovlen == 0 && data == NULL)
+			|| data == header->msg_iov[0].iov_base);
+
+		// calculate the length considering all of the extra buffers
+		for (int i = 1; i < header->msg_iovlen; i++)
+			totalLength += header->msg_iov[i].iov_len;
+	}
+	return totalLength;
 }
 
 
@@ -295,7 +314,7 @@ socket_receive_no_buffer(net_socket* socket, msghdr* header, void* data,
 	ancillary_data_container* ancillaryData = NULL;
 	ssize_t bytesRead = socket->first_info->read_data_no_buffer(
 		socket->first_protocol, vecs, vecCount, &ancillaryData, address,
-		addressLen, flags);
+		addressLen, flags & ~(MSG_CMSG_CLOEXEC | MSG_CMSG_CLOFORK | MSG_TRUNC));
 	if (bytesRead < 0)
 		return bytesRead;
 
@@ -305,13 +324,20 @@ socket_receive_no_buffer(net_socket* socket, msghdr* header, void* data,
 
 	// process ancillary data
 	if (header != NULL) {
-		status_t status = process_ancillary_data(socket, ancillaryData, header);
+		header->msg_flags = 0;
+		status_t status = process_ancillary_data(socket, ancillaryData, header,
+			flags & (MSG_CMSG_CLOEXEC | MSG_CMSG_CLOFORK));
 		if (status != B_OK)
 			return status;
-
-		header->msg_flags = 0;
 	}
 
+	size_t totalLength = calculate_total_length(header, data, length);
+	if (totalLength < (size_t)bytesRead) {
+		if (header != NULL)
+			header->msg_flags |= MSG_TRUNC;
+		if ((flags & MSG_TRUNC) == 0)
+			return totalLength;
+	}
 	return bytesRead;
 }
 
@@ -534,7 +560,7 @@ socket_get_next_stat(uint32* _cookie, int family, struct net_stat* stat)
 
 	net_socket_private* socket = NULL;
 	SocketList::Iterator iterator = sSocketList.GetIterator();
-	uint32 cookie = *_cookie;
+	const uint32 cookie = *_cookie;
 	uint32 count = 0;
 
 	while (true) {
@@ -542,13 +568,21 @@ socket_get_next_stat(uint32* _cookie, int family, struct net_stat* stat)
 		if (socket == NULL)
 			return B_ENTRY_NOT_FOUND;
 
-		// TODO: also traverse the pending connections
-		if (count == cookie)
-			break;
+		if (family != -1 && family != socket->family)
+			continue;
 
-		if (family == -1 || family == socket->family)
+		// TODO: also traverse the pending connections
+		if (count != cookie) {
 			count++;
+			continue;
+		}
+
+		// If the socket is being deleted, skip it.
+		if (socket->GetWeakPointer()->Get() == NULL)
+			continue;
+		break;
 	}
+	locker.Unlock();
 
 	*_cookie = count + 1;
 
@@ -567,6 +601,7 @@ socket_get_next_stat(uint32* _cookie, int family, struct net_stat* stat)
 	socket->first_info->control(socket->first_protocol, socket->protocol,
 		NET_STAT_SOCKET, stat, &length);
 
+	socket->ReleaseReference();
 	return B_OK;
 }
 
@@ -726,6 +761,7 @@ socket_connected(net_socket* _socket)
 	net_socket_private* socket = (net_socket_private*)_socket;
 
 	TRACE("socket_connected(%p)\n", socket);
+	ASSERT(!socket->is_connected);
 
 	if (socket->parent == NULL) {
 		socket->is_connected = true;
@@ -823,6 +859,13 @@ socket_request_notification(net_socket* _socket, uint8 event, selectsync* sync)
 			if (socket->error != B_OK)
 				notify_select_event(sync, event);
 			break;
+		case B_SELECT_DISCONNECTED:
+		{
+			ssize_t available = socket_read_avail(socket);
+			if (available < 0)
+				notify_select_event(sync, event);
+			break;
+		}
 	}
 
 	return B_OK;
@@ -844,17 +887,21 @@ socket_notify(net_socket* _socket, uint8 event, int32 value)
 {
 	net_socket_private* socket = (net_socket_private*)_socket;
 	bool notify = true;
+	bool atomic = (socket->first_info->flags & NET_PROTOCOL_ATOMIC_MESSAGES) != 0;
 
 	switch (event) {
 		case B_SELECT_READ:
 			if ((ssize_t)socket->receive.low_water_mark > value
-				&& value >= B_OK)
+					&& value >= B_OK && !atomic) {
 				notify = false;
+			}
 			break;
 
 		case B_SELECT_WRITE:
-			if ((ssize_t)socket->send.low_water_mark > value && value >= B_OK)
+			if ((ssize_t)socket->send.low_water_mark > value
+					&& value >= B_OK && !atomic) {
 				notify = false;
+			}
 			break;
 
 		case B_SELECT_ERROR:
@@ -867,6 +914,8 @@ socket_notify(net_socket* _socket, uint8 event, int32 value)
 	if (notify && socket->select_pool != NULL) {
 		notify_select_event_pool(socket->select_pool, event);
 
+		if (event == B_SELECT_READ && value < 0)
+			notify_select_event_pool(socket->select_pool, B_SELECT_DISCONNECTED);
 		if (event == B_SELECT_ERROR) {
 			// always notify read/write on error
 			notify_select_event_pool(socket->select_pool, B_SELECT_READ);
@@ -885,6 +934,8 @@ int
 socket_accept(net_socket* socket, struct sockaddr* address,
 	socklen_t* _addressLength, net_socket** _acceptedSocket)
 {
+	if (socket->type != SOCK_STREAM && socket->type != SOCK_SEQPACKET)
+		return B_NOT_SUPPORTED;
 	if ((socket->options & SO_ACCEPTCONN) == 0)
 		return B_BAD_VALUE;
 
@@ -962,8 +1013,10 @@ socket_getpeername(net_socket* _socket, struct sockaddr* address,
 	net_socket_private* socket = (net_socket_private*)_socket;
 	BReference<net_socket_private> parent = socket->parent.GetReference();
 
-	if ((!parent.IsSet() && !socket->is_connected) || socket->peer.ss_len == 0)
+	if ((!parent.IsSet() && !socket->is_connected) || socket->peer.ss_len == 0
+		|| socket->peer.ss_family == AF_UNSPEC) {
 		return ENOTCONN;
+	}
 
 	memcpy(address, &socket->peer, min_c(*_addressLength, socket->peer.ss_len));
 	*_addressLength = socket->peer.ss_len;
@@ -1144,14 +1197,7 @@ socket_receive(net_socket* socket, msghdr* header, void* data, size_t length,
 	// Mask off flags handled in this function.
 	flags &= ~(MSG_TRUNC);
 
-	size_t totalLength = length;
-	if (header != NULL) {
-		ASSERT(data == header->msg_iov[0].iov_base);
-
-		// calculate the length considering all of the extra buffers
-		for (int i = 1; i < header->msg_iovlen; i++)
-			totalLength += header->msg_iov[i].iov_len;
-	}
+	size_t totalLength = calculate_total_length(header, data, length);
 
 	net_buffer* buffer;
 	status_t status = socket->first_info->read_data(
@@ -1161,13 +1207,14 @@ socket_receive(net_socket* socket, msghdr* header, void* data, size_t length,
 
 	// process ancillary data
 	if (header != NULL) {
+		header->msg_flags = 0;
 		if (buffer != NULL && header->msg_control != NULL) {
 			ancillary_data_container* container
 				= gNetBufferModule.get_ancillary_data(buffer);
 			if (container != NULL)
-				status = process_ancillary_data(socket, container, header);
+				status = process_ancillary_data(socket, container, header, flags);
 			else
-				status = process_ancillary_data(socket, buffer, header);
+				status = process_ancillary_data(socket, buffer, header, flags);
 			if (status != B_OK) {
 				gNetBufferModule.free(buffer);
 				return status;
@@ -1184,7 +1231,6 @@ socket_receive(net_socket* socket, msghdr* header, void* data, size_t length,
 		// TODO: - consider the control buffer options
 		nameLen = header->msg_namelen;
 		header->msg_namelen = 0;
-		header->msg_flags = 0;
 	}
 
 	if (buffer == NULL)
@@ -1229,7 +1275,7 @@ socket_receive(net_socket* socket, msghdr* header, void* data, size_t length,
 
 	if (bytesCopied < bytesReceived) {
 		if (header != NULL)
-			header->msg_flags = MSG_TRUNC;
+			header->msg_flags |= MSG_TRUNC;
 
 		if ((originalFlags & MSG_TRUNC) != 0)
 			return bytesReceived;
@@ -1294,8 +1340,8 @@ socket_send(net_socket* socket, msghdr* header, const void* data, size_t length,
 		return EDESTADDRREQ;
 	}
 
-	if ((socket->first_info->flags & NET_PROTOCOL_ATOMIC_MESSAGES) != 0
-		&& bytesLeft > socket->send.buffer_size)
+	bool atomic = (socket->first_info->flags & NET_PROTOCOL_ATOMIC_MESSAGES) != 0;
+	if (atomic && bytesLeft > socket->send.buffer_size)
 		return EMSGSIZE;
 
 	if (socket->address.ss_len == 0) {
@@ -1340,7 +1386,7 @@ socket_send(net_socket* socket, msghdr* header, const void* data, size_t length,
 	size_t vecOffset = 0;
 	uint32 vecIndex = 0;
 
-	while (bytesLeft > 0) {
+	while (bytesLeft > 0 || atomic) {
 		// TODO: useful, maybe even computed header space!
 		net_buffer* buffer = gNetBufferModule.create(256);
 		if (buffer == NULL)
@@ -1411,6 +1457,7 @@ socket_send(net_socket* socket, msghdr* header, const void* data, size_t length,
 
 		bytesLeft -= bufferSize;
 		bytesSent += bufferSize;
+		atomic = false;
 	}
 
 	return bytesSent;
@@ -1574,7 +1621,7 @@ socket_socketpair(int family, int type, int protocol, net_socket* sockets[2])
 		error = socket_bind(sockets[0], NULL, 0);
 
 	// start listening
-	if (error == B_OK && type == SOCK_STREAM)
+	if (error == B_OK && (type == SOCK_STREAM || type == SOCK_SEQPACKET))
 		error = socket_listen(sockets[0], 1);
 
 	// connect them
@@ -1585,7 +1632,7 @@ socket_socketpair(int family, int type, int protocol, net_socket* sockets[2])
 
 	if (error == B_OK) {
 		// accept a socket
-		if (type == SOCK_STREAM) {
+		if (type == SOCK_STREAM || type == SOCK_SEQPACKET) {
 			net_socket* acceptedSocket = NULL;
 			error = socket_accept(sockets[0], NULL, NULL, &acceptedSocket);
 			if (error == B_OK) {
@@ -1703,4 +1750,3 @@ net_socket_module_info gNetSocketModule = {
 	socket_shutdown,
 	socket_socketpair
 };
-

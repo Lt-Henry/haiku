@@ -89,25 +89,8 @@ typedef struct
 /* Public type.  */
 typedef __mbstate_t mbstate_t;
 
-#ifndef WCHAR_MIN
-/* These constants might also be defined in <inttypes.h>.  */
-# define WCHAR_MIN __WCHAR_MIN
-# define WCHAR_MAX __WCHAR_MAX
-#endif
 
-#ifndef WEOF
-# define WEOF (0xffffffffu)
-#endif
-
-/* For XPG4 compliance we have to define the stuff from <wctype.h> here
-   as well.  */
-#if defined __USE_XOPEN && !defined __USE_UNIX98
 # include <wctype.h>
-#endif
-
-/* This incomplete type is defined in <time.h> but needed here because
-   of `wcsftime'.  */
-struct tm;
 
 
 __BEGIN_DECLS
@@ -287,7 +270,7 @@ extern unsigned long long int __wcstoull_internal (__const wchar_t *
 #endif
 
 
-#if defined __OPTIMIZE__ && __GNUC__ >= 2
+#if defined(__USE_EXTERN_INLINES) && !defined(__HAIKU__)
 /* Define inline functions which call the internal entry points.  */
 
 __extern_inline double wcstod (__const wchar_t *__restrict __nptr,

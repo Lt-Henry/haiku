@@ -1,14 +1,16 @@
-1	catalan; valencian	x-vnd.Be-TSKB	316181764
+1	catalan; valencian	x-vnd.Be-TSKB	2381744795
 Auto-hide	PreferencesWindow		Amaga-ho automàticament
 Show all	WindowMenu		Mostra-ho tot
 Edit in Tracker…	PreferencesWindow		Edita-ho al Rastrejador...
 Menu	PreferencesWindow		Menú
+Location	PreferencesWindow		Ubicació
 Tracker always first	PreferencesWindow		El Rastrejador sempre primer
 Hide clock	TimeView		Amaga el rellotge
 Large	PreferencesWindow		Grossa
 <Deskbar folder is empty>	DeskbarMenu		<La carpeta de la Barra d'escriptori és buida>
 Recent documents	DeskbarMenu		Documents recents
 Applications	B_USER_DESKBAR_DIRECTORY/Applications		Aplicacions
+%appname% preferences	PreferencesWindow		Preferències per a %appname%
 Always on top	PreferencesWindow		Sempre en primer pla
 Restart system	DeskbarMenu		Reinicia el sistema
 Recent documents:	PreferencesWindow		Documents recents:
@@ -25,17 +27,17 @@ Show replicants	DeskbarMenu		Mostra els replicants
 No windows	WindowMenu		Sense finestres
 Show clock	Tray		Mostra el rellotge
 Close all	WindowMenu		Tanca-ho tot
-Deskbar preferences	PreferencesWindow		Preferències de la barra d'escriptori
 About this system	DeskbarMenu		Quant al sistema
 Quit application	WindowMenu		Surt de l'aplicació
 Hide application names	PreferencesWindow		Amaga el nom de les aplicacions
+Deskbar	System name		Barra d'escriptori
 Applications	PreferencesWindow		Aplicacions
 Show application expander	PreferencesWindow		Mostra l'expandidora d'aplicacions
-Deskbar preferences…	DeskbarMenu		Preferències de la barra d'escriptori...
 Suspend	DeskbarMenu		Suspensió
 Shutdown…	DeskbarMenu		Atura...
 Demos	B_USER_DESKBAR_DIRECTORY/Demos		Demostracions
 Expand new applications	PreferencesWindow		Expandeix les aplicacions noves
+%appname% preferences…	DeskbarMenu		Preferències per a %appname%...
 Recent applications:	PreferencesWindow		Aplicacions recents:
 Recent folders:	PreferencesWindow		Carpetes recents:
 Recent folders	DeskbarMenu		Carpetes recents

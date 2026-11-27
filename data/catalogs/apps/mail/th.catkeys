@@ -1,5 +1,4 @@
-1	thai	x-vnd.Be-MAIL	4073987023
-Set to Saved	Mail		ตั้งเป็นบันทึก
+1	thai	x-vnd.Be-MAIL	4084116739
 Your main text contains %ld unencodable characters. Perhaps a different character set would work better? Hit Send to send it anyway (a substitute character will be used in place of the unencodable ones), or choose Cancel to go back and try fixing it up.	Mail		ข้อความหลักของคุณมีอักขระที่ไม่สามารถถอดรหัสได้ %ld บางทีชุดอักขระที่แตกต่างกัน กดส่งเพื่อส่งต่อไป (ตัวอักขระทดแทนจะถูกใช้แทนตัวอักษรที่ไม่สามารถถอดรหัสได้) หรือเลือกยกเลิกเพื่อย้อนกลับไปและลองแก้ไข
 Text wrapping:	Mail		การตัดข้อความ:
 Show icons & labels	Mail		แสดงไอคอน & ป้ายกำกับ
@@ -64,7 +63,6 @@ spam	B_USER_DIRECTORY/mail/spam		สแปม
 Reply to all	Mail		ตอบกลับทั้งหมด
 Cancel	Mail		ยกเลิก
 Off	Mail		ปิด
-Set to %s	Mail		ตั้งค่าเป็น %s
 Signature:	Mail		ลายมือชื่อ:
 Forward without attachments	Mail		ส่งต่อโดยไม่มีไฟล์แนบ
 queries	B_USER_DIRECTORY/mail/queries		สอบถาม
@@ -84,8 +82,8 @@ Auto signature:	Mail		ลายมือชื่ออัตโนมัติ:
 Same subject	Mail		เรื่องเดียวกัน
 Send	Mail		ส่ง
 Open draft	Mail		เปิดร่าง
-Leave as 'New'	Mail	Do not translate New - this is non-localizable e-mail status	ปล่อยให้เป็น 'ใหม่'
 Random	Mail		สุ่ม
+Leave as 'New'	Mail	Do not translate New - this is non-localizable e-mail status	ปล่อยให้เป็น 'ใหม่'
 Attach attributes:	Mail		แนบคุณสมบัติ:
 Find again	Mail		ค้นหาอีกครั้ง
 Size:	Mail		ขนาด:
@@ -93,7 +91,6 @@ To:	Mail		ถึง:
 Need Tracker to move items to trash	Mail		ต้องการเครื่องมือติดตามเพื่อย้ายรายการไปยังถังขยะ
 The mail_daemon could not be started:\n\t	Mail		ไม่สามารถเริ่มต้น mail_daemon:\n\t
 <no account found>	Mail		<no account found>
-Mail couldn't find its dictionary.	Mail		จดหมายหาพจนานุกรมไม่พบ
 helpful message	Mail		ข้อความที่เป็นประโยชน์
  Read 	Mail		อ่าน
 Font:	Mail		ตัวอักษร:
@@ -134,8 +131,8 @@ Send this message before closing?	Mail		ส่งข้อความนี้�
 in	B_USER_DIRECTORY/mail/in		เข้า
 Open	Mail		เปิด
 Don't save	Mail		ไม่บันทึก
-Leave same	Mail		ทิ้งไว้เหมือนกัน
 An error occurred trying to save the attachment.	Mail		เกิดข้อผิดพลาดขณะพยายามบันทึกไฟล์แนบ
+Leave same	Mail		ทิ้งไว้เหมือนกัน
 Save address	Mail		บันทึกที่อยู่
 Initial spell check mode:	Mail		โหมดตรวจสอบการสะกดคำเริ่มต้น:
 Edit queries…	Mail		แก้ไขข้อความค้นหา
@@ -148,7 +145,6 @@ Edit signatures…	Mail		แก้ไขลายมือชื่อ
 User interface	Mail		อินเตอร์เฟซผู้ใช้
 Inconsistency occurred in the undo/redo buffer.	Mail		ความไม่สอดคล้องเกิดขึ้นใน เลิกทำ/ทำซ้ำ บัฟเฟอร์
 Remove attachment	Mail		ลบไฟล์แนบ
-Set to…	Mail		ตั้งค่าเป็น
 Edit	Mail		แก้ไข
 Page setup…	Mail		ตั้งค่าหน้า
 An error occurred trying to save this signature.	Mail		เกิดข้อผิดพลาดขณะพยายามบันทึกลายมือชื่อนี้

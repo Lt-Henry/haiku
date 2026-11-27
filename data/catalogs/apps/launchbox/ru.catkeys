@@ -1,4 +1,4 @@
-1	russian	x-vnd.Haiku-LaunchBox	1878360293
+1	russian	x-vnd.Haiku-LaunchBox	574531707
 Set description…	LaunchBox		Изменить описание…
 Really close this pad?\n(The pad will not be remembered.)	LaunchBox		Вы действительно хотите закрыть эту панель?\n(Эта панель не сохранится)
 OK	LaunchBox		ОК
@@ -7,10 +7,11 @@ Show on all workspaces	LaunchBox		Отображать на всех рабоч�
 Name Panel	LaunchBox		Название панели
 Autostart	LaunchBox		Автозапуск
 Clone	LaunchBox		Дублировать
-Description for '%3'	LaunchBox		Описание для '%3'
+Description for '%3'	LaunchBox		Описание для «%3»
 Show window border	LaunchBox		Отображать рамку окна
-\n\nFailed to launch application with signature '%2'.\n\nError:	LaunchBox		\n\nНе удалось запустить приложение с сигнатурой '%2'.\n\nОшибка:
-Failed to launch 'something', error in Pad data.	LaunchBox		Не удалось запустить 'something', ошибка в данных панели.
+Failed to open folder - is Tracker running?	LaunchBox		Не удалось открыть папку - Трекер запущен?
+\n\nFailed to launch application with signature '%2'.\n\nError:	LaunchBox		\n\nНе удалось запустить приложение с сигнатурой «%2».\n\nОшибка:
+Failed to launch 'something', error in Pad data.	LaunchBox		Не удалось запустить «something», ошибка в данных панели.
 LaunchBox	System name		Панель запуска
 Auto-raise	LaunchBox		Всплывать при наведении
 %ld × %ld	LaunchBox	The '×' is the Unicode multiplication sign U+00D7	%ld × %ld
@@ -24,7 +25,7 @@ Bummer	LaunchBox		Облом
 last chance	LaunchBox		последний шанс
 You can drag an icon here.	LaunchBox		Вы можете перетащить значок сюда.
 Pad 1	LaunchBox		Панель 1
-Failed to launch '%1'.\n\nError:	LaunchBox		Не удалось запустить '%1'.\n\nОшибка:
+Failed to launch '%1'.\n\nError:	LaunchBox		Не удалось запустить «%1».\n\nОшибка:
 Settings	LaunchBox		Настройки
 Vertical layout	LaunchBox		Расположить вертикально
 Pad	LaunchBox		Панель

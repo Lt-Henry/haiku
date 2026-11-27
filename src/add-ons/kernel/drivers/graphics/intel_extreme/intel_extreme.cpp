@@ -16,9 +16,9 @@
 #include <string.h>
 #include <errno.h>
 
-#include <AreaKeeper.h>
 #include <boot_item.h>
 #include <driver_settings.h>
+#include <util/AreaKeeper.h>
 #include <util/kernel_cpp.h>
 
 #include <vesa_info.h>
@@ -450,8 +450,9 @@ init_interrupt_handler(intel_info &info)
 		if (info.irq == 0xff)
 			info.irq = 0;
 	}
-	if (gPCI->get_msi_count(info.pci->bus,
-			info.pci->device, info.pci->function) >= 1) {
+	// MSI is known to work from Gen5
+	if (info.device_type.Generation() >= 5
+		&& gPCI->get_msi_count(info.pci->bus, info.pci->device, info.pci->function) >= 1) {
 		uint32 msiVector = 0;
 		if (gPCI->configure_msi(info.pci->bus, info.pci->device,
 				info.pci->function, 1, &msiVector) == B_OK
@@ -696,7 +697,7 @@ intel_extreme_init(intel_info &info)
 	}
 
 	// Everything in the display PRM gets +0x180000
-	if (info.device_type.InGroup(INTEL_GROUP_VLV)) {
+	if (info.device_type.InGroup(INTEL_GROUP_VLV) || info.device_type.InGroup(INTEL_GROUP_CHV)) {
 		// "I nearly got violent with the hw guys when they told me..."
 		blocks[REGISTER_BLOCK(REGS_SOUTH_SHARED)] += VLV_DISPLAY_BASE;
 		blocks[REGISTER_BLOCK(REGS_SOUTH_TRANSCODER_PORT)] += VLV_DISPLAY_BASE;
@@ -958,4 +959,3 @@ intel_extreme_uninit(intel_info &info)
 	delete_area(info.registers_area);
 	delete_area(info.shared_area);
 }
-

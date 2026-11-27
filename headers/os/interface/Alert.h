@@ -31,7 +31,9 @@ class BButton;
 class BGroupLayout;
 class BInvoker;
 class BTextView;
-class TAlertView;
+namespace BPrivate {
+	class TAlertView;
+};
 
 
 class BAlert : public BWindow {
@@ -107,11 +109,12 @@ private:
 			BBitmap*			_CreateTypeIcon();
 			BButton*			_CreateButton(int32 which, const char* label);
 			void				_Prepare();
+			void				_PlaySound();
 
 private:
 			sem_id				fAlertSem;
 			int32				fAlertValue;
-			TAlertView*			fIconView;
+			::BPrivate::TAlertView* fIconView;
 			BTextView*			fTextView;
 			BGroupLayout*		fButtonLayout;
 			std::vector<BButton*> fButtons;

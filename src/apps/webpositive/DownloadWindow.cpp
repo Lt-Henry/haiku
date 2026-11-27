@@ -60,8 +60,7 @@ public:
 
 	virtual BSize MinSize()
 	{
-		BSize minSize = BGroupView::MinSize();
-		return BSize(minSize.width, 80);
+		return BSize(B_SIZE_UNSET, 80);
 	}
 
 	virtual void Pulse()
@@ -91,7 +90,7 @@ class DownloadContainerScrollView : public BScrollView {
 public:
 	DownloadContainerScrollView(BView* target)
 		:
-		BScrollView("Downloads scroll view", target, 0, false, true,
+		BScrollView("Downloads scroll view", target, 0, true, true,
 			B_NO_BORDER)
 	{
 	}
@@ -101,10 +100,13 @@ protected:
 	{
 		BScrollView::DoLayout();
 		// Tweak scroll bar layout to hide part of the frame for better looks.
-		BScrollBar* scrollBar = ScrollBar(B_VERTICAL);
+		BScrollBar* scrollBar = ScrollBar(B_HORIZONTAL);
+		scrollBar->MoveBy(-1, 1);
+		scrollBar->ResizeBy(2, 0);
+		scrollBar = ScrollBar(B_VERTICAL);
 		scrollBar->MoveBy(1, -1);
 		scrollBar->ResizeBy(0, 2);
-		Target()->ResizeBy(1, 0);
+		Target()->ResizeBy(1, 1);
 		// Set the scroll steps
 		if (BView* item = Target()->ChildAt(0)) {
 			scrollBar->SetSteps(item->MinSize().height + 1,

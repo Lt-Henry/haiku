@@ -32,7 +32,7 @@ typedef struct IOOperation io_operation;
 
 class IOBuffer : public DoublyLinkedListLinkImpl<IOBuffer> {
 public:
-	static	IOBuffer*			Create(uint32 count, bool vip);
+	static	IOBuffer*			Create(size_t count, bool vip);
 			void				Delete();
 
 			bool				IsVirtual() const { return !fPhysical; }
@@ -44,13 +44,6 @@ public:
 									const generic_io_vec* vecs, uint32 count,
 									generic_size_t length, uint32 flags);
 
-			void				SetPhysical(bool physical)
-									{ fPhysical = physical; }
-			void				SetUser(bool user) { fUser = user; }
-			void				SetLength(generic_size_t length)
-									{ fLength = length; }
-			void				SetVecCount(uint32 count) { fVecCount = count; }
-
 			generic_size_t		Length() const { return fLength; }
 
 			generic_io_vec*		Vecs() { return fVecs; }
@@ -61,8 +54,8 @@ public:
 			status_t			GetNextVirtualVec(void*& cookie, iovec& vector);
 			void				FreeVirtualVecCookie(void* cookie);
 
-			status_t			LockMemory(team_id team, bool isWrite);
-			void				UnlockMemory(team_id team, bool isWrite);
+			status_t			LockMemory(team_id team, bool forWriteRequest);
+			void				UnlockMemory(team_id team, bool forWriteRequest);
 			bool				IsMemoryLocked() const
 									{ return fMemoryLocked; }
 
@@ -80,8 +73,8 @@ private:
 			bool				fVIP;
 			bool				fMemoryLocked;
 			generic_size_t		fLength;
-			size_t				fVecCount;
-			size_t				fCapacity;
+			uint32				fVecCount;
+			uint32				fCapacity;
 			generic_io_vec		fVecs[1];
 };
 
@@ -139,6 +132,11 @@ public:
 
 			off_t				Offset() const;
 			generic_size_t		Length() const;
+
+			off_t				TotalOffset() const
+									{ return fOffset; }
+			generic_size_t		TotalLength() const
+									{ return fLength; }
 
 			off_t				OriginalOffset() const
 									{ return fOriginalOffset; }

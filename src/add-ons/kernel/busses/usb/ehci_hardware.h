@@ -142,30 +142,31 @@ typedef struct ehci_itd {
 	uint32		last_token;
 } ehci_itd;
 
-#define EHCI_ITD_TOFFSET_SHIFT	0
-#define EHCI_ITD_TOFFSET_MASK	0x0fff
+#define EHCI_ITD_TOFFSET(x)		((x) & 0x0fff)
+#define EHCI_ITD_TOFFSET_GET(x)	((x) & 0x0fff)
 #define EHCI_ITD_IOC			(1 << 15)
-#define EHCI_ITD_PG_SHIFT		12
-#define EHCI_ITD_PG_MASK		0x07
-#define EHCI_ITD_TLENGTH_SHIFT	16
-#define EHCI_ITD_TLENGTH_MASK	0x0fff
-#define EHCI_ITD_STATUS_SHIFT	28
-#define EHCI_ITD_STATUS_MASK	0xf
+#define EHCI_ITD_PG(x)			(((x) & 0x07) << 12)
+#define EHCI_ITD_PG_GET(x)		(((x) >> 12) & 0x07)
+#define EHCI_ITD_TLENGTH(x)		(((x) & 0x0fff) << 16)
+#define EHCI_ITD_TLENGTH_GET(x)	(((x) >> 16) & 0x0fff)
+#define EHCI_ITD_STATUS(x)		(((x) & 0xf) << 28)
+#define EHCI_ITD_STATUS_GET(x)	(((x) >> 28) & 0xf)
 #define EHCI_ITD_STATUS_ACTIVE	(1 << 3)	// Active
 #define EHCI_ITD_STATUS_BUFFER	(1 << 2)	// Data Buffer Error
 #define EHCI_ITD_STATUS_BABBLE	(1 << 1)	// Babble Detected
 #define EHCI_ITD_STATUS_TERROR	(1 << 0)	// Transaction Error
-#define EHCI_ITD_ADDRESS_SHIFT	0
-#define EHCI_ITD_ADDRESS_MASK	0x7f
-#define EHCI_ITD_ENDPOINT_SHIFT	8
-#define EHCI_ITD_ENDPOINT_MASK	0xf
-#define EHCI_ITD_DIR_SHIFT	11
-#define EHCI_ITD_MUL_SHIFT	0
-#define EHCI_ITD_MUL_MASK	0x3
-#define EHCI_ITD_BUFFERPOINTER_SHIFT	12
-#define EHCI_ITD_BUFFERPOINTER_MASK	0xfffff
-#define EHCI_ITD_MAXPACKETSIZE_SHIFT	0
-#define EHCI_ITD_MAXPACKETSIZE_MASK	0x7ff
+#define EHCI_ITD_ADDRESS(x)		((x) & 0x7f)
+#define EHCI_ITD_ADDRESS_GET(x)	((x) & 0x7f)
+#define EHCI_ITD_ENDPOINT(x)	(((x) & 0xf) << 8)
+#define EHCI_ITD_ENDPOINT_MASK	(((x) >> 8) & 0xf)
+#define EHCI_ITD_DIR(x)			(((x) & 0x1) << 11)
+#define EHCI_ITD_DIR_GET(x)		(((x) >> 11) & 0x1)
+#define EHCI_ITD_MUL(x)			((x) & 0x3)
+#define EHCI_ITD_MUL_GET(x)		((x) & 0x3)
+#define EHCI_ITD_BUFFERPOINTER(x)		(((x) & 0xfffff) << 12)
+#define EHCI_ITD_BUFFERPOINTER_GET(x)	(((x) >> 12) & 0xfffff)
+#define EHCI_ITD_MAXPACKETSIZE(x)		((x) & 0x7ff)
+#define EHCI_ITD_MAXPACKETSIZE_GET(x)	((x) & 0x7ff)
 #define EHCI_ITD_MAXPACKETSIZE_LENGTH	11
 
 
@@ -271,9 +272,10 @@ typedef struct {
 #ifdef B_HAIKU_64_BIT
 	uint32		padding[6];
 #else
-	uint32		padding[2];
+	uint32		padding[10];
 #endif
 } interrupt_entry;
+STATIC_ASSERT(sizeof(interrupt_entry) == 128);
 
 typedef struct {
 	ehci_itd	itd;
@@ -283,6 +285,7 @@ typedef struct {
 	uint32		padding[5]; // align on 128
 #endif
 } itd_entry;
+STATIC_ASSERT(sizeof(itd_entry) == 128);
 
 typedef struct {
 	ehci_sitd	sitd;
@@ -293,6 +296,7 @@ typedef struct {
 	uint32 		padding[2]; // align on 64
 #endif
 } sitd_entry;
+STATIC_ASSERT((sizeof(sitd_entry) % 64) == 0);
 
 #define EHCI_INTERRUPT_ENTRIES_COUNT	(7 + 1)		// (log 128 / log 2) + 1
 #define EHCI_VFRAMELIST_ENTRIES_COUNT	128

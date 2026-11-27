@@ -1,9 +1,11 @@
 /*
- * Copyright 2013-214, Stephan Aßmus <superstippi@gmx.de>.
+ * Copyright 2013-2014, Stephan Aßmus <superstippi@gmx.de>.
  * Copyright 2017, Julian Harnath <julian.harnath@rwth-aachen.de>.
- * Copyright 2020-2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2020-2026, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2025, Pawan Yerramilli <me@pawanyerramilli.com>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
+
 
 #include "FeaturedPackagesView.h"
 
@@ -21,12 +23,12 @@
 #include <StringView.h>
 
 #include "BitmapView.h"
+#include "Cursor.h"
 #include "HaikuDepotConstants.h"
+#include "InterfaceDefs.h"
 #include "LocaleUtils.h"
 #include "Logger.h"
 #include "MainWindow.h"
-#include "MarkupTextView.h"
-#include "MessagePackageListener.h"
 #include "PackageUtils.h"
 #include "RatingUtils.h"
 #include "RatingView.h"
@@ -51,12 +53,16 @@
 // The faction of an M-space that is left between the title and the first trailing icon.
 #define TITLE_RIGHT_TRAILING_ICON_PADDING_M_FACTOR 0.1
 
+enum {
+	PACKAGE_BULDING_CARD = 0,
+	PACKAGE_LIST_CARD = 1,
+	NO_RESULTS_CARD = 2
+};
 
 // #pragma mark - PackageView
 
 
-class StackedFeaturesPackageBandMetrics
-{
+class StackedFeaturesPackageBandMetrics {
 public:
 	StackedFeaturesPackageBandMetrics(float width, BFont* titleFont, BFont* metadataFont)
 	{
@@ -69,8 +75,7 @@ public:
 		metadataFont->GetHeight(&metadataFontHeight);
 
 		float totalTitleAndMetadataHeight = titleFontHeight.ascent + titleFontHeight.descent
-			+ titleFontHeight.leading
-			+ metadataFontHeight.leading
+			+ titleFontHeight.leading + metadataFontHeight.leading
 			+ 2.0 * (metadataFontHeight.ascent + metadataFontHeight.descent);
 
 		fHeight = fmaxf(totalTitleAndMetadataHeight, iconSize.Height()) + 2.0 * padding;
@@ -85,41 +90,43 @@ public:
 			float titleWidthM = titleFont->StringWidth("M");
 
 			float leftTitlePublisherAndChronologicalInfo = fIconRect.right + padding;
-			float rightTitlePublisherAndChronologicalInfo = fminf(width, fIconRect.Size().Width()
-				+ (2.0 * padding) + (titleWidthM * M_COUNT_TITLE));
+			float rightTitlePublisherAndChronologicalInfo = fminf(width,
+				fIconRect.Size().Width() + (2.0 * padding) + (titleWidthM * M_COUNT_TITLE));
 
-// left, top, right bottom
+			// left, top, right bottom
+
 			fTitleRect = BRect(leftTitlePublisherAndChronologicalInfo,
 				(fHeight - totalTitleAndMetadataHeight) / 2.0,
 				rightTitlePublisherAndChronologicalInfo,
-				((fHeight - totalTitleAndMetadataHeight) / 2.0)
-					+ titleFontHeight.ascent + titleFontHeight.descent);
+				((fHeight - totalTitleAndMetadataHeight) / 2.0) + titleFontHeight.ascent
+					+ titleFontHeight.descent);
 
 			fPublisherRect = BRect(leftTitlePublisherAndChronologicalInfo,
 				fTitleRect.bottom + titleFontHeight.leading,
 				rightTitlePublisherAndChronologicalInfo,
-				fTitleRect.bottom + titleFontHeight.leading
-					+ metadataFontHeight.ascent + metadataFontHeight.descent);
+				fTitleRect.bottom + titleFontHeight.leading + metadataFontHeight.ascent
+					+ metadataFontHeight.descent);
 
 			fChronologicalInfoRect = BRect(leftTitlePublisherAndChronologicalInfo,
 				fPublisherRect.bottom + metadataFontHeight.leading,
 				rightTitlePublisherAndChronologicalInfo,
-				fPublisherRect.bottom + metadataFontHeight.leading
-					+ metadataFontHeight.ascent + metadataFontHeight.descent);
-        }
+				fPublisherRect.bottom + metadataFontHeight.leading + metadataFontHeight.ascent
+					+ metadataFontHeight.descent);
+		}
 
-        // sort out the ratings display
+		// sort out the ratings display
 
 		{
 			BSize ratingStarSize = SharedIcons::IconStarBlue16Scaled()->Bitmap()->Bounds().Size();
 			RatingStarsMetrics ratingStarsMetrics(ratingStarSize);
 
 			fRatingStarsRect = BRect(BPoint(fTitleRect.right + padding,
-				(fHeight - ratingStarsMetrics.Size().Height()) / 2), ratingStarsMetrics.Size());
+										 (fHeight - ratingStarsMetrics.Size().Height()) / 2),
+				ratingStarsMetrics.Size());
 
-			if (fRatingStarsRect.right > width)
+			if (fRatingStarsRect.right > width) {
 				fRatingStarsRect = BRect();
-			else {
+			} else {
 				// Now sort out the position for the summary. This is reckoned as a container
 				// rect because it would be nice to layout the text with newlines and not just a
 				// single line.
@@ -190,13 +197,8 @@ public:
 		:
 		BView("stacked featured packages view", B_WILL_DRAW | B_FRAME_EVENTS),
 		fModel(model),
-		fSelectedIndex(-1),
-		fPackageListener(
-			new(std::nothrow) OnePackageMessagePackageListener(this)),
-		fLowestIndexAddedOrRemoved(-1)
+		fSelectedIndex(-1)
 	{
-		SetEventMask(B_POINTER_EVENTS);
-
 		fTitleFont = StackedFeaturedPackagesView::CreateTitleFont();
 		fMetadataFont = StackedFeaturedPackagesView::CreateMetadataFont();
 		fSummaryFont = StackedFeaturedPackagesView::CreateSummaryFont();
@@ -208,29 +210,17 @@ public:
 
 	virtual ~StackedFeaturedPackagesView()
 	{
-		fPackageListener->SetPackage(PackageInfoRef(NULL));
-		fPackageListener->ReleaseReference();
 		delete fBandMetrics;
 		delete fTitleFont;
 		delete fMetadataFont;
 		delete fSummaryFont;
 	}
 
-// #pragma mark - message handling and events
+	// #pragma mark - message handling and events
 
 	virtual void MessageReceived(BMessage* message)
 	{
 		switch (message->what) {
-			case MSG_UPDATE_PACKAGE:
-			{
-				BString name;
-				if (message->FindString("name", &name) != B_OK)
-					HDINFO("expected 'name' key on package update message");
-				else
-					_HandleUpdatePackage(name);
-				break;
-			}
-
 			case B_COLORS_UPDATED:
 			{
 				Invalidate();
@@ -268,16 +258,14 @@ public:
 			case B_DOWN_ARROW:
 			{
 				int32 lastIndex = static_cast<int32>(fPackages.size()) - 1;
-				if (!IsEmpty() && fSelectedIndex != -1
-						&& fSelectedIndex < lastIndex) {
+				if (!IsEmpty() && fSelectedIndex != -1 && fSelectedIndex < lastIndex)
 					_MessageSelectIndex(fSelectedIndex + 1);
-				}
 				break;
 			}
 			case B_LEFT_ARROW:
 			case B_UP_ARROW:
 				if (fSelectedIndex > 0)
-					_MessageSelectIndex( fSelectedIndex - 1);
+					_MessageSelectIndex(fSelectedIndex - 1);
 				break;
 			case B_PAGE_UP:
 			{
@@ -301,19 +289,10 @@ public:
 	}
 
 
-	/*!	This method will send a message to the Window so that it can signal
-		back to this and other views that a package has been selected.  This
-		method won't actually change the state of this view directly.
-	*/
-
 	void _MessageSelectIndex(int32 index) const
 	{
-		if (index != -1) {
-			BMessage message(MSG_PACKAGE_SELECTED);
-			BString packageName = fPackages[index]->Name();
-			message.AddString("name", packageName);
-			Window()->PostMessage(&message);
-		}
+		if (index != -1)
+			fModel.SetSelectedPackage(fPackages[index]);
 	}
 
 
@@ -328,13 +307,27 @@ public:
 	}
 
 
-// #pragma mark - update / add / remove / clear data
+	// #pragma mark - update / add / remove / clear data
 
 
-	void UpdatePackage(uint32 changeMask, const PackageInfoRef& package)
+	void HandlePackagesChanged(const std::vector<PackageInfoChangeEvent>& events)
 	{
-		// TODO; could optimize the invalidation?
+		std::vector<PackageInfoChangeEvent>::const_iterator it;
+		for (it = events.begin(); it != events.end(); it++)
+			_HandlePackageChanged(*it);
+	}
+
+
+	void _HandlePackageChanged(const PackageInfoChangeEvent& event)
+	{
+		uint32 changes = event.Changes();
+		const PackageInfoRef package = event.Package();
+
+		if (!package.IsSet() || 0 == changes)
+			return;
+
 		int32 index = _IndexOfPackage(package);
+
 		if (index >= 0) {
 			fPackages[index] = package;
 			Invalidate(_RectOfIndex(index));
@@ -344,10 +337,6 @@ public:
 
 	void Clear()
 	{
-		for (std::vector<PackageInfoRef>::iterator it = fPackages.begin();
-				it != fPackages.end(); it++) {
-			(*it)->RemoveListener(fPackageListener);
-		}
 		fPackages.clear();
 		fSelectedIndex = -1;
 
@@ -367,8 +356,8 @@ public:
 	}
 
 
-    static BFont* CreateMetadataFont()
-    {
+	static BFont* CreateMetadataFont()
+	{
 		BFont* font = new BFont(be_plain_font);
 		font_family family;
 		font_style style;
@@ -393,28 +382,6 @@ public:
 	bool IsEmpty() const
 	{
 		return fPackages.size() == 0;
-	}
-
-
-	void _HandleUpdatePackage(const BString& name)
-	{
-		int32 index = _IndexOfName(name);
-		if (index != -1)
-			Invalidate(_RectOfIndex(index));
-	}
-
-
-	static int _CmpProminences(int64 a, int64 b)
-	{
-		if (a <= 0)
-			a = PROMINANCE_ORDERING_MAX;
-		if (b <= 0)
-			b = PROMINANCE_ORDERING_MAX;
-		if (a == b)
-			return 0;
-		if (a > b)
-			return 1;
-		return -1;
 	}
 
 
@@ -456,68 +423,117 @@ public:
 	}
 
 
-	void BeginAddRemove()
+	void _InvalidateFromIndex(int32 index)
 	{
-		fLowestIndexAddedOrRemoved = INT32_MAX;
-	}
-
-
-	void EndAddRemove()
-	{
-		if (fLowestIndexAddedOrRemoved < INT32_MAX) {
-			if (fPackages.empty())
+		if (index != -1) {
+			if (fPackages.empty()) {
 				Invalidate();
-			else {
+			} else {
 				BRect invalidRect = Bounds();
-				invalidRect.top = _YOfIndex(fLowestIndexAddedOrRemoved);
+				invalidRect.top = _YOfIndex(index);
 				Invalidate(invalidRect);
 			}
 		}
 	}
 
 
-	void AddPackage(const PackageInfoRef& package)
+	/*!	Finds the index of the first difference between the current list of
+		packages and the provided list of packages. Returns -1 if there is
+		no difference. This is used with the `RetainPackages` method.
+	*/
+	int32 _IndexOfFirstDifference(const std::vector<PackageInfoRef>& packages)
+	{
+		size_t result = 0;
+		size_t packagesLen = packages.size();
+		size_t currentPackagesLen = fPackages.size();
+
+		while (true) {
+			if (result == packagesLen && result == currentPackagesLen)
+				return -1;
+			if (result >= packagesLen || result >= currentPackagesLen)
+				return static_cast<int32>(result);
+			if (packages[result] != fPackages[result])
+				return static_cast<int32>(result);
+			result++;
+		}
+	}
+
+
+	void RetainPackages(const std::vector<PackageInfoRef>& packages)
+	{
+		PackageInfoRef selectedPackage;
+
+		if (-1 != fSelectedIndex && fSelectedIndex < static_cast<int32>(fPackages.size()))
+			selectedPackage = fPackages[fSelectedIndex];
+
+		int32 lowestIndexAddedOrRemoved = _IndexOfFirstDifference(packages);
+		fPackages = packages;
+		_InvalidateFromIndex(lowestIndexAddedOrRemoved);
+
+		SelectPackage(selectedPackage);
+	}
+
+
+	void _AddPackage(const PackageInfoRef& package, int32* lowestIndexAddedOrRemoved)
 	{
 		// fPackages is sorted and for this reason it is possible to find the
 		// insertion point by identifying the first item in fPackages that does
 		// not return true from the method '_IsPackageBefore'.
 
 		std::vector<PackageInfoRef>::iterator itInsertionPt
-			= std::lower_bound(fPackages.begin(), fPackages.end(), package,
-				&_IsPackageBefore);
+			= std::lower_bound(fPackages.begin(), fPackages.end(), package, &_IsPackageBefore);
 
-		if (itInsertionPt == fPackages.end()
-				|| package->Name() != (*itInsertionPt)->Name()) {
-			int32 insertionIndex =
-				std::distance<std::vector<PackageInfoRef>::const_iterator>(
-					fPackages.begin(), itInsertionPt);
+		if (itInsertionPt == fPackages.end() || package->Name() != (*itInsertionPt)->Name()) {
+			int32 insertionIndex = std::distance<std::vector<PackageInfoRef>::const_iterator>(
+				fPackages.begin(), itInsertionPt);
+
 			if (fSelectedIndex >= insertionIndex)
 				fSelectedIndex++;
+
 			fPackages.insert(itInsertionPt, package);
-			package->AddListener(fPackageListener);
-			if (insertionIndex < fLowestIndexAddedOrRemoved)
-				fLowestIndexAddedOrRemoved = insertionIndex;
+
+			if (insertionIndex > *lowestIndexAddedOrRemoved)
+				*lowestIndexAddedOrRemoved = insertionIndex;
 		}
 	}
 
 
-	void RemovePackage(const PackageInfoRef& package)
+	void _RemovePackage(const PackageInfoRef& package, int32* lowestIndexAddedOrRemoved)
 	{
-		int32 index = _IndexOfPackage(package);
-		if (index >= 0) {
-			if (fSelectedIndex == index)
+		int32 removalIndex = _IndexOfPackage(package);
+		if (removalIndex >= 0) {
+
+			if (fSelectedIndex == removalIndex)
 				fSelectedIndex = -1;
-			if (fSelectedIndex > index)
+
+			if (fSelectedIndex > removalIndex)
 				fSelectedIndex--;
-			fPackages[index]->RemoveListener(fPackageListener);
-			fPackages.erase(fPackages.begin() + index);
-			if (index < fLowestIndexAddedOrRemoved)
-				fLowestIndexAddedOrRemoved = index;
+
+			fPackages.erase(fPackages.begin() + removalIndex);
+
+			if (removalIndex > *lowestIndexAddedOrRemoved)
+				*lowestIndexAddedOrRemoved = removalIndex;
 		}
 	}
 
 
-// #pragma mark - selection and index handling
+	void AddRemovePackages(const std::vector<PackageInfoRef>& addedPackages,
+		const std::vector<PackageInfoRef>& removedPackages)
+	{
+		int32 lowestIndexAddedOrRemoved = -1;
+		std::vector<PackageInfoRef>::const_iterator it;
+
+		for (it = addedPackages.begin(); it != addedPackages.end(); it++)
+			_AddPackage(*it, &lowestIndexAddedOrRemoved);
+
+		for (it = removedPackages.begin(); it != removedPackages.end(); it++)
+			_RemovePackage(*it, &lowestIndexAddedOrRemoved);
+
+		_InvalidateFromIndex(lowestIndexAddedOrRemoved);
+	}
+
+
+	// #pragma mark - selection and index handling
 
 
 	void SelectPackage(const PackageInfoRef& package)
@@ -542,29 +558,20 @@ public:
 
 	int32 _IndexOfPackage(PackageInfoRef package) const
 	{
+		if (!package.IsSet())
+			return -1;
+
 		std::vector<PackageInfoRef>::const_iterator it
-			= std::lower_bound(fPackages.begin(), fPackages.end(), package,
-				&_IsPackageBefore);
+			= std::lower_bound(fPackages.begin(), fPackages.end(), package, &_IsPackageBefore);
 
-		return (it == fPackages.end() || (*it)->Name() != package->Name())
-			? -1 : it - fPackages.begin();
+		if (it == fPackages.end() || (*it)->Name() != package->Name())
+			return -1;
+
+		return it - fPackages.begin();
 	}
 
 
-	int32 _IndexOfName(const BString& name) const
-	{
-		// TODO; slow linear search.
-		// the fPackages is not sorted on name and for this reason it is not
-		// possible to do a binary search.
-		for (uint32 i = 0; i < fPackages.size(); i++) {
-			if (fPackages[i]->Name() == name)
-				return i;
-		}
-		return -1;
-	}
-
-
-// #pragma mark - drawing and rendering
+	// #pragma mark - drawing and rendering
 
 
 	virtual void Draw(BRect updateRect)
@@ -626,9 +633,14 @@ public:
 		if (!iconRect.IsValid())
 			return;
 
+		PackageIconRepositoryRef iconRepository = fModel.IconRepository();
+
+		if (!iconRepository.IsSet())
+			return;
+
 		BitmapHolderRef icon;
-		status_t iconResult = fModel.GetPackageIconRepository().GetIcon(pkg->Name(),
-			iconRect.Width(), icon);
+
+		status_t iconResult = iconRepository->GetIcon(pkg->Name(), iconRect.Width(), icon);
 
 		if (iconResult == B_OK) {
 			if (icon.IsSet()) {
@@ -659,9 +671,9 @@ public:
 		float trailingIconsWidth = 0.0f;
 
 		for (std::vector<BitmapHolderRef>::iterator it = trailingIconBitmaps.begin();
-				it != trailingIconBitmaps.end(); it++) {
-			trailingIconsWidth += (*it)->Bitmap()->Bounds().Width()
-				* (1.0 + TRAILING_ICON_PADDING_LEFT_FACTOR);
+			it != trailingIconBitmaps.end(); it++) {
+			trailingIconsWidth
+				+= (*it)->Bitmap()->Bounds().Width() * (1.0 + TRAILING_ICON_PADDING_LEFT_FACTOR);
 		}
 
 		SetDrawingMode(B_OP_COPY);
@@ -671,20 +683,20 @@ public:
 		float titleRightTrailingIconsPadding = 0.0f;
 
 		if (!trailingIconBitmaps.empty()) {
-			titleRightTrailingIconsPadding = StringWidth("M")
-				* TITLE_RIGHT_TRAILING_ICON_PADDING_M_FACTOR;
+			titleRightTrailingIconsPadding
+				= StringWidth("M") * TITLE_RIGHT_TRAILING_ICON_PADDING_M_FACTOR;
 		}
 
 		font_height fontHeight;
 		fTitleFont->GetHeight(&fontHeight);
-		BPoint pt = textRect.LeftTop() + BPoint(0.0, + fontHeight.ascent);
+		BPoint pt = textRect.LeftTop() + BPoint(0.0, +fontHeight.ascent);
 
 		BString title;
 		PackageUtils::TitleOrName(pkg, title);
 
 		BString renderedText = title;
-		TruncateString(&renderedText, B_TRUNCATE_END, textRect.Width()
-			- (titleRightTrailingIconsPadding + trailingIconsWidth));
+		TruncateString(&renderedText, B_TRUNCATE_END,
+			textRect.Width() - (titleRightTrailingIconsPadding + trailingIconsWidth));
 
 		DrawString(renderedText, pt);
 
@@ -697,14 +709,15 @@ public:
 		SetDrawingMode(B_OP_ALPHA);
 
 		for (std::vector<BitmapHolderRef>::iterator it = trailingIconBitmaps.begin();
-				it != trailingIconBitmaps.end(); it++) {
+			it != trailingIconBitmaps.end(); it++) {
 			const BBitmap* bitmap = (*it)->Bitmap();
 			BRect bitmapBounds = bitmap->Bounds();
 
-            float trailingIconTopLeftPtX = ceilf(
-            	trailingIconX + (bitmapBounds.Width() * TRAILING_ICON_PADDING_LEFT_FACTOR)) + 0.5;
-            float trailingIconTopLeftPtY = ceilf(
-            	trailingIconMidY - (bitmapBounds.Height() / 2.0)) + 0.5;
+			float trailingIconTopLeftPtX
+				= ceilf(trailingIconX + (bitmapBounds.Width() * TRAILING_ICON_PADDING_LEFT_FACTOR))
+				+ 0.5;
+			float trailingIconTopLeftPtY
+				= ceilf(trailingIconMidY - (bitmapBounds.Height() / 2.0)) + 0.5;
 
 			BRect trailingIconRect(BPoint(trailingIconTopLeftPtX, trailingIconTopLeftPtY),
 				bitmap->Bounds().Size());
@@ -727,7 +740,7 @@ public:
 
 		font_height fontHeight;
 		fMetadataFont->GetHeight(&fontHeight);
-		BPoint pt = textRect.LeftTop() + BPoint(0.0, + fontHeight.ascent);
+		BPoint pt = textRect.LeftTop() + BPoint(0.0, +fontHeight.ascent);
 
 		BString renderedText(text);
 		TruncateString(&renderedText, B_TRUNCATE_END, textRect.Width());
@@ -762,7 +775,7 @@ public:
 		if (!ratingRect.IsValid())
 			return;
 
-		UserRatingInfoRef userRatingInfo = pkg->UserRatingInfo();
+		PackageUserRatingInfoRef userRatingInfo = pkg->UserRatingInfo();
 
 		if (userRatingInfo.IsSet()) {
 			UserRatingSummaryRef userRatingSummary = userRatingInfo->Summary();
@@ -789,9 +802,10 @@ public:
 		// The text rect is a container into which later text can be made to flow multi-line. For
 		// now just draw one line of the summary.
 
-		BPoint pt = textRect.LeftTop() + BPoint(0.0,
-			(textRect.Size().Height() / 2.0) - ((fontHeight.ascent + fontHeight.descent) / 2.0)
-				+ fontHeight.ascent);
+		BPoint pt = textRect.LeftTop()
+			+ BPoint(0.0,
+				(textRect.Size().Height() / 2.0) - ((fontHeight.ascent + fontHeight.descent) / 2.0)
+					+ fontHeight.ascent);
 
 		BString summary;
 		PackageUtils::Summary(pkg, summary);
@@ -801,7 +815,7 @@ public:
 	}
 
 
-// #pragma mark - geometry and scrolling
+	// #pragma mark - geometry and scrolling
 
 
 	/*!	This method will make sure that the package at the given index is
@@ -813,12 +827,12 @@ public:
 
 	void _EnsureIndexVisible(int32 index)
 	{
-		if (!_IsIndexEntirelyVisible(index)) {
+		if (index >= 0 && !_IsIndexEntirelyVisible(index)) {
 			BRect bounds = Bounds();
 			int32 indexOfCentreVisible = _IndexOfY(bounds.top + bounds.Height() / 2);
-			if (index < indexOfCentreVisible)
+			if (index < indexOfCentreVisible) {
 				ScrollTo(0, _YOfIndex(index));
-			else {
+			} else {
 				float scrollPointY = (_YOfIndex(index) + fBandMetrics->Height()) - bounds.Height();
 				ScrollTo(0, scrollPointY);
 			}
@@ -902,7 +916,7 @@ public:
 		int32 i = static_cast<int32>(y / fBandMetrics->Height());
 		if (i < 0)
 			return 0;
-		return std::min(i, (int32) (fPackages.size() - 1));
+		return std::min(i, (int32)(fPackages.size() - 1));
 	}
 
 
@@ -918,9 +932,6 @@ private:
 			std::vector<PackageInfoRef>
 								fPackages;
 			int32				fSelectedIndex;
-			OnePackageMessagePackageListener*
-								fPackageListener;
-			int32				fLowestIndexAddedOrRemoved;
 			StackedFeaturesPackageBandMetrics*
 								fBandMetrics;
 
@@ -936,17 +947,49 @@ private:
 FeaturedPackagesView::FeaturedPackagesView(Model& model)
 	:
 	BView(B_TRANSLATE("Featured packages"), 0),
-	fModel(model)
+	fModel(model),
+	fIsLoadingAndNoData(false)
 {
 	fPackagesView = new StackedFeaturedPackagesView(fModel);
 
-	fScrollView = new BScrollView("featured packages scroll view",
-		fPackagesView, 0, false, true, B_FANCY_BORDER);
+	fScrollView = new BScrollView("featured packages scroll view", fPackagesView, 0, false, true,
+		B_FANCY_BORDER);
 
-	BLayoutBuilder::Group<>(this)
-		.Add(fScrollView, 1.0f);
+	_BuildNoResultsView();
+
+	BStringView* pleaseWaitText = new BStringView(
+		"please wait text", B_TRANSLATE("Creating package list" B_UTF8_ELLIPSIS));
+
+	pleaseWaitText->SetExplicitAlignment(
+		BAlignment(B_ALIGN_HORIZONTAL_CENTER, B_ALIGN_VERTICAL_CENTER));
+
+	fFeaturedCardLayout = new BCardLayout();
+	SetLayout(fFeaturedCardLayout);
+
+	BGroupView* pleaseWaitGroup = new BGroupView("please wait");
+	pleaseWaitGroup->SetViewColor(ui_color(B_LIST_BACKGROUND_COLOR));
+	AddChild(pleaseWaitGroup);
+
+	BGroupView* foundResultsGroup = new BGroupView("search results");
+	AddChild(foundResultsGroup);
+
+	BGroupView* noResultsGroup = new BGroupView("no search results");
+	noResultsGroup->SetViewColor(ui_color(B_LIST_BACKGROUND_COLOR));
+	AddChild(noResultsGroup);
+
+	BLayoutBuilder::Group<>(pleaseWaitGroup)
+		.Add(pleaseWaitText)
+		.SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, B_SIZE_UNLIMITED));
+	BLayoutBuilder::Group<>(foundResultsGroup).Add(fScrollView, 1.0f);
+	BLayoutBuilder::Group<>(noResultsGroup)
+		.AddGroup(B_VERTICAL)
+				.AddGlue()
+				.Add(fNoResultsView)
+				.AddGlue()
+		.End()
+		.SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, B_SIZE_UNLIMITED));
+	_AdjustViews();
 }
-
 
 FeaturedPackagesView::~FeaturedPackagesView()
 {
@@ -954,35 +997,31 @@ FeaturedPackagesView::~FeaturedPackagesView()
 
 
 void
-FeaturedPackagesView::BeginAddRemove()
+FeaturedPackagesView::AttachedToWindow()
 {
-	fPackagesView->BeginAddRemove();
+	fNoResultsView->SetTarget(Window());
 }
 
 
 void
-FeaturedPackagesView::EndAddRemove()
+FeaturedPackagesView::RetainPackages(const std::vector<PackageInfoRef>& packages)
 {
-	fPackagesView->EndAddRemove();
+	fPackagesView->RetainPackages(packages);
 	_AdjustViews();
 }
 
 
-/*! This method will add the package into the list to be displayed.  The
-    insertion will occur in alphabetical order.
-*/
-
 void
-FeaturedPackagesView::AddPackage(const PackageInfoRef& package)
+FeaturedPackagesView::AddRemovePackages(const std::vector<PackageInfoRef>& addedPackages,
+	const std::vector<PackageInfoRef>& removedPackages)
 {
-	fPackagesView->AddPackage(package);
-}
+	if (!addedPackages.empty())
+		fIsLoadingAndNoData = false;
 
-
-void
-FeaturedPackagesView::RemovePackage(const PackageInfoRef& package)
-{
-	fPackagesView->RemovePackage(package);
+	if (!addedPackages.empty() || !removedPackages.empty()) {
+		fPackagesView->AddRemovePackages(addedPackages, removedPackages);
+		_AdjustViews();
+	}
 }
 
 
@@ -996,8 +1035,7 @@ FeaturedPackagesView::Clear()
 
 
 void
-FeaturedPackagesView::SelectPackage(const PackageInfoRef& package,
-	bool scrollToEntry)
+FeaturedPackagesView::SelectPackage(const PackageInfoRef& package, bool scrollToEntry)
 {
 	fPackagesView->SelectPackage(package);
 
@@ -1018,8 +1056,72 @@ FeaturedPackagesView::DoLayout()
 
 
 void
+FeaturedPackagesView::HandleIconsChanged()
+{
+	Invalidate();
+}
+
+
+void
+FeaturedPackagesView::HandlePackagesChanged(const std::vector<PackageInfoChangeEvent>& events)
+{
+	fPackagesView->HandlePackagesChanged(events);
+}
+
+
+void
+FeaturedPackagesView::SetLoading(bool isLoading)
+{
+	if ((isLoading && fPackagesView->IsEmpty()) != fIsLoadingAndNoData) {
+		fIsLoadingAndNoData = !fIsLoadingAndNoData;
+		_AdjustViews();
+	}
+}
+
+
+void
+FeaturedPackagesView::_BuildNoResultsView()
+{
+	fNoResultsView = new TextDocumentView();
+	TextDocumentRef noResultsTextDocument(new(std::nothrow) TextDocument(), true);
+	ParagraphStyle paragraphStyle;
+	paragraphStyle.SetAlignment(ALIGN_CENTER);
+	Paragraph paragraph(paragraphStyle);
+
+	TextSpan prefix;
+	prefix.SetText(B_TRANSLATE("No results? "));
+
+	CharacterStyle linkStyle;
+	linkStyle.SetForegroundColor(ui_color(B_LINK_TEXT_COLOR));
+	TextSpan link(B_TRANSLATE_COMMENT(
+		"Click here", "Appears in the sentence 'Click here to search all packages.'"), linkStyle);
+	link.SetClickMessage(new BMessage(MSG_SHOW_ALL_PACKAGES_TAB));
+	BCursor cursor(B_CURSOR_ID_SYSTEM_DEFAULT);
+	link.SetCursor(cursor);
+
+	TextSpan suffix;
+	suffix.SetText(B_TRANSLATE_COMMENT(" to search all packages.",
+		"Appears in the sentence 'Click here to search all packages.'"));
+
+	paragraph.Append(prefix);
+	paragraph.Append(link);
+	paragraph.Append(suffix);
+	noResultsTextDocument->Append(paragraph);
+	fNoResultsView->SetTextDocument(noResultsTextDocument);
+	fNoResultsView->SetSelectionEnabled(false);
+	fNoResultsView->SetViewUIColor(B_LIST_BACKGROUND_COLOR);
+}
+
+
+void
 FeaturedPackagesView::_AdjustViews()
 {
-	fScrollView->FrameResized(fScrollView->Frame().Width(),
-		fScrollView->Frame().Height());
+	if (fIsLoadingAndNoData)
+		fFeaturedCardLayout->SetVisibleItem(PACKAGE_BULDING_CARD);
+	else if (fPackagesView->IsEmpty())
+		fFeaturedCardLayout->SetVisibleItem(NO_RESULTS_CARD);
+	else
+		fFeaturedCardLayout->SetVisibleItem(PACKAGE_LIST_CARD);
+
+	fScrollView->FrameResized(fScrollView->Frame().Width(), fScrollView->Frame().Height());
 }

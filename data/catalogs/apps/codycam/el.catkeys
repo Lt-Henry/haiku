@@ -1,4 +1,4 @@
-1	greek, modern (1453-)	x-vnd.Haiku-CodyCam	12021044
+1	greek, modern (1453-)	x-vnd.Haiku-CodyCam	384853512
 destination directory expected	CodyCam		αναμένεται κατάλογος προορισμού
 reply: '%s'\n	SftpClient		επανάληψη: '%s'\n
 PASS <suppressed>  (real password sent)	FtpClient		PASS <suppressed>  (ο πραγματικός κωδικός θα σταλεί)
@@ -50,6 +50,7 @@ server address expected	CodyCam		αναμένεται διεύθυνση δια�
 Cannot start the video window	CodyCam		Αδυναμία εκκίνησης του παράθυρου βίντεο
 reply: %d, %d\n	FtpClient		επανάληψη: %d, %d\n
 Cannot set the time source for the video window	CodyCam		Αδυναμία τοποθέτησης της προέλευσης χρόνου στο παράθυρο βίντεο
+Cannot find a video source.\nYou need a webcam to use %appname%.	CodyCam		Δεν είναι δυνατή η εύρεση μιας πηγής βίντεο.\nΧρειάζεστε μια webcam για να χρησιμοποιήσετε την εφαρμογή %appname%.
 Every 15 minutes	CodyCam		Κάθε 15 λεπτά
 Every 24 hours	CodyCam		Κάθε 24 ώρες
 Image Format Menu	CodyCam		Μενού μορφοποίησης εικόνας
@@ -81,7 +82,6 @@ Video settings	CodyCam		Ρυθμίσεις βίντεο
 Can't find an available connection to the video window	CodyCam		Αδυναμία εύρεση μιας διαθέσιμης σύνδεσης στο παράθυρο του βίντεο
 FTP	CodyCam		FTP
 Error creating output file	VideoConsumer.cpp		Σφάλμα κατά τη δημιουργία αρχείου εξόδου
-Cannot find a video source.\nYou need a webcam to use CodyCam.	CodyCam		Δεν βρέθηκε πηγή βίντεο.\nΧρειάζεστε μία κάμερα υπολογιστή για να χρησιμοποιήσετε την Κάμερα.
 Logging in…	VideoConsumer.cpp		Γίνεται είσοδος…
 CodyCam	System name		Κάμερα
 Error writing output file	VideoConsumer.cpp		Σφάλμα κατά την εγγραφή στο αρχείο εξόδου

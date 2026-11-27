@@ -1,21 +1,20 @@
 /*
- * Copyright 2018-2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2018-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 #ifndef HAIKU_DEPOT_CONSTANTS_H
 #define HAIKU_DEPOT_CONSTANTS_H
 
+
 enum {
 	MSG_PACKAGE_ACTION_DONE					= 'mpad',
 	MSG_BULK_LOAD_DONE						= 'mmwd',
 	MSG_MAIN_WINDOW_CLOSED					= 'mwcl',
-	MSG_PACKAGE_SELECTED					= 'pkgs',
 	MSG_PACKAGE_WORKER_BUSY					= 'pkwb',
 	MSG_PACKAGE_WORKER_IDLE					= 'pkwi',
 	MSG_CLIENT_TOO_OLD						= 'oldc',
 	MSG_NETWORK_TRANSPORT_ERROR				= 'nett',
 	MSG_SERVER_ERROR						= 'svre',
-	MSG_SERVER_DATA_CHANGED					= 'svdc',
 	MSG_ALERT_SIMPLE_ERROR					= 'nser',
 	MSG_DID_ADD_USER_RATING					= 'adur',
 	MSG_DID_UPDATE_USER_RATING				= 'upur',
@@ -28,7 +27,11 @@ enum {
 	MSG_LOG_OUT								= 'lgot',
 	MSG_PKG_INSTALL							= 'pkgi',
 	MSG_PKG_UNINSTALL						= 'pkgu',
-	MSG_PKG_OPEN							= 'pkgo'
+	MSG_PKG_OPEN							= 'pkgo',
+	MSG_PKG_CACHE_SCREENSHOT				= 'pcsc',
+	MSG_PKG_POPULATE_CHANGELOG				= 'pchl',
+	MSG_PKG_POPULATE_USER_RATINGS			= 'purg',
+	MSG_SHOW_ALL_PACKAGES_TAB				= 'sapt'
 };
 
 enum BitmapSize {
@@ -62,25 +65,28 @@ enum BitmapSize {
 #define REPOSITORY_NAME_SYSTEM				"system"
 #define REPOSITORY_NAME_INSTALLED			"installed"
 
+/*!	Namespace to contain keys that are used for data inside `BMessage` instances
+ */
+namespace shared_message_keys {
 
-#define KEY_ALERT_TEXT						"alert_text"
-#define KEY_ALERT_TITLE						"alert_title"
-#define KEY_ALERT_TYPE						"alert_type"
-#define KEY_WORK_STATUS_TEXT				"work_status_text"
-#define KEY_WORK_STATUS_PROGRESS			"work_status_progress"
-#define KEY_WINDOW_SETTINGS					"window_settings"
-#define KEY_MAIN_SETTINGS					"main_settings"
-#define KEY_PACKAGE_NAME					"package_name"
-#define KEY_TITLE							"title"
-#define KEY_DESKBAR_LINK					"deskbar_link"
+extern const char* const kKeyPackageName;
+extern const char* const kKeyDepotName;
+extern const char* const kKeyCode;
+extern const char* const kKeyLanguageId;
+
+}; // namespace shared_message_keys
 
 
-#define SETTING_SHOW_AVAILABLE_PACKAGES			"show available packages"
-#define SETTING_SHOW_INSTALLED_PACKAGES			"show installed packages"
-#define SETTING_SHOW_DEVELOP_PACKAGES			"show develop packages"
-#define SETTING_SHOW_SOURCE_PACKAGES			"show source packages"
-#define SETTING_CAN_SHARE_ANONYMOUS_USER_DATA	"can share anonymous usage data"
-#define SETTING_PACKAGE_LIST_VIEW_MODE			"packageListViewMode"
+#define SETTING_NICKNAME							"username"
+	// historical difference
+#define SETTING_SHOW_DESKTOP_PACKAGES				"show only desktop packages"
+#define SETTING_SHOW_NATIVE_DESKTOP_PACKAGES		"show only native desktop packages"
+#define SETTING_SHOW_AVAILABLE_PACKAGES				"show available packages"
+#define SETTING_SHOW_INSTALLED_PACKAGES				"show installed packages"
+#define SETTING_SHOW_DEVELOP_PACKAGES				"show develop packages"
+#define SETTING_SHOW_SOURCE_PACKAGES				"show source packages"
+#define SETTING_CAN_SHARE_ANONYMOUS_USER_DATA		"can share anonymous usage data"
+#define SETTING_PACKAGE_LIST_VIEW_MODE				"packageListViewMode"
 	// unfortunately historical difference in casing.
 
 
@@ -118,9 +124,19 @@ enum UserUsageConditionsSelectionMode {
 	// any prominence ordering value greater than this is not prominent.
 #define PROMINANCE_ORDERING_MAX				1000
 	// this is the highest prominence value possible.
+#define PROMINANCE_ORDERING_NONE			0
 
 #define SINGLE_PACKAGE_DEPOT_NAME "__hd_single_pkg_depot"
 	// used as a fake depot name for the case where the application is looking
 	// at a single package based on a file.
+
+#define SINGLE_PACKAGE_DEPOT_IDENTIFIER "__hd_single_pkg_depot_id_c07fb16620f4"
+	// used as a fake depot name for the case where the application is looking
+	// at a single package based on a file.
+
+#define LOCAL_DEPOT_IDENTIFIER "__hd_local_depot_id_008922773013"
+	// used as a fake depot identifier that is a placeholder used to convey
+	// packages that are only installed locally and do not exist in a remote
+	// repository.
 
 #endif // HAIKU_DEPOT_CONSTANTS_H

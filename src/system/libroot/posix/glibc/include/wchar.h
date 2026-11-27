@@ -2,6 +2,7 @@
 #include <wcsmbs/wchar.h>
 
 # ifdef _WCHAR_H
+
 /* Now define the internal interfaces.  */
 extern int __wcscasecmp (__const wchar_t *__s1, __const wchar_t *__s2)
      __attribute_pure__;

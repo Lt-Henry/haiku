@@ -1,7 +1,9 @@
 /*
- * Copyright 2021-2023, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2021-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
+
+
 #include "IncrementViewCounterProcess.h"
 
 #include <Catalog.h>
@@ -20,14 +22,14 @@
 #define B_TRANSLATION_CONTEXT "IncrementViewCounterProcess"
 
 
-IncrementViewCounterProcess::IncrementViewCounterProcess(
-	Model* model, const PackageInfoRef& package)
+IncrementViewCounterProcess::IncrementViewCounterProcess(Model* model,
+	const PackageInfoRef& package)
 	:
 	fPackage(package),
 	fModel(model)
 {
 	fDescription = BString(B_TRANSLATE("Recording view of \"%PackageName%\""))
-		.ReplaceAll("%PackageName%", fPackage->Name());
+					   .ReplaceAll("%PackageName%", fPackage->Name());
 }
 
 
@@ -43,10 +45,10 @@ IncrementViewCounterProcess::Name() const
 }
 
 
-const char*
-IncrementViewCounterProcess::Description() const
+const BString
+IncrementViewCounterProcess::Description()
 {
-	return fDescription.String();
+	return fDescription;
 }
 
 
@@ -75,10 +77,10 @@ IncrementViewCounterProcess::RunInternal()
 	int32 attempts = ATTEMPTS;
 	status_t result = B_OK;
 
-	while (attempts > 0 && !WasStopped()) {
+	while (attempts > 0 && !WasStopped() && ServerHelper::IsNetworkAvailable()) {
 		BMessage resultEnvelope;
-		WebAppInterface* webAppInterface = fModel->GetWebAppInterface();
-		result = webAppInterface->IncrementViewCounter(fPackage, depot, resultEnvelope);
+		WebAppInterfaceRef webApp = fModel->WebApp();
+		result = webApp->IncrementViewCounter(fPackage, depot, resultEnvelope);
 
 		if (result == B_OK) {
 			int32 errorCode = WebAppInterface::ErrorCodeFromResponse(resultEnvelope);
@@ -97,8 +99,9 @@ IncrementViewCounterProcess::RunInternal()
 					result = B_ERROR;
 					break;
 			}
-		} else
+		} else {
 			HDERROR("an error has arisen incrementing the view counter");
+		}
 
 		attempts--;
 		_SpinBetweenAttempts();
@@ -115,4 +118,3 @@ IncrementViewCounterProcess::_SpinBetweenAttempts()
 	for (int32 i = 0; i < 10 && !WasStopped(); i++)
 		usleep(miniSpinDelays);
 }
-

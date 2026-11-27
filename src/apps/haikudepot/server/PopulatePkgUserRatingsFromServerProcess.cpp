@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2016-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * Copyright 2013-2014, Stephan Aßmus <superstippi@gmx.de>.
  * All rights reserved. Distributed under the terms of the MIT License.
  *
@@ -10,7 +10,6 @@
 
 #include "PopulatePkgUserRatingsFromServerProcess.h"
 
-#include <Autolock.h>
 #include <Catalog.h>
 
 #include "Logger.h"
@@ -23,10 +22,10 @@
 
 
 PopulatePkgUserRatingsFromServerProcess::PopulatePkgUserRatingsFromServerProcess(
-	PackageInfoRef packageInfo, Model* model)
+	const BString& packageName, Model* model)
 	:
 	fModel(model),
-	fPackageInfo(packageInfo)
+	fPackageName(packageName)
 {
 }
 
@@ -43,8 +42,8 @@ PopulatePkgUserRatingsFromServerProcess::Name() const
 }
 
 
-const char*
-PopulatePkgUserRatingsFromServerProcess::Description() const
+const BString
+PopulatePkgUserRatingsFromServerProcess::Description()
 {
 	return B_TRANSLATE("Fetching user ratings for package");
 }
@@ -53,35 +52,32 @@ PopulatePkgUserRatingsFromServerProcess::Description() const
 status_t
 PopulatePkgUserRatingsFromServerProcess::RunInternal()
 {
+	if (!ServerHelper::IsNetworkAvailable()) {
+		HDINFO("no network so will not populate user ratings");
+		return B_OK;
+	}
+
 	// TODO; use API spec to code generation techniques instead of this manually written client.
 
 	status_t status = B_OK;
 
 	// Retrieve info from web-app
 	BMessage info;
+	BString webAppRepositoryCode = _WebAppRepositoryCode();
 
-	BString packageName;
-	BString webAppRepositoryCode;
-
-	{
-		BAutolock locker(&fLock);
-		packageName = fPackageInfo->Name();
-
-		BString depotName = PackageUtils::DepotName(fPackageInfo);
-		const DepotInfo* depot = fModel->DepotForName(depotName);
-
-		if (depot != NULL)
-			webAppRepositoryCode = depot->WebAppRepositoryCode();
+	if (webAppRepositoryCode.IsEmpty()) {
+		HDERROR("unable to get the web app repository code for pkg [%s]", fPackageName.String());
+		status = B_ERROR;
 	}
 
 	if (status == B_OK) {
-		status = fModel->GetWebAppInterface()->RetrieveUserRatingsForPackageForDisplay(packageName,
+		status = fModel->WebApp()->RetrieveUserRatingsForPackageForDisplay(fPackageName,
 			webAppRepositoryCode, BString(), 0, PACKAGE_INFO_MAX_USER_RATINGS, info);
 			// ^ note intentionally not using the repository source code as this would then show
 			// too few results as it would be architecture specific.
 	}
 
-	UserRatingInfoRef userRatingInfo(new UserRatingInfo(), true);
+	PackageUserRatingInfoBuilder userRatingInfoBuilder;
 
 	if (status == B_OK) {
 		// Parse message
@@ -112,7 +108,7 @@ PopulatePkgUserRatingsFromServerProcess::RunInternal()
 					BString user;
 					BMessage userInfo;
 					if (item.FindMessage("user", &userInfo) != B_OK
-							|| userInfo.FindString("nickname", &user) != B_OK) {
+						|| userInfo.FindString("nickname", &user) != B_OK) {
 						HDERROR("ignored user rating [%s] without a user nickname", code.String());
 						continue;
 					}
@@ -170,15 +166,15 @@ PopulatePkgUserRatingsFromServerProcess::RunInternal()
 					UserRatingRef userRating(
 						new UserRating(UserInfo(user), rating, comment, languageCode,
 							// note that language identifiers are "code" in HDS and "id" in Haiku
-							versionString, (uint64) createTimestamp),
+							versionString, static_cast<uint64>(createTimestamp)),
 						true);
-					userRatingInfo->AddUserRating(userRating);
+					userRatingInfoBuilder.AddUserRating(userRating);
 					HDDEBUG("rating [%s] retrieved from server", code.String());
 				}
 
-				userRatingInfo->SetUserRatingsPopulated();
+				userRatingInfoBuilder.WithUserRatingsPopulated();
 				HDDEBUG("did retrieve %" B_PRIi32 " user ratings for [%s]", index - 1,
-					packageName.String());
+					fPackageName.String());
 			}
 		} else {
 			int32 errorCode = WebAppInterface::ErrorCodeFromResponse(info);
@@ -197,14 +193,13 @@ PopulatePkgUserRatingsFromServerProcess::RunInternal()
 	BMessage summaryResponse;
 
 	if (status == B_OK) {
-		status = fModel->GetWebAppInterface()->RetrieveUserRatingSummaryForPackage(packageName,
+		status = fModel->WebApp()->RetrieveUserRatingSummaryForPackage(fPackageName,
 			webAppRepositoryCode, summaryResponse);
 	}
 
 	if (status == B_OK) {
 		// Parse message
-
-		UserRatingSummaryRef userRatingSummary(new UserRatingSummary(), true);
+		UserRatingSummaryBuilder userRatingSummaryBuilder;
 
 		BMessage result;
 
@@ -214,15 +209,18 @@ PopulatePkgUserRatingsFromServerProcess::RunInternal()
 		status = summaryResponse.FindMessage("result", &result);
 
 		double sampleSizeF;
+		int sampleSize = 0;
 		bool hasData;
 
 		if (status == B_OK)
 			status = result.FindDouble("sampleSize", &sampleSizeF);
 
-		if (status == B_OK)
-			userRatingSummary->SetRatingCount(static_cast<int>(sampleSizeF));
+		if (status == B_OK) {
+			sampleSize = static_cast<int>(sampleSizeF);
+			userRatingSummaryBuilder.WithRatingCount(sampleSize);
+		}
 
-		hasData = status == B_OK && userRatingSummary->RatingCount() > 0;
+		hasData = status == B_OK && sampleSize > 0;
 
 		if (hasData) {
 			double ratingF;
@@ -231,7 +229,7 @@ PopulatePkgUserRatingsFromServerProcess::RunInternal()
 				status = result.FindDouble("rating", &ratingF);
 
 			if (status == B_OK)
-				userRatingSummary->SetAverageRating(ratingF);
+				userRatingSummaryBuilder.WithAverageRating(ratingF);
 		}
 
 		if (hasData) {
@@ -261,11 +259,12 @@ PopulatePkgUserRatingsFromServerProcess::RunInternal()
 				if (status == B_OK)
 					status = ratingDistributionItem.FindDouble("total", &ratingDistributionTotalF);
 
-				userRatingSummary->SetRatingByStar(static_cast<int>(ratingDistributionRatingF),
+				userRatingSummaryBuilder.AddRatingByStar(
+					static_cast<int>(ratingDistributionRatingF),
 					static_cast<int>(ratingDistributionTotalF));
 			}
 
-			userRatingInfo->SetSummary(userRatingSummary);
+			userRatingInfoBuilder.WithSummary(userRatingSummaryBuilder.BuildRef());
 		} else {
 			int32 errorCode = WebAppInterface::ErrorCodeFromResponse(summaryResponse);
 
@@ -277,10 +276,28 @@ PopulatePkgUserRatingsFromServerProcess::RunInternal()
 	}
 
 	if (status == B_OK) {
-		// TODO; later make the PackageInfo immutable to avoid the need for locking here.
-		BAutolock locker(&fLock);
-		fPackageInfo->SetUserRatingInfo(userRatingInfo);
+		PackageInfoRef package = fModel->PackageForName(fPackageName);
+
+		PackageInfoRef updatedPackage = PackageInfoBuilder(package)
+											.WithUserRatingInfo(userRatingInfoBuilder.BuildRef())
+											.BuildRef();
+
+		fModel->AddPackageWithChange(updatedPackage, static_cast<uint32>(PKG_CHANGED_RATINGS));
 	}
 
 	return status;
+}
+
+
+const BString
+PopulatePkgUserRatingsFromServerProcess::_WebAppRepositoryCode() const
+{
+	const PackageInfoRef package = fModel->PackageForName(fPackageName);
+	const BString depotName = PackageUtils::DepotName(package);
+	const DepotInfoRef depot = fModel->DepotForName(depotName);
+
+	if (depot.IsSet())
+		return depot->WebAppRepositoryCode();
+
+	return BString();
 }

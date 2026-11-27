@@ -33,15 +33,13 @@ using BKernel::Thread;
 extern "C" {
 #endif
 
-#define arch_debug_get_caller() __builtin_return_address(0)
-
 status_t arch_debug_init(kernel_args *args);
-void arch_debug_stack_trace(void);
-int32 arch_debug_get_stack_trace(addr_t* returnAddresses, int32 maxCount,
+void arch_debug_stack_trace();
+int32 arch_get_stack_trace(addr_t* returnAddresses, int32 maxCount,
 		int32 skipIframes, int32 skipFrames, uint32 flags);
 void* arch_debug_get_interrupt_pc(bool* _isSyscall);
-bool arch_debug_contains_call(Thread *thread, const char *symbol,
-		addr_t start, addr_t end);
+bool arch_debug_walk_stack(Thread* thread,
+		bool (*callback)(void*, addr_t), void* context);
 void arch_debug_save_registers(struct arch_debug_registers* registers);
 void arch_debug_unset_current_thread(void);
 void arch_debug_call_with_fault_handler(cpu_ent* cpu, jmp_buf jumpBuffer,
@@ -52,6 +50,8 @@ status_t arch_set_debug_variable(const char* variableName, uint64 value);
 status_t arch_get_debug_variable(const char* variableName, uint64* value);
 
 ssize_t arch_debug_gdb_get_registers(char* buffer, size_t bufferSize);
+
+void arch_debug_snooze(bigtime_t duration);
 
 #ifdef __cplusplus
 }

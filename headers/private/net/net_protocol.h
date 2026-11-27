@@ -31,10 +31,22 @@ enum net_error {
 	B_NET_ERROR_UNREACH_PROTOCOL,
 	B_NET_ERROR_UNREACH_PORT,
 	B_NET_ERROR_MESSAGE_SIZE,
+	B_NET_ERROR_UNREACH_SOURCE_FAIL,
+	B_NET_ERROR_UNREACH_NET_UNKNOWN,
+	B_NET_ERROR_UNREACH_HOST_UNKNOWN,
+	B_NET_ERROR_UNREACH_ISOLATED,
+	B_NET_ERROR_UNREACH_NET_PROHIBITED,
+	B_NET_ERROR_UNREACH_HOST_PROHIBITED,
+	B_NET_ERROR_UNREACH_NET_TOS,
+	B_NET_ERROR_UNREACH_HOST_TOS,
+	B_NET_ERROR_UNREACH_FILTER_PROHIBITED,
+	B_NET_ERROR_UNREACH_HOST_PRECEDENCE,
+	B_NET_ERROR_UNREACH_PRECEDENCE_CUTOFF,
 	B_NET_ERROR_TRANSIT_TIME_EXCEEDED,
 	B_NET_ERROR_REASSEMBLY_TIME_EXCEEDED,
 	B_NET_ERROR_PARAMETER_PROBLEM,
 	B_NET_ERROR_QUENCH,
+	B_NET_ERROR_UNREACH_BEYONDSCOPE,
 };
 
 typedef union net_error_data {
@@ -94,7 +106,7 @@ struct net_protocol_module_info {
 	status_t	(*receive_data)(net_buffer* data);
 	status_t	(*deliver_data)(net_protocol* self, net_buffer* data);
 
-	status_t	(*error_received)(net_error error, net_buffer* data);
+	status_t	(*error_received)(net_error error, net_error_data* errorData, net_buffer* data);
 	status_t	(*error_reply)(net_protocol* self, net_buffer* cause,
 					net_error error, net_error_data* errorData);
 
@@ -102,7 +114,7 @@ struct net_protocol_module_info {
 					ancillary_data_container* container, const cmsghdr* header);
 	ssize_t		(*process_ancillary_data)(net_protocol* self,
 					const ancillary_data_container* container,
-					void* buffer, size_t bufferSize);
+					void* buffer, size_t bufferSize, int flags, int* msgFlags);
 	ssize_t		(*process_ancillary_data_no_container)(net_protocol* self,
 					net_buffer* buffer, void* data, size_t bufferSize);
 

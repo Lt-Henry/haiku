@@ -880,6 +880,25 @@ public:
 		return true;
 	}
 
+	bool AppendQuoted(const char* toAppend)
+	{
+		if (!Append("\"", 1))
+			return false;
+
+		while (*toAppend) {
+			if ((*toAppend == '\\' || *toAppend == '"') && !Append("\\", 1))
+				return false;
+			if (!Append(toAppend, 1))
+				return false;
+			toAppend++;
+		}
+
+		if (!Append("\"", 1))
+			return false;
+
+		return true;
+	}
+
 private:
 	bool _Resize(size_t newLength)
 	{
@@ -958,7 +977,7 @@ user_menu_boot_volume(Menu* menu, MenuItem* item)
 	status_t status = sBootVolume->SetTo((Directory*)item->Data());
 	update_continue_booting_menu_item(status);
 
-	gBootVolume.SetBool(BOOT_VOLUME_USER_SELECTED, true);
+	gBootParams.SetBool(BOOT_VOLUME_USER_SELECTED, true);
 	return true;
 }
 
@@ -985,7 +1004,7 @@ user_menu_boot_volume_state(Menu* menu, MenuItem* _item)
 		item->VolumeInfo(), item->VolumeState());
 	update_continue_booting_menu_item(status);
 
-	gBootVolume.SetBool(BOOT_VOLUME_USER_SELECTED, true);
+	gBootParams.SetBool(BOOT_VOLUME_USER_SELECTED, true);
 	return true;
 }
 
@@ -1294,9 +1313,20 @@ add_boot_volume_menu()
 	menu->AddItem(item = new(nothrow) MenuItem("Return to main menu"));
 	item->SetType(MENU_ITEM_NO_CHOICE);
 
-	if (gBootVolume.GetBool(BOOT_VOLUME_BOOTED_FROM_IMAGE, false))
-		menu->SetChoiceText("CD-ROM or hard drive");
-
+	if (gBootParams.GetBool(BOOT_VOLUME_BOOTED_FROM_IMAGE, false)) {
+		int32 bootMethod = gBootParams.GetInt32(BOOT_METHOD, BOOT_METHOD_DEFAULT);
+		switch (bootMethod) {
+			case BOOT_METHOD_CD:
+				menu->SetChoiceText("CD-ROM");
+				break;
+			case BOOT_METHOD_HARD_DISK:
+				menu->SetChoiceText("Hard drive");
+				break;
+			case BOOT_METHOD_NET:
+				menu->SetChoiceText("Network");
+				break;
+		}
+	}
 	return menu;
 }
 
@@ -1559,7 +1589,7 @@ apply_safe_mode_path_blocklist()
 
 	for (PathBlocklist::Iterator it = sPathBlocklist->GetIterator();
 		BlockedPath* path = it.Next();) {
-		success &= sSafeModeOptionsBuffer.Append(path->Path());
+		success &= sSafeModeOptionsBuffer.AppendQuoted(path->Path());
 		success &= sSafeModeOptionsBuffer.Append("\n", 1);
 	}
 

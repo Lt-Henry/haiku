@@ -32,13 +32,15 @@ const phys_size_t kMaxBounceBufferSize = 4 * B_PAGE_SIZE;
 DMABuffer*
 DMABuffer::Create(size_t count)
 {
+	ASSERT(count < (UINT32_MAX / sizeof(generic_io_vec)));
+
 	DMABuffer* buffer = (DMABuffer*)malloc(
 		sizeof(DMABuffer) + sizeof(generic_io_vec) * (count - 1));
 	if (buffer == NULL)
 		return NULL;
 
+	buffer->fCapacity = count;
 	buffer->fVecCount = count;
-
 	return buffer;
 }
 
@@ -46,6 +48,7 @@ DMABuffer::Create(size_t count)
 void
 DMABuffer::SetVecCount(uint32 count)
 {
+	ASSERT(count <= fCapacity);
 	fVecCount = count;
 }
 
@@ -53,6 +56,8 @@ DMABuffer::SetVecCount(uint32 count)
 void
 DMABuffer::AddVec(generic_addr_t base, generic_size_t size)
 {
+	ASSERT(fVecCount < fCapacity);
+
 	generic_io_vec& vec = fVecs[fVecCount++];
 	vec.base = base;
 	vec.length = size;
@@ -437,6 +442,8 @@ DMAResource::TranslateNext(IORequest* request, IOOperation* operation,
 		offset, request->RemainingBytes(), fBlockSize, partialBegin);
 
 	if (buffer->IsVirtual()) {
+		ASSERT(buffer->IsMemoryLocked());
+
 		// Unless we need the bounce buffer anyway, we have to translate the
 		// virtual addresses to physical addresses, so we can check the DMA
 		// restrictions.
@@ -460,8 +467,10 @@ DMAResource::TranslateNext(IORequest* request, IOOperation* operation,
 						< fRestrictions.max_segment_count) {
 					physical_entry entry;
 					uint32 count = 1;
-					get_memory_map_etc(request->TeamID(), (void*)base, size,
-						&entry, &count);
+					get_memory_map_etc(request->TeamID(),
+						(void*)base, size, &entry, &count);
+					if (count != 1)
+						return B_ERROR;
 
 					vecs[segmentCount].base = entry.address;
 					vecs[segmentCount].length = entry.size;

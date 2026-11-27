@@ -58,25 +58,30 @@ static void *
 allocate_trampoline_page(void)
 {
 	void *trampolinePage = NULL;
-	if (platform_allocate_lomem(&trampolinePage, B_PAGE_SIZE) == B_OK)
-		return trampolinePage;
+	if (platform_allocate_region_below(&trampolinePage, B_PAGE_SIZE,
+			KERNEL_LOAD_BASE - B_PAGE_SIZE) == B_OK) {
+		if (platform_assign_kernel_address_for_region(trampolinePage,
+				(addr_t)trampolinePage) == B_OK) {
+			return trampolinePage;
+		}
 
-	trampolinePage = (void *)get_next_virtual_address(B_PAGE_SIZE);
-	if (platform_allocate_region(&trampolinePage, B_PAGE_SIZE, 0, true) == B_OK)
-		return trampolinePage;
+		if (platform_free_region(trampolinePage, B_PAGE_SIZE) != B_OK)
+			return NULL;
+	}
 
 	trampolinePage = NULL;
-	if (platform_allocate_region(&trampolinePage, B_PAGE_SIZE, 0, false) != B_OK)
-		return NULL;
+	if (platform_allocate_region(&trampolinePage, B_PAGE_SIZE, 0) == B_OK) {
+		if (platform_assign_kernel_address_for_region(trampolinePage,
+				(addr_t)trampolinePage) == B_OK) {
+			ASSERT_ALWAYS((uint32)trampolinePage >= 0x88000000);
+			return trampolinePage;
+		}
 
-	if (platform_free_region(trampolinePage, B_PAGE_SIZE) != B_OK)
-		return NULL;
+		if (platform_free_region(trampolinePage, B_PAGE_SIZE) != B_OK)
+			return NULL;
+	}
 
-	if (platform_allocate_region(&trampolinePage, B_PAGE_SIZE, 0, true) != B_OK)
-		return NULL;
-
-	ASSERT_ALWAYS((uint32_t)trampolinePage >= 0x88000000);
-	return trampolinePage;
+	return NULL;
 }
 
 
@@ -86,7 +91,7 @@ arch_start_kernel(addr_t kernelEntry)
 	// Allocate virtual memory for kernel args
 	struct kernel_args *kernelArgs = NULL;
 	if (platform_allocate_region((void **)&kernelArgs,
-			sizeof(struct kernel_args), 0, false) != B_OK)
+			sizeof(struct kernel_args), 0) != B_OK)
 		panic("Failed to allocate kernel args.");
 
 	addr_t virtKernelArgs;
@@ -117,13 +122,11 @@ arch_start_kernel(addr_t kernelEntry)
 	// Allocate a buffer twice as large as needed just in case it gets bigger
 	// between calls to ExitBootServices.
 	size_t actualMemoryMapSize = memoryMapSize * 2;
-	efi_memory_descriptor *memoryMap
-		= (efi_memory_descriptor *)kernel_args_malloc(actualMemoryMapSize +
-			ALIGN_MEMORY_MAP);
-
 	// align memory_map to 4-byte boundary
 	// otherwise we get alignment exception when calling GetMemoryMap below
-	memoryMap = (efi_memory_descriptor *)ROUNDUP((uint32_t)memoryMap, ALIGN_MEMORY_MAP);
+	efi_memory_descriptor *memoryMap
+		= (efi_memory_descriptor *)kernel_args_malloc(actualMemoryMapSize,
+			ALIGN_MEMORY_MAP);
 
 	if (memoryMap == NULL)
 		panic("Unable to allocate memory map.");
@@ -136,20 +139,27 @@ arch_start_kernel(addr_t kernelEntry)
 	}
 
 	addr_t addr = (addr_t)memoryMap;
+	efi_physical_addr loaderCode = 0LL;
 	dprintf("System provided memory map:\n");
-	for (size_t i = 0; i < memoryMapSize / descriptorSize; ++i) {
+	for (size_t i = 0; i < memoryMapSize / descriptorSize; i++) {
 		efi_memory_descriptor *entry
 			= (efi_memory_descriptor *)(addr + i * descriptorSize);
 		dprintf("  phys: 0x%08" PRIx64 "-0x%08" PRIx64
 			", virt: 0x%08" PRIx64 "-0x%08" PRIx64
-			", type: %s (%#x), attr: %#" PRIx64 "\n",
+			", size = 0x%08" PRIx64 ", type: %s (%#x), attr: %#" PRIx64 "\n",
 			entry->PhysicalStart,
 			entry->PhysicalStart + entry->NumberOfPages * B_PAGE_SIZE,
 			entry->VirtualStart,
 			entry->VirtualStart + entry->NumberOfPages * B_PAGE_SIZE,
+			entry->NumberOfPages * B_PAGE_SIZE,
 			memory_region_type_str(entry->Type), entry->Type,
 			entry->Attribute);
+		if (entry->Type == EfiLoaderCode)
+			loaderCode = entry->PhysicalStart;
 	}
+	// This is where our efi loader got relocated, therefore we need to use this
+	// offset for properly align symbols
+	dprintf("Efi loader symbols offset: 0x%0lx:\n", loaderCode);
 
 	// Generate page tables for use after ExitBootServices.
 	uint32_t final_ttbr0 = arch_mmu_generate_post_efi_page_tables(
@@ -168,6 +178,7 @@ arch_start_kernel(addr_t kernelEntry)
 
 	dprintf("Calling ExitBootServices. So long, EFI!\n");
 	serial_disable();
+
 	while (true) {
 		if (kBootServices->ExitBootServices(kImage, mapKey) == EFI_SUCCESS) {
 			// Disconnect from EFI serial_io / stdio services
@@ -194,7 +205,7 @@ arch_start_kernel(addr_t kernelEntry)
 	// Copy final kernel args
 	// This should be the last step before jumping to the kernel
 	// as there are some fixups happening to kernel_args even in the last minute
-	memcpy(kernelArgs, &gKernelArgs, sizeof(struct kernel_args));
+	memcpy((void *)kernelArgs, &gKernelArgs, sizeof(struct kernel_args));
 
 	//smp_boot_other_cpus(final_ttbr0, kernelEntry, (addr_t)&gKernelArgs);
 

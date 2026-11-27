@@ -12,7 +12,7 @@
 
 
 void
-Inode::SwapEndian()
+Inode::_SwapEndian()
 {
 	fNode->di_magic = B_BENDIAN_TO_HOST_INT16(fNode->di_magic);
 	fNode->di_mode = B_BENDIAN_TO_HOST_INT16(fNode->di_mode);
@@ -20,19 +20,11 @@ Inode::SwapEndian()
 	fNode->di_uid = B_BENDIAN_TO_HOST_INT32(fNode->di_uid);
 	fNode->di_gid = B_BENDIAN_TO_HOST_INT32(fNode->di_gid);
 	fNode->di_nlink = B_BENDIAN_TO_HOST_INT32(fNode->di_nlink);
-	fNode->di_projid = B_BENDIAN_TO_HOST_INT16(fNode->di_projid);
-	fNode->di_flushiter = B_BENDIAN_TO_HOST_INT16(fNode->di_flushiter);
-	fNode->di_atime.t_sec = B_BENDIAN_TO_HOST_INT32(fNode->di_atime.t_sec);
-	fNode->di_atime.t_nsec = B_BENDIAN_TO_HOST_INT32(fNode->di_atime.t_nsec);
-	fNode->di_mtime.t_sec = B_BENDIAN_TO_HOST_INT32(fNode->di_mtime.t_sec);
-	fNode->di_mtime.t_nsec = B_BENDIAN_TO_HOST_INT32(fNode->di_mtime.t_nsec);
-	fNode->di_ctime.t_sec = B_BENDIAN_TO_HOST_INT32(fNode->di_ctime.t_sec);
-	fNode->di_ctime.t_nsec = B_BENDIAN_TO_HOST_INT32(fNode->di_ctime.t_nsec);
+	fNode->di_projid_lo = B_BENDIAN_TO_HOST_INT16(fNode->di_projid_lo);
+	fNode->di_projid_hi = B_BENDIAN_TO_HOST_INT16(fNode->di_projid_hi);
 	fNode->di_size = B_BENDIAN_TO_HOST_INT64(fNode->di_size);
 	fNode->di_nblocks = B_BENDIAN_TO_HOST_INT64(fNode->di_nblocks);
 	fNode->di_extsize = B_BENDIAN_TO_HOST_INT32(fNode->di_extsize);
-	fNode->di_nextents = B_BENDIAN_TO_HOST_INT32(fNode->di_nextents);
-	fNode->di_naextents = B_BENDIAN_TO_HOST_INT16(fNode->di_naextents);
 	fNode->di_dmevmask = B_BENDIAN_TO_HOST_INT32(fNode->di_dmevmask);
 	fNode->di_dmstate = B_BENDIAN_TO_HOST_INT16(fNode->di_dmstate);
 	fNode->di_flags = B_BENDIAN_TO_HOST_INT16(fNode->di_flags);
@@ -42,41 +34,91 @@ Inode::SwapEndian()
 	fNode->di_lsn = B_BENDIAN_TO_HOST_INT64(fNode->di_lsn);
 	fNode->di_flags2 = B_BENDIAN_TO_HOST_INT64(fNode->di_flags2);
 	fNode->di_cowextsize = B_BENDIAN_TO_HOST_INT64(fNode->di_cowextsize);
-	fNode->di_crtime.t_sec = B_BENDIAN_TO_HOST_INT32(fNode->di_crtime.t_sec);
-	fNode->di_crtime.t_nsec = B_BENDIAN_TO_HOST_INT32(fNode->di_crtime.t_nsec);
 	fNode->di_ino = B_BENDIAN_TO_HOST_INT64(fNode->di_ino);
+	if (_IsBigtimeEnabled()) {
+		fNode->di_mtime = B_BENDIAN_TO_HOST_INT64(fNode->di_mtime);
+		fNode->di_atime = B_BENDIAN_TO_HOST_INT64(fNode->di_atime);
+		fNode->di_ctime = B_BENDIAN_TO_HOST_INT64(fNode->di_ctime);
+		fNode->di_crtime = B_BENDIAN_TO_HOST_INT64(fNode->di_crtime);
+	} else {
+		/**
+		 * For all the legacy timestamps we convert it to Bigtime format
+		 * so that all Inode methods always deal with Bigtime format without
+		 * worrying about its actual on-disk structure.
+		 * Later when writing data to disk swapEndian method to disk format
+		 * will take care of its on-disk structure.
+		 */
+		xfs_legacy_timestamp* lts;
+
+		lts = (xfs_legacy_timestamp*)&fNode->di_mtime;
+		lts->t_sec = B_BENDIAN_TO_HOST_INT32(lts->t_sec);
+		lts->t_nsec = B_BENDIAN_TO_HOST_INT32(lts->t_nsec);
+		fNode->di_mtime = _ConvertLegacyToBigTimestamp(lts);
+
+		lts = (xfs_legacy_timestamp*)&fNode->di_atime;
+		lts->t_sec = B_BENDIAN_TO_HOST_INT32(lts->t_sec);
+		lts->t_nsec = B_BENDIAN_TO_HOST_INT32(lts->t_nsec);
+		fNode->di_atime = _ConvertLegacyToBigTimestamp(lts);
+
+		lts = (xfs_legacy_timestamp*)&fNode->di_ctime;
+		lts->t_sec = B_BENDIAN_TO_HOST_INT32(lts->t_sec);
+		lts->t_nsec = B_BENDIAN_TO_HOST_INT32(lts->t_nsec);
+		fNode->di_ctime = _ConvertLegacyToBigTimestamp(lts);
+
+		lts = (xfs_legacy_timestamp*)&fNode->di_crtime;
+		lts->t_sec = B_BENDIAN_TO_HOST_INT32(lts->t_sec);
+		lts->t_nsec = B_BENDIAN_TO_HOST_INT32(lts->t_nsec);
+		fNode->di_crtime = _ConvertLegacyToBigTimestamp(lts);
+	}
+
+	if (_IsLargeExtentsEnabled()) {
+		fNode->di_big_nextents = B_BENDIAN_TO_HOST_INT64(fNode->di_big_nextents);
+		fNode->di_big_anextents = B_BENDIAN_TO_HOST_INT32(fNode->di_big_anextents);
+	} else {
+		fNode->di_nextents = B_BENDIAN_TO_HOST_INT32(fNode->di_nextents);
+		fNode->di_naextents = B_BENDIAN_TO_HOST_INT16(fNode->di_naextents);
+		if (Version() == 2)
+			fNode->di_flushiter = B_BENDIAN_TO_HOST_INT16(fNode->di_flushiter);
+	}
+}
+
+
+xfs_timestamp_t
+Inode::_ConvertLegacyToBigTimestamp(xfs_legacy_timestamp* lts) const
+{
+	return xfs_unix_to_bigtime(lts->t_sec) * NSEC_PER_SEC + lts->t_nsec;
 }
 
 
 void
-Inode::GetModificationTime(struct timespec& stamp) const
+Inode::GetModificationTime(struct timespec& timestamp) const
 {
-	stamp.tv_sec = fNode->di_mtime.t_sec;
-	stamp.tv_nsec = fNode->di_mtime.t_nsec;
+	timestamp.tv_sec = xfs_bigtime_to_unix(fNode->di_mtime / NSEC_PER_SEC);
+	timestamp.tv_nsec = fNode->di_mtime % NSEC_PER_SEC;
 }
 
 
 void
-Inode::GetAccessTime(struct timespec& stamp) const
+Inode::GetAccessTime(struct timespec& timestamp) const
 {
-	stamp.tv_sec = fNode->di_atime.t_sec;
-	stamp.tv_nsec = fNode->di_atime.t_nsec;
+	timestamp.tv_sec = xfs_bigtime_to_unix(fNode->di_atime / NSEC_PER_SEC);
+	timestamp.tv_nsec = fNode->di_atime % NSEC_PER_SEC;
 }
 
 
 void
-Inode::GetChangeTime(struct timespec& stamp) const
+Inode::GetChangeTime(struct timespec& timestamp) const
 {
-	stamp.tv_sec = fNode->di_ctime.t_sec;
-	stamp.tv_nsec = fNode->di_ctime.t_nsec;
+	timestamp.tv_sec = xfs_bigtime_to_unix(fNode->di_ctime / NSEC_PER_SEC);
+	timestamp.tv_nsec = fNode->di_ctime % NSEC_PER_SEC;
 }
 
 
 void
-Inode::GetCreationTime(struct timespec& stamp) const
+Inode::GetCreationTime(struct timespec& timestamp) const
 {
-	stamp.tv_sec = fNode->di_crtime.t_sec;
-	stamp.tv_nsec = fNode->di_crtime.t_nsec;
+	timestamp.tv_sec = xfs_bigtime_to_unix(fNode->di_crtime / NSEC_PER_SEC);
+	timestamp.tv_nsec = fNode->di_crtime % NSEC_PER_SEC;
 }
 
 
@@ -154,17 +196,21 @@ Inode::VerifyFork(int whichFork) const
 bool
 Inode::VerifyForkoff() const
 {
-	switch(Format()) {
+	// Valid case when there is no attribute fork present
+	if (!fNode->di_forkoff)
+		return true;
+
+	switch (Format()) {
 		case XFS_DINODE_FMT_DEV:
 			if (fNode->di_forkoff != (ROUNDUP(sizeof(uint32), 8) >> 3))
-			return false;
+				return false;
 		break;
 		case XFS_DINODE_FMT_LOCAL:
 		case XFS_DINODE_FMT_EXTENTS:
 		case XFS_DINODE_FMT_BTREE:
 			if (fNode->di_forkoff >= (LITINO(fVolume) >> 3))
 				return false;
-		break;
+			break;
 	default:
 		return false;
 	}
@@ -176,7 +222,7 @@ Inode::VerifyForkoff() const
 bool
 Inode::VerifyInode() const
 {
-	if(fNode->di_magic != INODE_MAGIC) {
+	if (fNode->di_magic != INODE_MAGIC) {
 		ERROR("Bad inode magic number");
 		return false;
 	}
@@ -190,28 +236,28 @@ Inode::VerifyInode() const
 	// verify version 3 inodes first
 	if (Version() == 3) {
 
-		if(!HAS_V3INODES(fVolume)) {
+		if (!HAS_V3INODES(fVolume)) {
 			ERROR("xfs v4 doesn't have v3 inodes");
 			return false;
 		}
 
-		if(!xfs_verify_cksum(fBuffer, fVolume->InodeSize(), INODE_CRC_OFF)) {
+		if (!xfs_verify_cksum(fBuffer, fVolume->InodeSize(), INODE_CRC_OFF)) {
 			ERROR("Inode is corrupted");
 			return false;
 		}
 
-		if(fNode->di_ino != fId) {
+		if (fNode->di_ino != fId) {
 			ERROR("Incorrect inode number");
 			return false;
 		}
 
-		if(!fVolume->UuidEquals(fNode->di_uuid)) {
+		if (!fVolume->UuidEquals(fNode->di_uuid)) {
 			ERROR("UUID is incorrect");
 			return false;
 		}
 	}
 
-	if(fNode->di_size & (1ULL << 63)) {
+	if ((fNode->di_size & (1ULL << 63)) != 0) {
 		ERROR("Invalid EOF of inode");
 		return false;
 	}
@@ -221,7 +267,7 @@ Inode::VerifyInode() const
 		 return false;
 	}
 
-	if(!VerifyForkoff()) {
+	if (!VerifyForkoff()) {
 		ERROR("Invalid inode fork offset");
 		return false;
 	}
@@ -274,7 +320,17 @@ Inode::VerifyInode() const
 			return false;
 	}
 
-	// TODO : Add reflink and big-timestamps check using di_flags2
+	// Bigtime can only happen on bigtime filesystems
+	if (_IsBigtimeEnabled() && !fVolume->IsBigtimeEnabled()) {
+		ERROR("Bigtime inodes can only be supported on bigtime enabled filesystem");
+		return false;
+	}
+
+	// Large extents can only happen on large extents enabled filesystems
+	if (_IsLargeExtentsEnabled() && !fVolume->IsLargeExtentsEnabled()) {
+		ERROR("Large extents inodes can only be supported on large extents enabled filesystem");
+		return false;
+	}
 
 	return true;
 }
@@ -290,6 +346,24 @@ Inode::CoreInodeSize() const
 }
 
 
+xfs_extnum_t
+Inode::DataExtentsCount() const
+{
+	if (_IsLargeExtentsEnabled())
+		return fNode->di_big_nextents;
+	return fNode->di_nextents;
+}
+
+
+xfs_aextnum_t
+Inode::AttrExtentsCount() const
+{
+	if (_IsLargeExtentsEnabled())
+		return fNode->di_big_anextents;
+	return fNode->di_naextents;
+}
+
+
 status_t
 Inode::Init()
 {
@@ -302,7 +376,7 @@ Inode::Init()
 	if (fBuffer == NULL)
 		return B_NO_MEMORY;
 
-	status_t status = GetFromDisk();
+	status_t status = _GetFromDisk();
 	if (status == B_OK) {
 		if (VerifyInode()) {
 			TRACE("Init(): Inode successfully read.\n");
@@ -376,7 +450,7 @@ Inode::ReadExtentsFromExtentBasedInode()
 	fExtents = new(std::nothrow) ExtentMapEntry[DataExtentsCount()];
 	char* dataStart = (char*) DIR_DFORK_PTR(Buffer(), CoreInodeSize());
 	uint64 wrappedExtent[2];
-	for (int i = 0; i < DataExtentsCount(); i++) {
+	for (xfs_extnum_t i = 0; i < DataExtentsCount(); i++) {
 		wrappedExtent[0] = *(uint64*)(dataStart);
 		wrappedExtent[1] = *(uint64*)(dataStart + sizeof(uint64));
 		dataStart += 2 * sizeof(uint64);
@@ -392,10 +466,8 @@ Inode::MaxRecordsPossibleInTreeRoot()
 	size_t lengthOfDataFork;
 	if (ForkOffset() != 0)
 		lengthOfDataFork = ForkOffset() << 3;
-	else if(ForkOffset() == 0) {
-		lengthOfDataFork = GetVolume()->InodeSize()
-			- CoreInodeSize();
-	}
+	else if (ForkOffset() == 0)
+		lengthOfDataFork = GetVolume()->InodeSize() - CoreInodeSize();
 
 	lengthOfDataFork -= sizeof(BlockInDataFork);
 	return lengthOfDataFork / (XFS_KEY_SIZE + XFS_PTR_SIZE);
@@ -578,7 +650,7 @@ Inode::ReadExtents()
 int
 Inode::SearchMapInAllExtent(uint64 blockNo)
 {
-	for (int i = 0; i < DataExtentsCount(); i++) {
+	for (xfs_extnum_t i = 0; i < DataExtentsCount(); i++) {
 		if (fExtents[i].br_startoff <= blockNo
 			&& (blockNo <= fExtents[i].br_startoff
 				+ fExtents[i].br_blockcount - 1)) {
@@ -608,7 +680,7 @@ Inode::ReadAt(off_t pos, uint8* buffer, size_t* length)
 		return B_BAD_VALUE;
 	}
 
-	if (pos >= Size() || length == 0) {
+	if (pos >= Size() || *length == 0) {
 		TRACE("inode %" B_PRIdINO ": ReadAt 0 (pos %" B_PRIdOFF
 			", length %" B_PRIuSIZE ")\n", ID(), pos, *length);
 		*length = 0;
@@ -641,11 +713,10 @@ Inode::ReadAt(off_t pos, uint8* buffer, size_t* length)
 			is not possible we will read file of remaining bytes.
 			This meathod will change when we will add file cache for xfs.
 		*/
-		if(lengthLeftInFile >= 4096) {
+		if (lengthLeftInFile >= 4096)
 			*length = 4096;
-		} else {
+		else
 			*length = lengthLeftInFile;
-		}
 
 		// We could be almost at the end of the file
 		if (lengthLeftInFile <= lengthLeftInBlock)
@@ -671,9 +742,9 @@ Inode::ReadAt(off_t pos, uint8* buffer, size_t* length)
 			return B_IO_ERROR;
 		}
 
-
-		memcpy((void*) (buffer + lengthRead),
-			(void*)(block + offsetIntoBlock), lengthToRead);
+		if (user_memcpy((void*)(buffer + lengthRead),
+				(void*)(block + offsetIntoBlock), lengthToRead) < B_OK)
+			return B_BAD_ADDRESS;
 
 		pos += lengthToRead;
 		*length -= lengthToRead;
@@ -689,7 +760,7 @@ Inode::ReadAt(off_t pos, uint8* buffer, size_t* length)
 
 
 status_t
-Inode::GetFromDisk()
+Inode::_GetFromDisk()
 {
 	xfs_agnumber_t agNo = INO_TO_AGNO(fId, fVolume);
 		// Get the AG number from the inode
@@ -704,7 +775,7 @@ Inode::GetFromDisk()
 
 	TRACE("AgNumber: (%" B_PRIu32 "), AgRelativeIno: (%" B_PRIu32 "),"
 		"AgRelativeBlockNum: (%" B_PRIu32 "),Offset: (%" B_PRId64 "),"
-		"len: (%" B_PRIu32 ")\n", agNo,agRelativeInodeNo, agBlock, offset, len);
+		"len: (%" B_PRIu32 ")\n", agNo, agRelativeInodeNo, agBlock, offset, len);
 
 	if (agNo > fVolume->AgCount()) {
 		ERROR("Inode::GetFromDisk : AG Number more than number of AGs");
@@ -723,12 +794,12 @@ Inode::GetFromDisk()
 		return B_IO_ERROR;
 	}
 
-	if(fVolume->IsVersion5())
+	if (fVolume->IsVersion5())
 		memcpy(fNode, fBuffer, sizeof(Inode::Dinode));
 	else
 		memcpy(fNode, fBuffer, INODE_CRC_OFF);
 
-	SwapEndian();
+	_SwapEndian();
 
 	return B_OK;
 }
@@ -749,43 +820,4 @@ Inode::FileSystemBlockToAddr(uint64 block)
 
 	uint64 readPos = actualBlockToRead * (XFS_MIN_BLOCKSIZE);
 	return readPos;
-}
-
-
-/*
- * Basically take 4 characters at a time as long as you can, and xor with
- * previous hashVal after rotating 4 bits of hashVal. Likewise, continue
- * xor and rotating. This is quite a generic hash function.
-*/
-uint32
-hashfunction(const char* name, int length)
-{
-	uint32 hashVal = 0;
-	int lengthCovered = 0;
-	int index = 0;
-	if (length >= 4) {
-		for (; index < length && (length - index) >= 4; index += 4)
-		{
-			lengthCovered += 4;
-			hashVal = (name[index] << 21) ^ (name[index + 1] << 14)
-				^ (name[index + 2] << 7) ^ (name[index + 3] << 0)
-				^ ((hashVal << 28) | (hashVal >> 4));
-		}
-	}
-
-	int leftToCover = length - lengthCovered;
-	if (leftToCover == 3) {
-		hashVal = (name[index] << 14) ^ (name[index + 1] << 7)
-			^ (name[index + 2] << 0) ^ ((hashVal << 21) | (hashVal >> 11));
-	}
-	if (leftToCover == 2) {
-		hashVal = (name[index] << 7) ^ (name[index + 1] << 0)
-			^ ((hashVal << 14) | (hashVal >> (32 - 14)));
-	}
-	if (leftToCover == 1) {
-		hashVal = (name[index] << 0)
-			^ ((hashVal << 7) | (hashVal >> (32 - 7)));
-	}
-
-	return hashVal;
 }

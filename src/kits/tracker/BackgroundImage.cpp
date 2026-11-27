@@ -38,6 +38,7 @@ All rights reserved.
 #include <Bitmap.h>
 #include <ControlLook.h>
 #include <Node.h>
+#include <StackOrHeapArray.h>
 #include <TranslationKit.h>
 #include <View.h>
 #include <Window.h>
@@ -74,14 +75,14 @@ BackgroundImage::GetBackgroundImage(const BNode* node, bool isDesktop)
 		return NULL;
 
 	BMessage container;
-	char* buffer = new char[info.size];
+	BStackOrHeapArray<char, 512> buffer(info.size);
+	if (!buffer.IsValid())
+		return NULL;
 
 	status_t error = node->ReadAttr(kBackgroundImageInfo, info.type, 0,
 		buffer, (size_t)info.size);
 	if (error == info.size)
-		error = container.Unflatten(buffer);
-
-	delete[] buffer;
+		error = container.Unflatten(buffer, info.size);
 
 	if (error != B_OK)
 		return NULL;
@@ -234,7 +235,10 @@ BackgroundImage::Show(BackgroundImageInfo* info, BView* view)
 			}
 			// else fall thru
 		case kAtOffset:
-			destinationBitmapBounds.OffsetTo(info->fOffset);
+			if (!fIsDesktop && poseView != NULL)
+				destinationBitmapBounds.OffsetTo(poseView->Extent().LeftTop() + info->fOffset);
+			else
+				destinationBitmapBounds.OffsetTo(info->fOffset);
 			break;
 
 		case kTiled:
@@ -242,6 +246,9 @@ BackgroundImage::Show(BackgroundImageInfo* info, BView* view)
 				destinationBitmapBounds.OffsetBy(
 					(viewBounds.Width() - bitmapBounds.Width()) / 2,
 					(viewBounds.Height() - bitmapBounds.Height()) / 2);
+			} else if (poseView != NULL) {
+				// tile from top left of window even if scrolled over
+				destinationBitmapBounds.OffsetTo(poseView->Extent().LeftTop());
 			}
 			options |= B_TILE_BITMAP;
 			break;
@@ -384,7 +391,7 @@ BackgroundImage::Refresh(BackgroundImage* oldBackgroundImage,
 	}
 
 	BackgroundImage* backgroundImage = GetBackgroundImage(fromNode, desktop);
-	if (backgroundImage != NULL && poseView->ViewMode() != kListMode)
+	if (backgroundImage != NULL && poseView != NULL && poseView->ViewMode() != kListMode)
 		backgroundImage->Show(poseView, current_workspace());
 
 	return backgroundImage;

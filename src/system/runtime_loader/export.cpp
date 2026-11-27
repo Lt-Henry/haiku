@@ -8,6 +8,7 @@
 
 
 #include "runtime_loader_private.h"
+#include "commpage.h"
 #include "elf_tls.h"
 
 
@@ -51,6 +52,8 @@ reinit_after_fork()
 	if (status_t status = elf_reinit_after_fork())
 		returnstatus = status;
 	if (status_t status = heap_reinit_after_fork())
+		returnstatus = status;
+	if (status_t status = commpage_reinit_after_fork())
 		returnstatus = status;
 	return returnstatus;
 }
@@ -98,7 +101,7 @@ rldexport_init(void)
 	gRuntimeLoader.api_version field.
 */
 void
-set_abi_api_version(int abi_version, int api_version)
+update_abi_api_version(int abi_version, int api_version)
 {
 	if (gRuntimeLoader.abi_version == 0
 		|| gRuntimeLoader.abi_version > abi_version) {

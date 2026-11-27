@@ -112,11 +112,13 @@ public:
 			void				MakeDebugSnapshots();
 			void				StartStopDebugCapture();
 
+			void				SwitchCursorBlinking();
 			void				SwitchCursorBlinking(bool blinkingOn);
 
 			// edit functions
 			void				Copy(BClipboard* clipboard);
 			void				Paste(BClipboard* clipboard);
+			void				SyncClipboard();
 			void				SelectAll();
 			void				Clear();
 
@@ -186,7 +188,7 @@ private:
 
 private:
 			// point and text offset conversion
-	inline	int32				_LineAt(float y) const;
+			int32				_LineAt(float y) const;
 	inline	float				_LineOffset(int32 index) const;
 			TermPos				_ConvertToTerminal(const BPoint& point) const;
 	inline	BPoint				_ConvertFromTerminal(const TermPos& pos) const;
@@ -197,7 +199,10 @@ private:
 			status_t			_InitObject(
 									const ShellParameters& shellParameters);
 
-			status_t			_AttachShell(Shell* shell);
+			void				_GetArgumentsFromMessage(const BMessage* message,
+									const char**& argv, int32& argc);
+
+			status_t			_AttachShell(Shell* shell, const ShellParameters& shellParameters);
 			Shell*				_DetachShell();
 
 			void				_Activate();
@@ -254,9 +259,9 @@ private:
 			void				_ScrollTo(float y, bool scrollGfx);
 			void				_ScrollToRange(TermPos start, TermPos end);
 
-			void				_SendMouseEvent(int32 button, int32 mode,
+			void				_SendMouseEvent(int32 button, int32 modifiers,
 									int32 x, int32 y, bool motion,
-									bool upEvent = false);
+									bool upEvent, int wheelButtons = 0);
 
 			void				_DrawInlineMethodString();
 			void				_HandleInputMethodChanged(BMessage* message);
@@ -285,8 +290,8 @@ private:
 			int					fFontHeight;
 			int					fFontAscent;
 			struct escapement_delta fEscapement;
-			bool				fEmulateBold;
-			bool				fAllowBold;
+			int					fBoldStyle;
+			bool				fBrightenAnsi;
 
 			// frame resized flag.
 			bool				fFrameResized;
@@ -295,9 +300,6 @@ private:
 			// Cursor Blinking, draw flag.
 			bigtime_t			fLastActivityTime;
 			int32				fCursorState;
-			int					fCursorStyle;
-			bool				fCursorBlinking;
-			bool				fCursorHidden;
 
 			// Cursor position.
 			TermPos				fCursor;
@@ -351,19 +353,11 @@ private:
 			HashMap<HashKey32<int32>, const int32(*)[128]>
 								fKeymapTableForModifiers;
 			bool				fUseOptionAsMetaKey;
-			bool				fInterpretMetaKey;
-			bool				fMetaKeySendsEscape;
-			bool				fUseBracketedPaste;
 
 			// mouse
 			int32				fMouseButtons;
 			int32				fModifiers;
 			TermPos				fPrevPos;
-			bool				fReportX10MouseEvent;
-			bool				fReportNormalMouseEvent;
-			bool				fReportButtonMouseEvent;
-			bool				fReportAnyMouseEvent;
-			bool				fEnableExtendedMouseCoordinates;
 			BClipboard*			fMouseClipboard;
 
 			// states

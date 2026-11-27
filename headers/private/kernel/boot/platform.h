@@ -8,6 +8,7 @@
 
 #include <SupportDefs.h>
 #include <boot/vfs.h>
+#include <boot/disk_identifier.h>
 
 
 struct stage2_args;
@@ -26,7 +27,7 @@ extern void platform_free_heap_region(void *_base, size_t size);
 
 /* MMU/memory functions */
 extern status_t platform_allocate_region(void **_virtualAddress, size_t size,
-	uint8 protection, bool exactAddress);
+	uint8 protection);
 extern status_t platform_free_region(void *address, size_t size);
 extern status_t platform_bootloader_address_to_kernel_address(void *address, addr_t *_result);
 extern status_t platform_kernel_address_to_bootloader_address(addr_t address, void **_result);
@@ -43,7 +44,6 @@ extern void platform_switch_to_logo(void);
 extern void platform_switch_to_text_mode(void);
 extern void platform_start_kernel(void);
 extern void platform_exit(void);
-extern void platform_load_ucode(BootVolume& volume);
 
 #ifdef __cplusplus
 }
@@ -61,8 +61,9 @@ extern status_t platform_add_boot_device(struct stage2_args *args, NodeList *dev
 extern status_t platform_add_block_devices(struct stage2_args *args, NodeList *devicesList);
 extern status_t platform_get_boot_partitions(struct stage2_args *args, Node *bootDevice,
 					NodeList *partitions, NodeList *bootPartitions);
-extern status_t platform_register_boot_device(Node *device);
+extern status_t platform_register_boot_device(Node *device, disk_identifier *defaultDiskID);
 extern void platform_cleanup_devices();
+extern void platform_load_ucode(BootVolume& volume);
 
 /* menu functions */
 

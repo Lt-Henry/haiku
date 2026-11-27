@@ -19,9 +19,14 @@ AddFilesToPackage add-ons kernel busses ata :
 	highpoint_ide_pci
 	ide_isa@x86
 	;
-
+AddFilesToPackage add-ons kernel busses pci :
+	<pci>designware@riscv64
+	<pci>ecam@riscv64,arm,arm64
+	<pci>x86@x86,x86_64
+	;
 AddFilesToPackage add-ons kernel busses scsi :
 	ahci
+	hyperv_scsi@x86,x86_64
 	virtio_scsi
 	;
 AddFilesToPackage add-ons kernel busses usb :
@@ -30,6 +35,7 @@ AddFilesToPackage add-ons kernel busses usb :
 	<usb>ehci
 	;
 AddFilesToPackage add-ons kernel busses virtio :
+	virtio_mmio@riscv64,arm,arm64
 	virtio_pci
 	;
 AddFilesToPackage add-ons kernel console :
@@ -83,7 +89,14 @@ AddNewDriversToPackage disk scsi :
 	;
 AddNewDriversToPackage disk virtual :
 	ram_disk
-	virtio_block
+	remote_disk
+	virtio_block@arm,arm64,riscv64
+	;
+AddNewDriversToPackage graphics :
+	virtio_gpu
+	;
+AddNewDriversToPackage input :
+	virtio_input
 	;
 AddNewDriversToPackage power :
 	acpi_battery@x86
@@ -94,15 +107,16 @@ AddNewDriversToPackage network :
 AddNewDriversToPackage display :
 #	display_adapter@x86
 	;
+AddNewDriversToPackage hyperv :
+	hyperv_ic@x86,x86_64
+	;
 
 # legacy drivers
 AddDriversToPackage :
 	console
 	dprintf
 	null
-	random
-	<driver>tty
-	zero
+	<driver>pty
 	;
 AddDriversToPackage audio hmulti
 	: $(SYSTEM_ADD_ONS_DRIVERS_AUDIO) ;
@@ -221,8 +235,8 @@ for keymapAlias in $(HAIKU_KEYMAP_ALIASES) {
 # keyboard layouts
 AddFilesToPackage data KeyboardLayouts
 	: $(HAIKU_KEYBOARD_LAYOUT_FILES) ;
-AddFilesToPackage data KeyboardLayouts Apple\ Aluminum
-	: $(HAIKU_APPLE_ALUMINUM_KEYBOARD_LAYOUT_FILES) ;
+AddFilesToPackage data KeyboardLayouts Apple\ Magic
+	: $(HAIKU_APPLE_MAGIC_KEYBOARD_LAYOUT_FILES) ;
 AddFilesToPackage data KeyboardLayouts ThinkPad
 	: $(HAIKU_THINKPAD_KEYBOARD_LAYOUT_FILES) ;
 
@@ -230,47 +244,17 @@ AddFilesToPackage data KeyboardLayouts ThinkPad
 local terminalThemes = [ Glob $(HAIKU_TOP)/data/system/data/terminal_themes : "[a-zA-Z0-9 ]*" ] ;
 AddFilesToPackage data Terminal Themes : $(terminalThemes) ;
 
-# boot module links
-AddBootModuleSymlinksToPackage
-	acpi@x86,x86_64
-	ata
-	pci
-	isa@x86,x86_64
-	dpc
-	scsi
-	usb
-	openpic@ppc
-	ata_adapter
-	scsi_periph
-	ahci
-	generic_ide_pci
-	it8211
-	legacy_sata
-	silicon_image_3112
-	highpoint_ide_pci
-	ide_isa@x86
-	<usb>uhci
-	<usb>ohci
-	<usb>ehci
-	scsi_cd
-	scsi_disk
-	virtio
-	virtio_pci
-	virtio_block
-	virtio_scsi
-	efi_gpt
-	intel
-	bfs
-	packagefs
-;
-
 # add-ons
-AddFilesToPackage add-ons accelerants	: $(SYSTEM_ADD_ONS_ACCELERANTS) ;
+AddFilesToPackage add-ons accelerants :
+	framebuffer.accelerant
+	virtio_gpu.accelerant
+	$(SYSTEM_ADD_ONS_ACCELERANTS) ;
 AddFilesToPackage add-ons Translators	: $(SYSTEM_ADD_ONS_TRANSLATORS) ;
 AddFilesToPackage add-ons locale catalogs : $(SYSTEM_ADD_ONS_LOCALE_CATALOGS) ;
 
 AddFilesToPackage add-ons Tracker :
 	FileType
+	Label\ as…
 	Mark\ as…
 	Mark\ as\ Read
 	Open\ Target\ Folder
@@ -288,6 +272,7 @@ AddFilesToPackage add-ons input_server devices :
 	<input>keyboard
 	<input>mouse
 	<input>tablet
+	<input>virtio
 	<input>wacom
 	;
 AddFilesToPackage add-ons input_server filters :
@@ -316,6 +301,54 @@ AddFilesToPackage add-ons disk_systems :
 	<disk_system>bfs
 	<disk_system>ntfs
 	;
+
+# boot module links
+AddBootModuleSymlinksToPackage
+	acpi@x86,x86_64,arm64
+	ahci
+	ata
+	ata_adapter
+	bfs
+	dpc
+	efi_gpt
+	generic_ide_pci
+	highpoint_ide_pci
+	hyperv@x86,x86_64
+	hyperv_scsi@x86,x86_64
+	isa@x86,x86_64
+	intel
+	it8211
+	legacy_sata
+	ide_isa@x86
+	openpic@ppc
+	packagefs
+	pci
+	<pci>designware@riscv64
+	<pci>ecam@riscv64,arm,arm64
+	<pci>x86@x86,x86_64
+	fdt@riscv64,arm,arm64
+	remote_disk
+	scsi
+	scsi_cd
+	scsi_disk
+	scsi_periph
+	silicon_image_3112
+	smbios@x86,x86_64
+	usb
+	<usb>uhci
+	<usb>ohci
+	<usb>ehci
+	virtio
+	virtio_pci
+	virtio_mmio@arm,arm64,riscv64
+	virtio_block@arm,arm64,riscv64
+	virtio_scsi
+	$(SYSTEM_ADD_ONS_DRIVERS_NET)
+	stack
+	$(SYSTEM_NETWORK_DEVICES)
+	$(SYSTEM_NETWORK_DATALINK_PROTOCOLS)
+	$(SYSTEM_NETWORK_PROTOCOLS)
+;
 
 
 # the MIME DB

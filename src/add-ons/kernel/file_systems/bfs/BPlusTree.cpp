@@ -25,8 +25,6 @@
 // BFS::Stream from the bootloader has the same API as Inode.
 #	define Inode BFS::Stream
 
-#	define strerror(x)		"error message unavailable"
-
 namespace BFS {
 #endif
 
@@ -256,6 +254,7 @@ CachedNode::UnsetUnchanged(Transaction& transaction)
 
 		block_cache_set_dirty(cache, fBlockNumber, false, transaction.ID());
 		block_cache_put(cache, fBlockNumber);
+		fBlock = NULL;
 		fNode = NULL;
 	}
 }
@@ -278,6 +277,7 @@ CachedNode::Unset()
 
 		block_cache_put(fTree->fStream->GetVolume()->BlockCache(),
 			fBlockNumber);
+		fBlock = NULL;
 #endif // !_BOOT_MODE
 
 		fNode = NULL;
@@ -302,23 +302,27 @@ CachedNode::SetTo(off_t offset, const bplustree_node** _node, bool check)
 	if (fTree == NULL || fTree->fStream == NULL)
 		RETURN_ERROR(B_BAD_VALUE);
 
-	Unset();
-
 	// You can only ask for nodes at valid positions - you can't
 	// even access the b+tree header with this method (use SetToHeader()
 	// instead)
 	if (offset > fTree->fHeader.MaximumSize() - fTree->fNodeSize
 		|| offset <= 0
 		|| (offset % fTree->fNodeSize) != 0) {
+		Unset();
 		RETURN_ERROR(B_BAD_VALUE);
 	}
 
-	if (InternalSetTo(NULL, offset) != NULL && check) {
+	status_t status = InternalSetTo(NULL, offset);
+	if (status != B_OK)
+		return status;
+
+	if (check) {
 		// sanity checks (links, all_key_count)
 		if (!fTree->fHeader.CheckNode(fNode)) {
 			FATAL(("invalid node [%p] read from offset %" B_PRIdOFF " (block %"
 				B_PRIdOFF "), inode at %" B_PRIdINO "\n", fNode, offset,
 				fBlockNumber, fTree->fStream->ID()));
+			Unset();
 			return B_BAD_DATA;
 		}
 	}
@@ -337,25 +341,30 @@ CachedNode::SetToWritable(Transaction& transaction, off_t offset, bool check)
 		return NULL;
 	}
 
-	Unset();
-
 	// You can only ask for nodes at valid positions - you can't
 	// even access the b+tree header with this method (use SetToHeader()
 	// instead)
 	if (offset > fTree->fHeader.MaximumSize() - fTree->fNodeSize
 		|| offset <= 0
-		|| (offset % fTree->fNodeSize) != 0)
+		|| (offset % fTree->fNodeSize) != 0) {
+		Unset();
+		return NULL;
+	}
+
+	if (InternalSetTo(&transaction, offset) != B_OK)
 		return NULL;
 
-	if (InternalSetTo(&transaction, offset) != NULL && check) {
+	if (check) {
 		// sanity checks (links, all_key_count)
 		if (!fTree->fHeader.CheckNode(fNode)) {
 			FATAL(("invalid node [%p] read from offset %" B_PRIdOFF " (block %"
 				B_PRIdOFF "), inode at %" B_PRIdINO "\n", fNode, offset,
 				fBlockNumber, fTree->fStream->ID()));
+			Unset();
 			return NULL;
 		}
 	}
+
 	return fNode;
 }
 
@@ -384,8 +393,6 @@ CachedNode::SetToHeader()
 		return NULL;
 	}
 
-	Unset();
-
 	InternalSetTo(NULL, 0LL);
 	return (bplustree_header*)fNode;
 }
@@ -400,15 +407,14 @@ CachedNode::SetToWritableHeader(Transaction& transaction)
 		return NULL;
 	}
 
-	Unset();
-
 	InternalSetTo(&transaction, 0LL);
 
 	if (fNode != NULL && !fTree->fInTransaction) {
 		transaction.AddListener(fTree);
 		fTree->fInTransaction = true;
 
-		if (!transaction.GetVolume()->IsInitializing()) {
+		if (!transaction.GetVolume()->IsInitializing()
+				&& fTree->fStream != transaction.GetVolume()->IndicesNode()) {
 			acquire_vnode(transaction.GetVolume()->FSVolume(),
 				fTree->fStream->ID());
 		}
@@ -419,60 +425,83 @@ CachedNode::SetToWritableHeader(Transaction& transaction)
 #endif // !_BOOT_MODE
 
 
-bplustree_node*
+status_t
 CachedNode::InternalSetTo(Transaction* transaction, off_t offset)
 {
-	fNode = NULL;
-	fOffset = offset;
+	if (offset >= fTree->fStream->Size()) {
+		Unset();
+		RETURN_ERROR(B_BAD_VALUE);
+	}
 
 	off_t fileOffset;
 	block_run run;
-	if (offset < fTree->fStream->Size()
-		&& fTree->fStream->FindBlockRun(offset, run, fileOffset) == B_OK) {
+	status_t status = fTree->fStream->FindBlockRun(offset, run, fileOffset);
+	if (status != B_OK) {
+		Unset();
+		return status;
+	}
 
 #if !_BOOT_MODE
-		Volume* volume = fTree->fStream->GetVolume();
+	Volume* volume = fTree->fStream->GetVolume();
 #else
-		Volume* volume = &fTree->fStream->GetVolume();
+	Volume* volume = &fTree->fStream->GetVolume();
 #endif
 
-		int32 blockOffset = (offset - fileOffset) / volume->BlockSize();
-		fBlockNumber = volume->ToBlock(run) + blockOffset;
-		uint8* block = NULL;
+	const int32 blockOffset = (offset - fileOffset) / volume->BlockSize();
+	const off_t newBlockNumber = volume->ToBlock(run) + blockOffset;
 
+	uint8* block = NULL;
+	if (transaction == NULL && fBlock != NULL && fBlockNumber == newBlockNumber) {
+		// Same block as before, no need to re-fetch.
+		block = fBlock;
+	} else {
 #if !_BOOT_MODE
+		if (fBlock != NULL)
+			Unset();
+
 		if (transaction != NULL) {
-			block = (uint8*)block_cache_get_writable(volume->BlockCache(),
-				fBlockNumber, transaction->ID());
+			block = fBlock = (uint8*)block_cache_get_writable(volume->BlockCache(),
+				newBlockNumber, transaction->ID());
 			fWritable = true;
 		} else {
-			block = (uint8*)block_cache_get(volume->BlockCache(), fBlockNumber);
+			block = fBlock = (uint8*)block_cache_get(volume->BlockCache(), newBlockNumber);
 			fWritable = false;
 		}
 #else // !_BOOT_MODE
 		if (fBlock == NULL) {
 			fBlock = (uint8*)malloc(volume->BlockSize());
 			if (fBlock == NULL)
-				return NULL;
+				RETURN_ERROR(B_NO_MEMORY);
 		}
+		fNode = NULL;
 
-		if (read_pos(volume->Device(), fBlockNumber << volume->BlockShift(),
-				fBlock, volume->BlockSize()) == (ssize_t)volume->BlockSize()) {
-			block = fBlock;
-		}
+		ssize_t result = read_pos(volume->Device(),
+			newBlockNumber << volume->BlockShift(),
+			fBlock, volume->BlockSize());
+		if (result < 0)
+			RETURN_ERROR(result);
+		if (result != (ssize_t)volume->BlockSize())
+			RETURN_ERROR(B_IO_ERROR);
 
+		block = fBlock;
 		fWritable = false;
 #endif // _BOOT_MODE
-
-		if (block != NULL) {
-			// The node is somewhere in that block...
-			// (confusing offset calculation)
-			fNode = (bplustree_node*)(block + offset
-				- (fileOffset + (blockOffset << volume->BlockShift())));
-		} else
-			REPORT_ERROR(B_IO_ERROR);
 	}
-	return fNode;
+
+	fOffset = offset;
+	fBlockNumber = newBlockNumber;
+
+	if (block != NULL) {
+		// The node is somewhere in that block...
+		// (confusing offset calculation)
+		fNode = (bplustree_node*)(block + offset
+			- (fileOffset + (blockOffset << volume->BlockShift())));
+	} else {
+		fNode = NULL;
+		RETURN_ERROR(B_IO_ERROR);
+	}
+
+	return B_OK;
 }
 
 
@@ -714,7 +743,7 @@ BPlusTree::SetTo(Inode* stream)
 		//fHeader.maximum_size = HOST_ENDIAN_TO_BFS_INT64(stream->Size());
 	}
 	if (!fHeader.IsValid()) {
-#ifdef DEBUG
+#if defined(DEBUG) && !defined(_BOOT_MODE)
 		dump_bplustree_header(&fHeader);
 		dump_block((const char*)&fHeader, 128);
 #endif
@@ -735,9 +764,11 @@ BPlusTree::SetTo(Inode* stream)
 		|| ((stream->Mode() & S_INDEX_DIR) != 0
 			&& kToMode[fHeader.DataType()] != mode)
 		|| !stream->IsContainer()) {
+#ifndef _BOOT_MODE
 		D(	dump_bplustree_header(&fHeader);
 			dump_inode(&stream->Node());
 		);
+#endif
 		RETURN_ERROR(fStatus = B_BAD_TYPE);
 	}
 
@@ -840,6 +871,7 @@ BPlusTree::MakeEmpty()
 {
 	// Put all nodes into the free list in order
 	Transaction transaction(fStream->GetVolume(), fStream->BlockNumber());
+	fStream->WriteLockInTransaction(transaction);
 
 	// Reset the header, and root node
 	CachedNode cached(this);
@@ -885,6 +917,7 @@ BPlusTree::MakeEmpty()
 		if (offset % (1024 * 1024) == 0) {
 			transaction.Done();
 			transaction.Start(fStream->GetVolume(), fStream->BlockNumber());
+			fStream->WriteLockInTransaction(transaction);
 		}
 	}
 
@@ -966,7 +999,7 @@ BPlusTree::RemovedFromTransaction()
 {
 	fInTransaction = false;
 
-	if (!fStream->GetVolume()->IsInitializing())
+	if (!fStream->GetVolume()->IsInitializing() && fStream != fStream->GetVolume()->IndicesNode())
 		put_vnode(fStream->GetVolume()->FSVolume(), fStream->ID());
 }
 

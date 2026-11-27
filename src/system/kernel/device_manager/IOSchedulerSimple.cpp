@@ -17,6 +17,7 @@
 #include <lock.h>
 #include <thread_types.h>
 #include <thread.h>
+#include <slab/Slab.h>
 #include <util/AutoLock.h>
 
 #include "IOSchedulerRoster.h"
@@ -33,10 +34,29 @@
 // #pragma mark -
 
 
+static object_cache* sRequestOwnerCache;
+
+
+struct IOSchedulerSimple::RequestOwner
+		: IORequestOwner, DoublyLinkedListLinkImpl<RequestOwner> {
+	IORequestList	requests;
+	IORequestList	completed_requests;
+	IOOperationList	operations;
+	RequestOwner* hash_link;
+
+			bool				IsActive() const
+									{ return !requests.IsEmpty()
+										|| !completed_requests.IsEmpty()
+										|| !operations.IsEmpty(); }
+
+			void				Dump() const override;
+};
+
+
 void
-IORequestOwner::Dump() const
+IOSchedulerSimple::RequestOwner::Dump() const
 {
-	kprintf("IORequestOwner at %p\n", this);
+	kprintf("IOSchedulerSimple::RequestOwner at %p\n", this);
 	kprintf("  team:     %" B_PRId32 "\n", team);
 	kprintf("  thread:   %" B_PRId32 "\n", thread);
 	kprintf("  priority: %" B_PRId32 "\n", priority);
@@ -68,14 +88,14 @@ IORequestOwner::Dump() const
 
 
 struct IOSchedulerSimple::RequestOwnerHashDefinition {
-	typedef thread_id		KeyType;
-	typedef IORequestOwner	ValueType;
+	typedef thread_id KeyType;
+	typedef IOSchedulerSimple::RequestOwner ValueType;
 
-	size_t HashKey(thread_id key) const				{ return key; }
-	size_t Hash(const IORequestOwner* value) const	{ return value->thread; }
-	bool Compare(thread_id key, const IORequestOwner* value) const
+	size_t HashKey(thread_id key) const			{ return key; }
+	size_t Hash(const ValueType* value) const	{ return value->thread; }
+	bool Compare(thread_id key, const ValueType* value) const
 		{ return value->thread == key; }
-	IORequestOwner*& GetLink(IORequestOwner* value) const
+	ValueType*& GetLink(ValueType* value) const
 		{ return value->hash_link; }
 };
 
@@ -90,7 +110,6 @@ IOSchedulerSimple::IOSchedulerSimple(DMAResource* resource)
 	fSchedulerThread(-1),
 	fRequestNotifierThread(-1),
 	fOperationArray(NULL),
-	fAllocatedRequestOwners(NULL),
 	fRequestOwners(NULL),
 	fBlockSize(0),
 	fPendingOperations(0),
@@ -103,6 +122,16 @@ IOSchedulerSimple::IOSchedulerSimple(DMAResource* resource)
 	fFinishedOperationCondition.Init(this, "I/O finished operation");
 	fFinishedRequestCondition.Init(this, "I/O finished request");
 
+	if (sRequestOwnerCache == NULL) {
+		// Borrow the SchedulerRoster lock to initialize.
+		IOSchedulerRoster::Default()->Lock();
+		if (sRequestOwnerCache == NULL) {
+			sRequestOwnerCache = create_object_cache("IOSchedulerSimpleRequestOwners",
+				sizeof(RequestOwner), 0);
+			object_cache_set_minimum_reserve(sRequestOwnerCache, smp_get_num_cpus());
+		}
+		IOSchedulerRoster::Default()->Unlock();
+	}
 }
 
 
@@ -135,8 +164,22 @@ IOSchedulerSimple::~IOSchedulerSimple()
 
 	delete[] fOperationArray;
 
+	RequestOwner* owner = fRequestOwners->Clear(true);
+	while (owner != NULL) {
+		RequestOwner* next = owner->hash_link;
+		object_cache_free(sRequestOwnerCache, owner, 0);
+		owner = next;
+	}
+
 	delete fRequestOwners;
-	delete[] fAllocatedRequestOwners;
+
+	// Remove any remaining write blocks
+	WriteBlock* currentWriteBlock = fWriteBlocks.Head();
+	while (currentWriteBlock != NULL) {
+		WriteBlock* nextWriteBlock = fWriteBlocks.GetNext(currentWriteBlock);
+		delete currentWriteBlock;
+		currentWriteBlock = nextWriteBlock;
+	}
 }
 
 
@@ -163,27 +206,19 @@ IOSchedulerSimple::Init(const char* name)
 	if (fBlockSize == 0)
 		fBlockSize = 512;
 
-	fAllocatedRequestOwnerCount = thread_max_threads();
-	fAllocatedRequestOwners
-		= new(std::nothrow) IORequestOwner[fAllocatedRequestOwnerCount];
-	if (fAllocatedRequestOwners == NULL)
-		return B_NO_MEMORY;
-
-	for (int32 i = 0; i < fAllocatedRequestOwnerCount; i++) {
-		IORequestOwner& owner = fAllocatedRequestOwners[i];
-		owner.team = -1;
-		owner.thread = -1;
-		owner.priority = B_IDLE_PRIORITY;
-		fUnusedRequestOwners.Add(&owner);
-	}
-
 	fRequestOwners = new(std::nothrow) RequestOwnerHashTable;
 	if (fRequestOwners == NULL)
 		return B_NO_MEMORY;
 
-	error = fRequestOwners->Init(fAllocatedRequestOwnerCount);
+	error = fRequestOwners->Init(count);
 	if (error != B_OK)
 		return error;
+
+	// Allocate a fallback RequestOwner, for use under low-memory conditions.
+	RequestOwner* fallbackOwner = _GetRequestOwner(-1, -1, true);
+	if (fallbackOwner == NULL)
+		return B_NO_MEMORY;
+	fallbackOwner->priority = B_LOWEST_ACTIVE_PRIORITY;
 
 	// TODO: Use a device speed dependent bandwidths!
 	fIterationBandwidth = fBlockSize * 8192;
@@ -241,7 +276,7 @@ IOSchedulerSimple::ScheduleRequest(IORequest* request)
 
 	MutexLocker locker(fLock);
 
-	IORequestOwner* owner = _GetRequestOwner(request->TeamID(),
+	RequestOwner* owner = _GetRequestOwner(request->TeamID(),
 		request->ThreadID(), true);
 	if (owner == NULL) {
 		panic("IOSchedulerSimple: Out of request owners!\n");
@@ -256,9 +291,11 @@ IOSchedulerSimple::ScheduleRequest(IORequest* request)
 	request->SetOwner(owner);
 	owner->requests.Add(request);
 
-	int32 priority = thread_get_io_priority(request->ThreadID());
-	if (priority >= 0)
-		owner->priority = priority;
+	if (owner->thread != -1) {
+		int32 priority = thread_get_io_priority(request->ThreadID());
+		if (priority >= 0)
+			owner->priority = priority;
+	}
 //dprintf("  request %p -> owner %p (thread %ld, active %d)\n", request, owner, owner->thread, wasActive);
 
 	if (!wasActive)
@@ -305,9 +342,9 @@ IOSchedulerSimple::Dump() const
 	kprintf("  DMA resource:   %p\n", fDMAResource);
 
 	kprintf("  active request owners:");
-	for (RequestOwnerList::ConstIterator it
-				= fActiveRequestOwners.GetIterator();
-			IORequestOwner* owner = it.Next();) {
+	for (RequestOwnerHashTable::Iterator it
+				= fRequestOwners->GetIterator();
+			RequestOwner* owner = it.Next();) {
 		kprintf(" %p", owner);
 	}
 	kprintf("\n");
@@ -330,6 +367,11 @@ IOSchedulerSimple::_Finisher()
 
 		bool operationFinished = operation->Finish();
 
+		if (operationFinished) {
+			MutexLocker locker(fLock);
+			_RemoveWriteBlocksForOperation(operation);
+		}
+
 		IOSchedulerRoster::Default()->Notify(IO_SCHEDULER_OPERATION_FINISHED,
 			this, operation->Parent(), operation);
 			// Notify for every time the operation is passed to the I/O hook,
@@ -338,7 +380,7 @@ IOSchedulerSimple::_Finisher()
 		if (!operationFinished) {
 			TRACE("  operation: %p not finished yet\n", operation);
 			MutexLocker _(fLock);
-			operation->Parent()->Owner()->operations.Add(operation);
+			((RequestOwner*)operation->Parent()->Owner())->operations.Add(operation);
 			fPendingOperations--;
 			continue;
 		}
@@ -364,14 +406,17 @@ IOSchedulerSimple::_Finisher()
 				request->SetUnfinished();
 			} else {
 				// Remove the request from the request owner.
-				IORequestOwner* owner = request->Owner();
+				RequestOwner* owner = (RequestOwner*)request->Owner();
 				owner->requests.TakeFrom(&owner->completed_requests);
 				owner->requests.Remove(request);
 				request->SetOwner(NULL);
 
 				if (!owner->IsActive()) {
 					fActiveRequestOwners.Remove(owner);
-					fUnusedRequestOwners.Add(owner);
+					if (owner->thread != -1) {
+						fRequestOwners->Remove(owner);
+						object_cache_free(sRequestOwnerCache, owner, 0);
+					}
 				}
 
 				if (request->HasCallbacks()) {
@@ -431,6 +476,11 @@ IOSchedulerSimple::_PrepareRequestOperations(IORequest* request,
 			}
 //dprintf("  prepared operation %p\n", operation);
 
+			if (!_CheckAndBlockWrites(operations, operation)) {
+				((RequestOwner*)operation->Parent()->Owner())->operations.Add(operation);
+				continue;
+			}
+
 			off_t bandwidth = operation->Length();
 			quantum -= bandwidth;
 			usedBandwidth += bandwidth;
@@ -456,6 +506,11 @@ IOSchedulerSimple::_PrepareRequestOperations(IORequest* request,
 		operation->SetOriginalRange(request->Offset(), request->Length());
 		request->Advance(request->Length());
 
+		if (!_CheckAndBlockWrites(operations, operation)) {
+			((RequestOwner*)operation->Parent()->Owner())->operations.Add(operation);
+			return true;
+		}
+
 		off_t bandwidth = operation->Length();
 		quantum -= bandwidth;
 		usedBandwidth += bandwidth;
@@ -468,6 +523,84 @@ IOSchedulerSimple::_PrepareRequestOperations(IORequest* request,
 }
 
 
+bool
+IOSchedulerSimple::_CheckAndBlockWrites(IOOperationList& operations, IOOperation* operation)
+{
+	ASSERT_LOCKED_MUTEX(&fLock);
+
+	// Operations that are part of a read request are not blocked
+	if (operation->Parent()->IsRead())
+		return true;
+
+	off_t begin = operation->TotalOffset();
+	off_t end = begin + operation->TotalLength() - 1;
+
+	// Check if operation is blocked
+	WriteBlock* currentWriteBlock = fWriteBlocks.Head();
+	while (currentWriteBlock != NULL) {
+		WriteBlock* nextWriteBlock = fWriteBlocks.GetNext(currentWriteBlock);
+
+		if (currentWriteBlock->operation != operation
+			&& (currentWriteBlock->begin <= end && begin <= currentWriteBlock->end))
+			return false;
+
+		currentWriteBlock = nextWriteBlock;
+	}
+
+	if (operation->HasPartialBegin() || operation->HasPartialEnd()) {
+		// Add write block for the operation
+		// Do we already have write blocks set for this op?
+		currentWriteBlock = fWriteBlocks.Head();
+		while (currentWriteBlock != NULL) {
+			WriteBlock* nextWriteBlock = fWriteBlocks.GetNext(currentWriteBlock);
+
+			if (currentWriteBlock->operation == operation)
+				return true;
+
+			currentWriteBlock = nextWriteBlock;
+		}
+
+		// Add the write blocks
+		if (operation->HasPartialBegin()) {
+			WriteBlock* writeBlock = new WriteBlock();
+			writeBlock->begin = operation->TotalOffset();
+			writeBlock->end = writeBlock->begin + fBlockSize -1;
+			writeBlock->operation = operation;
+			fWriteBlocks.Add(writeBlock);
+		}
+
+		if (operation->HasPartialEnd()) {
+			WriteBlock* writeBlock = new WriteBlock();
+			writeBlock->begin = operation->TotalOffset() + operation->TotalLength() - fBlockSize;
+			writeBlock->end = writeBlock->begin + fBlockSize -1;
+			writeBlock->operation = operation;
+			fWriteBlocks.Add(writeBlock);
+		}
+	}
+
+	return true;
+}
+
+
+void
+IOSchedulerSimple::_RemoveWriteBlocksForOperation(IOOperation* operation)
+{
+	ASSERT_LOCKED_MUTEX(&fLock);
+
+	WriteBlock* currentWriteBlock = fWriteBlocks.Head();
+	while (currentWriteBlock != NULL) {
+		WriteBlock* nextWriteBlock = fWriteBlocks.GetNext(currentWriteBlock);
+
+		if (operation == currentWriteBlock->operation) {
+			fWriteBlocks.Remove(currentWriteBlock);
+			delete currentWriteBlock;
+		}
+
+		currentWriteBlock = nextWriteBlock;
+	}
+}
+
+
 off_t
 IOSchedulerSimple::_ComputeRequestOwnerBandwidth(int32 priority) const
 {
@@ -477,7 +610,7 @@ IOSchedulerSimple::_ComputeRequestOwnerBandwidth(int32 priority) const
 
 
 bool
-IOSchedulerSimple::_NextActiveRequestOwner(IORequestOwner*& owner,
+IOSchedulerSimple::_NextActiveRequestOwner(RequestOwner*& owner,
 	off_t& quantum)
 {
 	while (true) {
@@ -576,7 +709,7 @@ IOSchedulerSimple::_SortOperations(IOOperationList& operations,
 status_t
 IOSchedulerSimple::_Scheduler()
 {
-	IORequestOwner marker;
+	RequestOwner marker;
 	marker.thread = -1;
 	{
 		MutexLocker locker(fLock);
@@ -585,7 +718,7 @@ IOSchedulerSimple::_Scheduler()
 
 	off_t lastOffset = 0;
 
-	IORequestOwner* owner = NULL;
+	RequestOwner* owner = NULL;
 	off_t quantum = 0;
 
 	while (!fTerminating) {
@@ -593,6 +726,7 @@ IOSchedulerSimple::_Scheduler()
 		MutexLocker locker(fLock);
 
 		IOOperationList operations;
+		IOOperationList removedOperations;
 		int32 operationCount = 0;
 		bool resourcesAvailable = true;
 		off_t iterationBandwidth = fIterationBandwidth;
@@ -619,9 +753,11 @@ IOSchedulerSimple::_Scheduler()
 			while (IOOperation* operation = owner->operations.RemoveHead()) {
 				// TODO: We might actually grant the owner more bandwidth than
 				// it deserves.
-				// TODO: We should make sure that after the first read operation
-				// of a partial write, no other write operation to the same
-				// location is scheduled!
+				if (!_CheckAndBlockWrites(operations, operation)) {
+					removedOperations.Add(operation);
+					continue;
+				}
+
 				operations.Add(operation);
 				operationCount++;
 				off_t bandwidth = operation->Length();
@@ -629,10 +765,13 @@ IOSchedulerSimple::_Scheduler()
 				iterationBandwidth -= bandwidth;
 
 				if (quantum < (off_t)fBlockSize
-					|| iterationBandwidth < (off_t)fBlockSize) {
+					|| iterationBandwidth < (off_t)fBlockSize)
 					break;
-				}
 			}
+
+			// Add operations that were blocked back to the owner
+			while (IOOperation* removedOperation = removedOperations.RemoveHead())
+				owner->operations.Add(removedOperation);
 
 			while (resourcesAvailable && quantum >= (off_t)fBlockSize
 					&& iterationBandwidth >= (off_t)fBlockSize) {
@@ -662,10 +801,9 @@ panic("no more requests for owner %p (thread %" B_PRId32 ")", owner, owner->thre
 				_NextActiveRequestOwner(owner, quantum);
 		}
 
-		// If the current owner doesn't have anymore requests, we have to
-		// insert our marker, since the owner will be gone in the next
-		// iteration.
-		if (owner->requests.IsEmpty()) {
+		// Since we're going to drop the lock, we have to use the marker to
+		// keep track of where we are in the ActiveRequestOwners list.
+		if (owner != NULL) {
 			fActiveRequestOwners.InsertBefore(owner, &marker);
 			owner = NULL;
 		}
@@ -725,6 +863,11 @@ panic("no more requests for owner %p (thread %" B_PRId32 ")", owner, owner->thre
 		}
 	}
 
+	if (owner == NULL) {
+		MutexLocker locker(fLock);
+		fActiveRequestOwners.Remove(&marker);
+	}
+
 	return B_OK;
 }
 
@@ -781,34 +924,26 @@ IOSchedulerSimple::_RequestNotifierThread(void *_self)
 }
 
 
-IORequestOwner*
+IOSchedulerSimple::RequestOwner*
 IOSchedulerSimple::_GetRequestOwner(team_id team, thread_id thread,
 	bool allocate)
 {
 	// lookup in table
-	IORequestOwner* owner = fRequestOwners->Lookup(thread);
-	if (owner != NULL && !owner->IsActive())
-		fUnusedRequestOwners.Remove(owner);
+	RequestOwner* owner = fRequestOwners->Lookup(thread);
 	if (owner != NULL || !allocate)
 		return owner;
 
-	// not in table -- allocate an unused one
-	RequestOwnerList existingOwners;
-
-	while ((owner = fUnusedRequestOwners.RemoveHead()) != NULL) {
-		if (owner->thread < 0 || !Thread::IsAlive(owner->thread)) {
-			if (owner->thread >= 0)
-				fRequestOwners->RemoveUnchecked(owner);
-			owner->team = team;
-			owner->thread = thread;
-			owner->priority = B_IDLE_PRIORITY;
-			fRequestOwners->InsertUnchecked(owner);
-			break;
-		}
-
-		existingOwners.Add(owner);
+	// not in table -- allocate a new one
+	owner = new(sRequestOwnerCache, CACHE_DONT_WAIT_FOR_MEMORY) RequestOwner;
+	if (owner == NULL) {
+		// Use the fallback owner.
+		return fRequestOwners->Lookup(-1);
 	}
 
-	fUnusedRequestOwners.TakeFrom(&existingOwners);
+	owner->team = team;
+	owner->thread = thread;
+	owner->priority = B_IDLE_PRIORITY;
+	fRequestOwners->InsertUnchecked(owner);
+
 	return owner;
 }

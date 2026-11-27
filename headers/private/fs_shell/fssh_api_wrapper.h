@@ -27,6 +27,7 @@
 
 #include "fssh_atomic.h"
 #include "fssh_byte_order.h"
+#include "fssh_convertutf.h"
 #include "fssh_defs.h"
 #include "fssh_disk_device_defs.h"
 #include "fssh_disk_device_manager.h"
@@ -134,6 +135,15 @@
 
 
 ////////////////////////////////////////////////////////////////////////////////
+// #pragma mark - fssh_convertutf.h
+
+#define utf16le_to_utf8	fssh_utf16le_to_utf8
+#define utf16be_to_utf8	fssh_utf16be_to_utf8
+#define utf8_to_utf16le	fssh_utf8_to_utf16le
+#define utf8_to_utf16be	fssh_utf8_to_utf16be
+
+
+////////////////////////////////////////////////////////////////////////////////
 // #pragma mark - fssh_defs.h
 
 // 32/64 bitness
@@ -153,6 +163,10 @@
 #define B_ATTR_NAME_LENGTH	FSSH_B_ATTR_NAME_LENGTH
 #define B_MIME_TYPE_LENGTH	FSSH_B_MIME_TYPE_LENGTH
 #define B_MAX_SYMLINKS		FSSH_B_MAX_SYMLINKS
+
+// Params
+
+#define DEV_BSIZE			FSSH_DEV_BSIZE
 
 // Open Modes
 #define B_READ_ONLY			FSSH_B_READ_ONLY
@@ -950,6 +964,7 @@
 #define get_vnode_removed			fssh_get_vnode_removed
 #define volume_for_vnode			fssh_volume_for_vnode
 #define check_access_permissions	fssh_check_access_permissions
+#define check_write_stat_permissions fssh_check_write_stat_permissions
 #define read_pages					fssh_read_pages
 #define write_pages					fssh_write_pages
 #define read_file_io_vec_pages		fssh_read_file_io_vec_pages
@@ -964,8 +979,9 @@
 #define notify_attribute_changed	fssh_notify_attribute_changed
 
 #define notify_query_entry_created	fssh_notify_query_entry_created
+#define notify_query_entry_moved	fssh_notify_query_entry_moved
 #define notify_query_entry_removed	fssh_notify_query_entry_removed
-#define notify_query_attr_changed	fssh_notify_query_attr_changed
+#define notify_query_attribute_changed	fssh_notify_query_attribute_changed
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -973,6 +989,7 @@
 
 #define B_LIVE_QUERY		FSSH_B_LIVE_QUERY
 #define B_QUERY_NON_INDEXED	FSSH_B_QUERY_NON_INDEXED
+#define B_QUERY_WATCH_ALL	FSSH_B_QUERY_WATCH_ALL
 
 
 ////////////////////////////////////////////////////////////////////////////////

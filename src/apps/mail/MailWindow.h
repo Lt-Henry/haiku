@@ -65,6 +65,9 @@ class BMenuBar;
 class BMenuItem;
 class Words;
 
+static const uint32 kMsgQuitAndKeepAllStatus = 'Qasm';
+static const uint32 kMsgCloseAndKeepAllStatus = 'Casm';
+
 
 class TMailWindow : public BWindow {
 public:
@@ -77,6 +80,7 @@ public:
 
 	virtual	void				FrameResized(float width, float height);
 	virtual	void				MenusBeginning();
+	virtual void				MenusEnded();
 	virtual	void				MessageReceived(BMessage*);
 	virtual	bool				QuitRequested();
 	virtual	void				Show();
@@ -170,10 +174,11 @@ private:
 			BMenuItem*			fDeleteNext;
 			BMenuItem*			fSpelling;
 			BMenu*				fSaveAddrMenu;
-
+			BMenu*				fLabelMenu;
 			BMenu*				fQueryMenu;
 			BMenu*				fLeaveStatusMenu;
 			BMenu*				fEncodingMenu;
+			BString				fLabel;
 
 	struct BitmapItem {
 		BBitmap* bm;
@@ -216,7 +221,7 @@ private:
 			BMessenger*			fOriginatingWindow;
 
 			bool				fAutoMarkRead : 1;
-			bool				fKeepStatusOnQuit;
+			bool				fKeepStatusOnClose;
 
 			bool				fDownloading;
 };

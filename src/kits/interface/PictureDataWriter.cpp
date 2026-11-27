@@ -172,6 +172,22 @@ PictureDataWriter::WriteSetFillRule(int32 fillRule)
 
 
 status_t
+PictureDataWriter::WriteSetBlendingMode(source_alpha srcAlpha, alpha_function alphaFunc)
+{
+	try {
+		BeginOp(B_PIC_SET_BLENDING_MODE);
+		Write<int16>(srcAlpha);
+		Write<int16>(alphaFunc);
+		EndOp();
+	} catch (status_t& status) {
+		return status;
+	}
+
+	return B_OK;
+}
+
+
+status_t
 PictureDataWriter::WriteSetScale(const float& scale)
 {
 	try {
@@ -187,11 +203,11 @@ PictureDataWriter::WriteSetScale(const float& scale)
 
 
 status_t
-PictureDataWriter::WriteSetTransform(BAffineTransform transform)
+PictureDataWriter::WriteSetTransform(const BAffineTransform& transform)
 {
 	try {
 		BeginOp(B_PIC_SET_TRANSFORM);
-		Write<BAffineTransform>(transform);
+		WriteData(&transform.sx, 6 * sizeof(double));
 		EndOp();
 	} catch (status_t& status) {
 		return status;
@@ -285,18 +301,14 @@ PictureDataWriter::WriteClipToPicture(int32 pictureToken,
 status_t
 PictureDataWriter::WriteSetClipping(const BRegion& region)
 {
-	// TODO: I don't know if it's compatible with R5's BPicture version
 	try {
+		BeginOp(B_PIC_SET_CLIPPING_RECTS);
+		Write<clipping_rect>(region.FrameInt());
 		const int32 numRects = region.CountRects();
-		if (numRects > 0 && region.Frame().IsValid()) {
-			BeginOp(B_PIC_SET_CLIPPING_RECTS);
-			Write<uint32>(numRects);
-			for (int32 i = 0; i < numRects; i++)
-				Write<BRect>(region.RectAt(i));
+		for (int32 i = 0; i < numRects; i++)
+			Write<clipping_rect>(region.RectAtInt(i));
 
-			EndOp();
-		} else
-			WriteClearClipping();
+		EndOp();
 	} catch (status_t& status) {
 		return status;
 	}
@@ -480,12 +492,10 @@ PictureDataWriter::WriteDrawString(const BPoint& where, const char* string,
 		EndOp();
 
 		BeginOp(B_PIC_DRAW_STRING);
-		Write<float>(escapement.space);
-		Write<float>(escapement.nonspace);
-		//WriteData(string, length + 1);
-			// TODO: is string 0 terminated? why is length given?
+		Write<int32>(length);
 		WriteData(string, length);
-		Write<uint8>(0);
+		Write<float>(escapement.nonspace);
+		Write<float>(escapement.space);
 		EndOp();
 	} catch (status_t& status) {
 		return status;
@@ -505,8 +515,8 @@ PictureDataWriter::WriteDrawString(const char* string,
 		for (int32 i = 0; i < locationCount; i++) {
 			Write<BPoint>(locations[i]);
 		}
+		Write<int32>(length);
 		WriteData(string, length);
-		Write<uint8>(0);
 		EndOp();
 	} catch (status_t& status) {
 		return status;
@@ -667,6 +677,24 @@ PictureDataWriter::WriteDrawShapeGradient(const int32& opCount, const void* opLi
 
 
 status_t
+PictureDataWriter::WriteStrokeLineGradient(const BPoint& start, const BPoint& end,
+	const BGradient& gradient)
+{
+	try {
+		BeginOp(B_PIC_STROKE_LINE_GRADIENT);
+		Write<BPoint>(start);
+		Write<BPoint>(end);
+		gradient.Flatten(fData);
+		EndOp();
+	} catch (status_t& status) {
+		return status;
+	}
+
+	return B_OK;
+}
+
+
+status_t
 PictureDataWriter::WriteDrawBitmap(const BRect& srcRect, const BRect& dstRect,
 	const int32& width, const int32& height, const int32& bytesPerRow,
 	const int32& colorSpace, const int32& flags, const void* data,
@@ -683,6 +711,7 @@ PictureDataWriter::WriteDrawBitmap(const BRect& srcRect, const BRect& dstRect,
 		Write<int32>(bytesPerRow);
 		Write<int32>(colorSpace);
 		Write<int32>(flags);
+		Write<int32>(length);
 		WriteData(data, length);
 		EndOp();
 	} catch (status_t& status) {
@@ -718,8 +747,10 @@ PictureDataWriter::WriteSetFontFamily(const font_family family)
 {
 	try {
 		BeginOp(B_PIC_SET_FONT_FAMILY);
-		WriteData(family, strlen(family));
-		Write<uint8>(0);
+		// BeOS writes string size including terminating null character for some reason.
+		uint32 length = strlen(family) + 1;
+		Write<uint32>(length);
+		WriteData(family, length);
 		EndOp();
 	} catch (status_t& status) {
 		return status;
@@ -734,8 +765,10 @@ PictureDataWriter::WriteSetFontStyle(const font_style style)
 {
 	try {
 		BeginOp(B_PIC_SET_FONT_STYLE);
-		WriteData(style, strlen(style));
-		Write<uint8>(0);
+		// BeOS writes string size including terminating null character for some reason.
+		uint32 length = strlen(style) + 1;
+		Write<uint32>(length);
+		WriteData(style, length);
 		EndOp();
 	} catch (status_t& status) {
 		return status;

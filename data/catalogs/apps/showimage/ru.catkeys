@@ -1,7 +1,6 @@
-1	russian	x-vnd.Haiku-ShowImage	2453396430
-ShowImage	System name		Просмотр изображений
+1	russian	x-vnd.Haiku-ShowImage	549474543
+ShowImage	System name		ShowImage
 Page setup…	Menus		Настройка печати…
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		Документ '%s' (страница %d) был изменен. Вы хотите закрыть его?
 Previous file	Menus		Предыдущий файл
 View	Menus		Вид
 Leave full screen	Menus		Выйти из полного экрана
@@ -13,6 +12,7 @@ Height: 	PrintOptionsWindow		Высота:
 Next file	Menus		Следующий файл
 Slide show	Menus		Слайд шоу
 Original size	Menus		Оригинальный размер
+The document '%filename%' has been changed. Do you want to close the document?	ClosePrompt		Документ «%filename%» был изменён. Хотите закрыть документ?
 Width:	PrintOptionsWindow		Ширина:
 Resize to (in 1/72 inches):	PrintOptionsWindow		Изменить размер (1/72 дюйма):
 Zoom factor in %:	PrintOptionsWindow		Масштаб в %:
@@ -24,10 +24,10 @@ Image	Menus		Изображение
 Flip top to bottom	Menus		Повернуть сверху вниз
 Zoom in	Menus		Увеличить
 Last page	Menus		Последняя страница
-Cancel	ClosePrompt		Отмена
+Cancel	ClosePrompt		Отменить
 Attributes	Menus		Атрибуты
+Show boundaries marks	Menus		Показать маркеры границ изображения
 High-quality zooming	Menus		Высококачественное масштабирование
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		Изображение '%s' было изменено. Вы хотите закрыть его без сохранения?
 Close	Menus		Закрыть
 Selection mode	Menus		Режим выделения
 Reset rating	Menus		Сбросить рейтинг
@@ -37,7 +37,7 @@ Show tool bar	Menus		Показать панель иструментов
 First page	Menus		Первая страница
 OK	SaveToFile		ОК
 Print…	Menus		Печать…
-The file '%s' could not be written.	SaveToFile		Невозможно записать файл '%s'.
+The file '%s' could not be written.	SaveToFile		Невозможно записать файл «%s».
 Quit	Menus		Выход
 Get info	Menus		Информация
 Rating	Menus		Рейтинг
@@ -46,15 +46,14 @@ Stretch to window	Menus		Растянуть до размеров окна
 Job setup	PrintOptionsWindow		Печать
 Clear selection	Menus		Очистить выделение
 Rotate clockwise	Menus		Повернуть по часовой стрелке
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		Не удалось открыть изображение. Либо файл, либо транслятор этого изображения отсутствует.
 Open with…	Menus		Открыть с…
 Rotate counterclockwise	Menus		Повернуть против часовой стрелки
+The document '%filename%' (page %number%) has been changed. Do you want to close the document?	ClosePrompt		Документ «%filename%» (страница %number%) был изменён. Хотите закрыть документ?
 Previous page	Menus		Предыдущая страница
 Fit to window	Menus		Подогнать под размер окна
 Go to page	Menus		Перейти к странице
 Browse	Menus		Просмотр
-Progress monitor	ProgressWindow		Монитор состояния
-Edit	Menus		Изменить
+Edit	Menus		Правка
 Move to Trash	Menus		Переместить в корзину
 Use as background…	Menus		Сделать фоном рабочего стола…
 Open…	Menus		Открыть…

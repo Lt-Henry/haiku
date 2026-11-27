@@ -626,6 +626,9 @@ Controller::Stop()
 
 	BAutolock _(this);
 
+	if (InitCheck() != B_OK)
+		return;
+
 	StopPlaying();
 	SetPosition(0.0);
 
@@ -697,6 +700,18 @@ Controller::TimePosition()
 	BAutolock _(this);
 
 	return _TimePosition();
+}
+
+
+bigtime_t
+Controller::TimePositionFor(float value)
+{
+	if (fDuration == 0)
+		return 0;
+
+	int32 frame = std::max((int32)0,
+		std::min((int32)_FrameDuration(), (int32)(_FrameDuration() * value)));
+	return frame * fDuration / _FrameDuration();
 }
 
 

@@ -124,7 +124,7 @@ int main(int argc, char * argv[])
 
 void parse_opts(int argc, char * argv[])
 {
-	char c;
+	int c;
 	int i;
 
 	while ((c = getopt(argc, argv, "hvd:p:i:s:b:o:")) != -1)
@@ -153,7 +153,7 @@ void parse_opts(int argc, char * argv[])
 				fprintf(stderr, "Maximum number of arguments exceeded\n");
 				exit(1);
 			}
-			switch (optopt)
+			switch (c)
 			{
 			case 'i':
 				args[i].Type = ACPI_TYPE_INTEGER;

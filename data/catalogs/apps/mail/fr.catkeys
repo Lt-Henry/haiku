@@ -1,5 +1,4 @@
-1	french	x-vnd.Be-MAIL	262401742
-Set to Saved	Mail		Définir comme Sauvé
+1	french	x-vnd.Be-MAIL	3142049011
 Your main text contains %ld unencodable characters. Perhaps a different character set would work better? Hit Send to send it anyway (a substitute character will be used in place of the unencodable ones), or choose Cancel to go back and try fixing it up.	Mail		Votre texte principal contient %ld caractères non encodables. Peut être qu’un jeu de caractère différent fonctionnerait mieux ? Sélectionnez « Envoyer » pour envoyer le message quand-même (un caractère de substitution remplacera ceux qui ne peuvent être encodés), ou choisissez « Annuler » pour revenir et essayer de corriger le problème.
 Text wrapping:	Mail		Renvoi à la ligne :
 Show icons & labels	Mail		Afficher les icônes et les étiquettes
@@ -38,6 +37,7 @@ Previous message	Mail		Message précédent
 (Address unavailable)	Mail		(Adresse non disponible)
 Mail	System name		Mail
 Copy link location	Mail		Copier l’adresse du lien
+%appname% settings	Mail		Réglages de %appname%
 Add attachment…	Mail		Ajouter une pièce jointe…
 Next	Mail		Suivant
 Attachments:	Mail		Pièces jointes :
@@ -67,7 +67,6 @@ spam	B_USER_DIRECTORY/mail/spam		spam
 Reply to all	Mail		Répondre à tous
 Cancel	Mail		Annuler
 Off	Mail		Arrêt
-Set to %s	Mail		Changer en %s
 Signature:	Mail		Signature :
 Forward without attachments	Mail		Transférer sans les pièces jointes
 queries	B_USER_DIRECTORY/mail/queries		requêtes
@@ -87,8 +86,8 @@ Auto signature:	Mail		Signature automatique :
 Same subject	Mail		Même sujet
 Send	Mail		Envoyer
 Open draft	Mail		Ouvrir le brouillon
-Leave as 'New'	Mail	Do not translate New - this is non-localizable e-mail status	Laisser en « nouveau »
 Random	Mail		Aléatoire
+Leave as 'New'	Mail	Do not translate New - this is non-localizable e-mail status	Laisser en « nouveau »
 Attach attributes:	Mail		Attributs du fichier joint :
 Find again	Mail		Poursuivre la recherche
 Size:	Mail		Taille :
@@ -96,7 +95,6 @@ To:	Mail		À :
 Need Tracker to move items to trash	Mail		Le tracker est indispensable pour mettre des objets à la poubelle.
 The mail_daemon could not be started:\n\t	Mail		mail_daemon n’a pas pu être démarré :\n\t
 <no account found>	Mail		<aucun compte trouvé>
-Mail couldn't find its dictionary.	Mail		Mail n’a pas trouvé son dictionnaire.
 helpful message	Mail		message utile
  Read 	Mail		 Lu 
 Font:	Mail		Police :
@@ -107,10 +105,8 @@ Start now	Mail		Démarrer maintenant
 (Name unavailable)	Mail		(Nom non disponible)
 Move to trash	Mail		Déplacer vers la corbeille
 <none>	Mail		<aucun>
-Mail settings	Mail		Réglages emails
 %d - Date	Mail		%d - Date
 Check spelling	Mail		Vérifier l’orthographe
-Status:	Mail		Statut :
 Redo	Mail		Rétablir
 Leave as '%s'	Mail		Laisser « %s »
 Print…	Mail		Imprimer…
@@ -139,8 +135,8 @@ Send this message before closing?	Mail		Voulez-vous envoyer ce message avant de 
 in	B_USER_DIRECTORY/mail/in		reçus
 Open	Mail		Ouvrir
 Don't save	Mail		Ne pas enregistrer
-Leave same	Mail		Laisser à l’identique
 An error occurred trying to save the attachment.	Mail		Une erreur s’est produite en essayant de sauvegarder le fichier joint.
+Leave same	Mail		Laisser à l’identique
 Save address	Mail		Enregistrer l’adresse
 Initial spell check mode:	Mail		Mode de correction orthographique initial :
 Edit queries…	Mail		Modifier les requêtes…
@@ -153,7 +149,6 @@ Edit signatures…	Mail		Modifier les signatures…
 User interface	Mail		Interface utilisateur
 Inconsistency occurred in the undo/redo buffer.	Mail		Une incohérence est survenue dans le tampon d’annulation.
 Remove attachment	Mail		Retirer la pièce jointe
-Set to…	Mail		Envoyer à…
 Edit	Mail		Modifier
 Page setup…	Mail		Mise en page…
 An error occurred trying to save this signature.	Mail		Une erreur est survenue en essayant de sauvegarder cette signature.

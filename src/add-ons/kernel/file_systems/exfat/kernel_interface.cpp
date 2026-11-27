@@ -12,26 +12,12 @@
  */
 
 
-#include <dirent.h>
-#include <unistd.h>
-#include <util/kernel_cpp.h>
-#include <string.h>
-
-#include <new>
-
-#include <AutoDeleter.h>
-#include <fs_cache.h>
-#include <fs_info.h>
-#include <io_requests.h>
-#include <NodeMonitor.h>
-#include <StorageDefs.h>
-#include <util/AutoLock.h>
-#include <file_systems/fs_ops_support.h>
-
 #include "DirectoryIterator.h"
 #include "exfat.h"
 #include "Inode.h"
 #include "Utility.h"
+
+#include <file_systems/fs_ops_support.h>
 
 
 //#define TRACE_EXFAT
@@ -158,6 +144,7 @@ static status_t
 exfat_mount(fs_volume* _volume, const char* device, uint32 flags,
 	const char* args, ino_t* _rootID)
 {
+	TRACE("exfat_mount(): Trying to mount\n");
 	Volume* volume = new(std::nothrow) Volume(_volume);
 	if (volume == NULL)
 		return B_NO_MEMORY;
@@ -255,14 +242,14 @@ exfat_put_vnode(fs_volume* _volume, fs_vnode* _node, bool reenter)
 
 
 static bool
-exfat_can_page(fs_volume* _volume, fs_vnode* _node, void* _cookie)
+exfat_can_page(fs_volume* _volume, fs_vnode* _node, void*)
 {
 	return true;
 }
 
 
 static status_t
-exfat_read_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
+exfat_read_pages(fs_volume* _volume, fs_vnode* _node, void*,
 	off_t pos, const iovec* vecs, size_t count, size_t* _numBytes)
 {
 	Volume* volume = (Volume*)_volume->private_volume;
@@ -306,13 +293,13 @@ exfat_read_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
 
 
 static status_t
-exfat_io(fs_volume* _volume, fs_vnode* _node, void* _cookie,
+exfat_io(fs_volume* _volume, fs_vnode* _node, void*,
 	io_request* request)
 {
 	Volume* volume = (Volume*)_volume->private_volume;
 	Inode* inode = (Inode*)_node->private_node;
 
-#ifndef EXFAT_SHELL
+#ifndef FS_SHELL
 	if (io_request_is_write(request) && volume->IsReadOnly()) {
 		notify_io_request(request, B_READ_ONLY_DEVICE);
 		return B_READ_ONLY_DEVICE;
@@ -320,7 +307,7 @@ exfat_io(fs_volume* _volume, fs_vnode* _node, void* _cookie,
 #endif
 
 	if (inode->FileCache() == NULL) {
-#ifndef EXFAT_SHELL
+#ifndef FS_SHELL
 		notify_io_request(request, B_BAD_VALUE);
 #endif
 		return B_BAD_VALUE;
@@ -445,7 +432,7 @@ exfat_read_stat(fs_volume* _volume, fs_vnode* _node, struct stat* stat)
 	inode->GetCreationTime(stat->st_crtim);
 
 	stat->st_size = inode->Size();
-	stat->st_blocks = (inode->Size() + 511) / 512;
+	stat->st_blocks = (inode->Size() + DEV_BSIZE - 1) / DEV_BSIZE;
 
 	return B_OK;
 }
@@ -462,7 +449,7 @@ exfat_open(fs_volume* /*_volume*/, fs_vnode* _node, int openMode,
 	if (inode->IsDirectory() && (openMode & O_RWMASK) != 0)
 		return B_IS_A_DIRECTORY;
 
-	status_t status =  inode->CheckPermissions(open_mode_to_access(openMode));
+	status_t status = inode->CheckPermissions(open_mode_to_access(openMode));
 	if (status != B_OK)
 		return status;
 

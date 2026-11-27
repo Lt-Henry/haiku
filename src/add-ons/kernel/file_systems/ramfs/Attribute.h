@@ -11,6 +11,7 @@
 #include "AttributeIterator.h"
 #include "DataContainer.h"
 #include "String.h"
+#include "ramfs.h"
 
 class AllocationInfo;
 class Node;
@@ -24,7 +25,7 @@ public:
 
 	status_t InitCheck() const;
 
-	void SetNode(Node *node)	{ fNode = node; }
+	void SetNode(Node *node);
 	Node *GetNode() const		{ return fNode; }
 
 	const char *GetName() { return fName.GetString(); }
@@ -36,13 +37,13 @@ public:
 	off_t GetSize() const		{ return DataContainer::GetSize(); }
 
 	virtual status_t WriteAt(off_t offset, const void *buffer, size_t size,
-							 size_t *bytesWritten);
+		size_t *bytesWritten);
 
 	// index support
 	void SetIndex(AttributeIndex *index, bool inIndex);
 	AttributeIndex *GetIndex() const	{ return fIndex; }
 	bool IsInIndex() const				{ return fInIndex; }
-	void GetKey(uint8 *key, size_t *length);
+	void GetKey(uint8 key[kMaxIndexKeyLength], size_t *length);
 
 	// iterator management
 	void AttachAttributeIterator(AttributeIterator *iterator);
@@ -52,6 +53,14 @@ public:
 
 	// debugging
 	void GetAllocationInfo(AllocationInfo &info);
+
+private:
+	void _NotifyAdded();
+	void _NotifyRemoved();
+	void _Changed(uint8* oldKey, size_t oldLength,
+		off_t changeOffset, ssize_t changeSize);
+	void _Notify(int32 cause, uint8* oldKey, size_t oldLength,
+		uint8* newKey, size_t newLength);
 
 private:
 	Node						*fNode;

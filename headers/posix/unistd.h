@@ -6,7 +6,6 @@
 #define _UNISTD_H_
 
 
-#include <null.h>
 #include <stdint.h>
 #include <sys/types.h>
 
@@ -49,6 +48,7 @@
 #define _POSIX_CHOWN_RESTRICTED				(1)
 #define _POSIX_CLOCK_SELECTION				(200809L)
 #define _POSIX_CPUTIME						(200809L)
+#define _POSIX_DEVICE_CONTROL				(202405L)
 #define _POSIX_FSYNC						(200809L)
 #define _POSIX_IPV6							(200809L)
 #define _POSIX_JOB_CONTROL					(1)
@@ -72,7 +72,7 @@
 #define _POSIX_SPAWN						(200809L)
 #define _POSIX_SPIN_LOCKS					(-1)
 #define _POSIX_SPORADIC_SERVER				(-1)
-#define _POSIX_SYNCHRONIZED_IO				(-1) /* missing fdatasync() */
+#define _POSIX_SYNCHRONIZED_IO				(200809L)
 #define _POSIX_THREAD_ATTR_STACKADDR		(200809L)
 #define _POSIX_THREAD_ATTR_STACKSIZE		(200809L)
 #define _POSIX_THREAD_CPUTIME				(200809L)
@@ -306,6 +306,8 @@
 #define _SC_THREAD_THREADS_MAX			141
 #define _SC_RE_DUP_MAX					142
 
+#define _SC_DEVICE_CONTROL				143
+
 
 /* confstr() constants */
 #define _CS_PATH				1
@@ -326,6 +328,8 @@
 #ifndef SEEK_HOLE
 #	define SEEK_HOLE 4
 #endif
+
+#define CLOSE_RANGE_CLOEXEC	0x4
 
 
 #ifdef __cplusplus
@@ -399,6 +403,7 @@ extern off_t	lseek(int fd, off_t offset, int whence);
 
 extern void		sync(void);
 extern int		fsync(int fd);
+extern int		fdatasync(int fd);
 
 extern int		chown(const char *path, uid_t owner, gid_t group);
 extern int		fchown(int fd, uid_t owner, gid_t group);
@@ -461,6 +466,8 @@ extern gid_t	getegid(void);
 extern uid_t	geteuid(void);
 extern gid_t	getgid(void);
 extern uid_t	getuid(void);
+extern int		getresgid(gid_t *rgid, gid_t *egid, gid_t *sgid);
+extern int		getresuid(uid_t *ruid, uid_t *euid, uid_t *suid);
 
 extern int		setgid(gid_t gid);
 extern int		setuid(uid_t uid);
@@ -468,6 +475,8 @@ extern int		setegid(gid_t gid);
 extern int		seteuid(uid_t uid);
 extern int		setregid(gid_t rgid, gid_t egid);
 extern int		setreuid(uid_t ruid, uid_t euid);
+extern int		setresgid(gid_t rgid, gid_t egid, gid_t sgid);
+extern int		setresuid(uid_t ruid, uid_t euid, uid_t suid);
 
 extern int		getgrouplist(const char* user, gid_t baseGroup,
 					gid_t* groupList, int* groupCount);

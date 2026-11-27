@@ -11,6 +11,7 @@
 
 #include <kernel.h>
 #include <lock.h>
+#include <smp.h>
 
 #include <vm/VMArea.h>
 
@@ -38,9 +39,6 @@ public:
 									uint32 attributes, uint32 memoryType,
 									vm_page_reservation* reservation) = 0;
 	virtual	status_t			Unmap(addr_t start, addr_t end) = 0;
-
-	virtual	status_t			DebugMarkRangePresent(addr_t start, addr_t end,
-									bool markPresent);
 
 	// map not locked
 	virtual	status_t			UnmapPage(VMArea* area, addr_t address,
@@ -91,6 +89,10 @@ protected:
 									VMAreaMappings* mappingsQueue = NULL);
 			void				UnaccessedPageUnmapped(VMArea* area,
 									page_num_t pageNumber);
+
+	static	void				InvalidateUserTLB(CPUSet cpus, intptr_t context);
+	static	void				InvalidateTLBList(CPUSet cpus, intptr_t context,
+									addr_t* invalidPages, int32 count);
 
 protected:
 			recursive_lock		fLock;

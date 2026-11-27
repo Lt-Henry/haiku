@@ -112,7 +112,7 @@ elif [ $isImage ]; then
 
 		fsShellCommandWrapper()
 		{
-			$actualFSShellCommand 5>&- 6>&- "$@"
+			$actualFSShellCommand 3<&3 4>&4 5>&- 6>&- "$@"
 		}
 
 		bfsShellWrapper()
@@ -306,6 +306,7 @@ echo "Creating filesystem indices..."
 	$mkindex -t string MAIL:pending_chain
 	$mkindex -t string MAIL:priority
 	$mkindex -t string MAIL:reply
+	$mkindex -t string MAIL:label
 	$mkindex -t string MAIL:status
 	$mkindex -t string MAIL:subject
 	$mkindex -t string MAIL:thread

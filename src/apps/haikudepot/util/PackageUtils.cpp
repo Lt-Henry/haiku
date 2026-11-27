@@ -1,11 +1,13 @@
 /*
- * Copyright 2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2024-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
+
 
 #include "PackageUtils.h"
 
 #include "Logger.h"
+
 
 /*!	This method will obtain the title from the package if this is possible or
 	otherwise it will return the name of the package.
@@ -49,6 +51,66 @@ PackageUtils::Summary(const PackageInfoRef& package, BString& summary)
 	} else {
 		summary.SetTo("");
 	}
+}
+
+
+/*static*/ bool
+PackageUtils::HasChangelog(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageLocalizedTextRef localizedText = package->LocalizedText();
+
+		if (localizedText.IsSet())
+			return localizedText->HasChangelog();
+	}
+
+	return false;
+}
+
+
+/*static*/ bool
+PackageUtils::IsPopulatedChangelog(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageLocalizedTextRef localizedText = package->LocalizedText();
+
+		if (localizedText.IsSet())
+			return !localizedText->Changelog().IsEmpty();
+	}
+
+	return false;
+}
+
+
+/*static*/ bool
+PackageUtils::HasUserRatings(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageUserRatingInfoRef userRatingInfo = package->UserRatingInfo();
+
+		if (userRatingInfo.IsSet()) {
+			UserRatingSummaryRef summary = userRatingInfo->Summary();
+
+			if (summary.IsSet())
+				return summary->RatingCount() > 0;
+		}
+	}
+
+	return false;
+}
+
+
+/*static*/ bool
+PackageUtils::IsPopulatedUserRatings(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageUserRatingInfoRef userRatingInfo = package->UserRatingInfo();
+
+		if (userRatingInfo.IsSet())
+			return userRatingInfo->UserRatingsPopulated();
+	}
+
+	return false;
 }
 
 
@@ -113,6 +175,20 @@ PackageUtils::PublisherName(const PackageInfoRef& package)
 
 
 /*static*/ bool
+PackageUtils::IsProminent(const PackageInfoRef& package)
+{
+	if (package.IsSet()) {
+		PackageClassificationInfoRef classificationInfo = package->PackageClassificationInfo();
+
+		if (classificationInfo.IsSet())
+			return classificationInfo->IsProminent();
+	}
+
+	return false;
+}
+
+
+/*static*/ bool
 PackageUtils::IsNativeDesktop(const PackageInfoRef& package)
 {
 	if (package.IsSet()) {
@@ -123,21 +199,6 @@ PackageUtils::IsNativeDesktop(const PackageInfoRef& package)
 	}
 
 	return false;
-}
-
-
-/*static*/ PackageLocalizedTextRef
-PackageUtils::NewLocalizedText(const PackageInfoRef& package)
-{
-	if (!package.IsSet())
-		HDFATAL("it is not possible to get the `LocalizedText` from a not-existing package");
-
-	PackageLocalizedTextRef localizedText = package->LocalizedText();
-
-	if (localizedText.IsSet())
-		return PackageLocalizedTextRef(new PackageLocalizedText(*(localizedText.Get())), true);
-
-	return PackageLocalizedTextRef(new PackageLocalizedText(), true);
 }
 
 
@@ -222,36 +283,6 @@ PackageUtils::Flags(const PackageInfoRef& package)
 	}
 
 	return false;
-}
-
-
-/*static*/ PackageLocalInfoRef
-PackageUtils::NewLocalInfo(const PackageInfoRef& package)
-{
-	if (!package.IsSet())
-		HDFATAL("it is not possible to get the `LocalInfo` from a not-existing package");
-
-	PackageLocalInfoRef localInfo = package->LocalInfo();
-
-	if (localInfo.IsSet())
-		return PackageLocalInfoRef(new PackageLocalInfo(*(localInfo.Get())), true);
-
-	return PackageLocalInfoRef(new PackageLocalInfo(), true);
-}
-
-
-/*static*/ PackageCoreInfoRef
-PackageUtils::NewCoreInfo(const PackageInfoRef& package)
-{
-	if (!package.IsSet())
-		HDFATAL("it is not possible to get the `CoreInfo` from a not-existing package");
-
-	PackageCoreInfoRef coreInfo = package->CoreInfo();
-
-	if (coreInfo.IsSet())
-		return PackageCoreInfoRef(new PackageCoreInfo(*(coreInfo.Get())), true);
-
-	return PackageCoreInfoRef(new PackageCoreInfo(), true);
 }
 
 

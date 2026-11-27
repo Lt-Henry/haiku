@@ -588,7 +588,7 @@ intel_get_backlight_register(bool period)
 			return PCH_SOUTH_BLC_PWM_PERIOD;
 		else
 			return PCH_SOUTH_BLC_PWM_DUTY_CYCLE;
-	} else if (gInfo->shared_info->pch_info >= INTEL_PCH_SPT)
+	} else if (gInfo->shared_info->pch_info >= INTEL_PCH_LPT)
 		return BLC_PWM_PCH_CTL2;
 
 	if (gInfo->shared_info->pch_info == INTEL_PCH_NONE)
@@ -625,7 +625,17 @@ intel_set_brightness(float brightness)
 		duty = std::max(duty, (uint32_t)gInfo->shared_info->min_brightness);
 
 		write32(intel_get_backlight_register(false), duty);
-	} else 	if (gInfo->shared_info->pch_info >= INTEL_PCH_SPT) {
+	} else if (gInfo->shared_info->pch_info >= INTEL_PCH_LPT) {
+		if (gInfo->shared_info->pch_info == INTEL_PCH_LPT) {
+			// Set the override bit, otherwise the PCH PWM takes its duty cycle from the
+			// CPU register (0x48254) and ignores BLC_PWM_PCH_CTL2.
+			uint32_t pchCtl1 = read32(BLC_PWM_PCH_CTL1);
+			if ((pchCtl1 & BLM_PCH_OVERRIDE_ENABLE) == 0) {
+				write32(BLC_PWM_PCH_CTL1, pchCtl1 | BLM_PCH_OVERRIDE_ENABLE);
+				// Post read so the write reaches the hardware before the duty cycle
+				read32(BLC_PWM_PCH_CTL1);
+			}
+		}
 		uint32_t period = read32(intel_get_backlight_register(true)) >> 16;
 
 		uint32_t duty = (uint32_t)(period * brightness) & 0xffff;
@@ -654,11 +664,17 @@ intel_set_brightness(float brightness)
 			shift = 1;
 			period = tmp >> 17;
 		}
+
+		if (period == 0)
+			return B_ERROR;
+
 		if (legacyMode)
-			period *= 0xfe;
+			period *= 0xff;
 		uint32_t duty = (uint32_t)(period * brightness);
 		if (legacyMode) {
-			uint8 lpc = duty / 0xff + 1;
+			// In legacy (combination) mode the effective duty cycle is the PWM
+			// duty cycle multiplied by the LPC value (1..255) in PCI config space.
+			uint8 lpc = (uint8)((uint64)duty * 0xfe / period + 1);
 			duty /= lpc;
 
 			// set pci config reg with lpc
@@ -718,6 +734,10 @@ intel_get_brightness(float* brightness)
 			duty >>= 1;
 		}
 	}
+
+	if (period == 0)
+		return B_ERROR;
+
 	*brightness = (float)duty / period;
 
 	return B_OK;

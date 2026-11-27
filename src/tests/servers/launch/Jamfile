@@ -1,10 +1,8 @@
 SubDir HAIKU_TOP src tests servers launch ;
 
-SubInclude HAIKU_TOP src tests servers launch tools ;
-
 AddSubDirSupportedPlatforms libbe_test ;
 
-UsePrivateHeaders app kernel libroot shared storage support ;
+UsePrivateHeaders app libroot shared storage support ;
 UsePrivateSystemHeaders ;
 
 UseHeaders [ FDirName $(HAIKU_TOP) src bin multiuser ] ;
@@ -29,3 +27,4 @@ UnitTestLib liblaunch_daemontest.so :
 	: be network bnetapi shared [ TargetLibstdc++ ] [ TargetLibsupc++ ]
 ;
 
+SubInclude HAIKU_TOP src tests servers launch tools ;

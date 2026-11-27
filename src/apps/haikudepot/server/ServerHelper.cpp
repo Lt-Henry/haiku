@@ -1,13 +1,10 @@
 /*
- * Copyright 2017-2021, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2017-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
 
 #include "ServerHelper.h"
-
-#include <stdio.h>
-#include <stdlib.h>
 
 #include <Alert.h>
 #include <Application.h>
@@ -24,8 +21,12 @@
 #undef B_TRANSLATION_CONTEXT
 #define B_TRANSLATION_CONTEXT "ServerHelper"
 
-#define KEY_MSG_MINIMUM_VERSION "minimumVersion"
-#define KEY_HEADER_MINIMUM_VERSION "X-Desktop-Application-Minimum-Version"
+static const char* const kKeyMinimumVersion = "minimum_version";
+
+/*! This is an HTTP header that the sever will send back to the client to inform
+	it about a version limit.
+*/
+static const char* const kKeyHeaderMinimumVersion = "X-Desktop-Application-Minimum-Version";
 
 
 /*! \brief This method will cause an alert to be shown to the user regarding a
@@ -116,6 +117,12 @@ ServerHelper::NotifyTransportError(status_t error)
 /*static*/ void
 ServerHelper::AlertTransportError(BMessage* message)
 {
+	if (ServerSettings::ForceNoNetwork()) {
+		HDERROR("Even though the user has opted to force no networking, a network transport error"
+				" is being alerted.");
+		return;
+	}
+
 	status_t error = B_OK;
 	int64 errnoInt64;
 	message->FindInt64("errno", &errnoInt64);
@@ -133,17 +140,23 @@ ServerHelper::AlertTransportError(BMessage* message)
 			break;
 	}
 
-	alertText.SetToFormat(B_TRANSLATE("A network transport error has arisen"
-		" communicating with the server system: %s"),
+	alertText.SetToFormat(B_TRANSLATE("A network transport error has arisen communicating with the"
+									  " server system: %s"),
 		errorDescription.String());
 
-	BAlert* alert = new BAlert(
-		B_TRANSLATE("Network transport error"),
-		alertText,
-		B_TRANSLATE("OK"));
+	BAlert* alert = new BAlert(B_TRANSLATE("Network transport error"), alertText,
+		B_TRANSLATE("Stop network use"), B_TRANSLATE("OK"));
 
 	alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
-	alert->Go();
+
+	switch (alert->Go()) {
+		case 0:
+			HDINFO("user has opted to disable use of networking");
+			ServerSettings::SetForceNoNetwork(true);
+			break;
+		default:
+			break;
+	}
 }
 
 
@@ -153,11 +166,11 @@ ServerHelper::NotifyClientTooOld(const BHttpHeaders& responseHeaders)
 	if (!ServerSettings::IsClientTooOld()) {
 		ServerSettings::SetClientTooOld();
 
-		const char* minimumVersionC = responseHeaders[KEY_HEADER_MINIMUM_VERSION];
+		const char* minimumVersionC = responseHeaders[kKeyHeaderMinimumVersion];
 		BMessage message(MSG_CLIENT_TOO_OLD);
 
 		if (minimumVersionC != NULL && strlen(minimumVersionC) != 0) {
-			message.AddString(KEY_MSG_MINIMUM_VERSION, minimumVersionC);
+			message.AddString(kKeyMinimumVersion, minimumVersionC);
 		}
 
 		be_app->PostMessage(&message);
@@ -171,7 +184,7 @@ ServerHelper::AlertClientTooOld(BMessage* message)
 	BString minimumVersion;
 	BString alertText;
 
-	if (message->FindString(KEY_MSG_MINIMUM_VERSION, &minimumVersion) != B_OK)
+	if (message->FindString(kKeyMinimumVersion, &minimumVersion) != B_OK)
 		minimumVersion = "???";
 
 	alertText.SetToFormat(

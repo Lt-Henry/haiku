@@ -59,8 +59,8 @@ ProblemWindow::ProblemWindow()
 	:
 	BWindow(BRect(0, 0, 400, 300), B_TRANSLATE_COMMENT("Package problems",
 			"Window title"), B_TITLED_WINDOW_LOOK,
-		B_MODAL_APP_WINDOW_FEEL,
-		B_ASYNCHRONOUS_CONTROLS | B_NOT_MINIMIZABLE | B_AUTO_UPDATE_SIZE_LIMITS,
+		B_FLOATING_ALL_WINDOW_FEEL,
+		B_ASYNCHRONOUS_CONTROLS | B_NOT_MINIMIZABLE | B_AUTO_UPDATE_SIZE_LIMITS | B_CLOSE_ON_ESCAPE,
 		B_ALL_WORKSPACES),
 	fDoneSemaphore(-1),
 	fClientWaiting(false),
@@ -71,7 +71,6 @@ ProblemWindow::ProblemWindow()
 	fSolutions(),
 	fPackagesAddedByUser(NULL),
 	fPackagesRemovedByUser(NULL)
-
 {
 	fDoneSemaphore = create_sem(0, "package problems");
 	if (fDoneSemaphore < 0)

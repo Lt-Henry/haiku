@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2020, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2018-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
@@ -54,8 +54,8 @@ LocalRepositoryUpdateProcess::Name() const
 }
 
 
-const char*
-LocalRepositoryUpdateProcess::Description() const
+const BString
+LocalRepositoryUpdateProcess::Description()
 {
 	return B_TRANSLATE("Fetching remote repository data");
 }
@@ -132,6 +132,8 @@ LocalRepositoryUpdateProcess::_RunForRepositoryName(const BString& repoName,
 	BPackageKit::BContext& context, BPackageKit::BPackageRoster& roster,
 	BPackageKit::BRepositoryCache* cache)
 {
+	HDINFO("[%s] will update local repo [%s] cache", Name(), repoName.String());
+
 	status_t result = B_ERROR;
 	BRepositoryConfig repoConfig;
 	result = roster.GetRepositoryConfig(repoName, &repoConfig);
@@ -140,8 +142,7 @@ LocalRepositoryUpdateProcess::_RunForRepositoryName(const BString& repoName,
 			try {
 				BRefreshRepositoryRequest refreshRequest(context, repoConfig);
 				result = refreshRequest.Process();
-				HDINFO("[%s] did update local repo [%s] cache", Name(),
-					repoName.String());
+				HDINFO("[%s] did update local repo [%s] cache", Name(), repoName.String());
 				result = B_OK;
 			} catch (BFatalErrorException& ex) {
 				_NotifyError(ex.Message(), ex.Details());
@@ -181,7 +182,5 @@ LocalRepositoryUpdateProcess::_NotifyError(const BString& error,
 		alertText.Append(")");
 	}
 
-	AppUtils::NotifySimpleError(
-		B_TRANSLATE("Repository update error"),
-		alertText);
+	AppUtils::NotifySimpleError(SimpleAlert(B_TRANSLATE("Repository update error"), alertText));
 }

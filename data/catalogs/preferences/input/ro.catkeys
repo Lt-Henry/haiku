@@ -1,4 +1,4 @@
-1	romanian	x-vnd.Haiku-Input	130668644
+1	romanian	x-vnd.Haiku-Input	993392905
 Defaults	InputMouse		Implicite
 Scrolling	TouchpadPrefView		Derulare
 Long	KeyboardView		Lung
@@ -10,8 +10,11 @@ Double-click speed	SettingsView		Viteză de dublu clic
 Typing test area	KeyboardView		Zonă de test a tastării
 Fast	KeyboardView		Rapid
 Please confirm	TouchpadPrefView		Confirmați
+Trackpad speed	TouchpadPrefView		Viteză trackpad
 Mouse speed	SettingsView		Viteză de maus
+Trackpad acceleration	TouchpadPrefView		Accelerare trackpad
 Horizontal scrolling	TouchpadPrefView		Derulare orizontală
+Reverse scroll direction	TouchpadPrefView		Inversează direcția de derulare
 Keyboard lock delay	TouchpadPrefView		Amânare blocare tastatură
 Input	System name		Intrare
 Quick	TouchpadPrefView		Rapid
@@ -21,9 +24,10 @@ Slow	KeyboardView		Lent
 2-Button	SettingsView		Buton-2
 Click to focus and raise	SettingsView		Clic pentru a focaliza și a ridica
 Vertical	TouchpadPrefView		Vertical
+Low	TouchpadPrefView		Scăzut
 Focus follows mouse	SettingsView		Focalizarea urmărește mausul
-Double-click test area	SettingsView		Zonă de test al dublu clicului
 Focus mode:	SettingsView		Mod de focalizare:
+Double-click test area	SettingsView		Zonă de test al dublu clicului
 Revert	TouchpadPrefView		Revenire
 4-Button	SettingsView		Buton-4
 Tapping sensitivity	TouchpadPrefView		Sensibilitate la atingere
@@ -39,8 +43,8 @@ Accept first click	SettingsView		Acceptă primul clic
 OK	TouchpadPrefView		OK
 Delay until key repeat	KeyboardView		Întârziere până la repetarea tastei
 Two finger scrolling	TouchpadPrefView		Derulare cu două degete
-The new scroll area is very large and may impede normal mouse operation. Do you really want to change it?	TouchpadPrefView		Noua zonă de derulare este foarte mare și poate să împiedice operația normală a mausului. Sigur doriți să o modificați?
 Mouse acceleration	SettingsView		Accelerare de maus
+The new scroll area is very large and may impede normal mouse operation. Do you really want to change it?	TouchpadPrefView		Noua zonă de derulare este foarte mare și poate să împiedice operația normală a mausului. Sigur doriți să o modificați?
 High	TouchpadPrefView		Ridicat
 Defaults	TouchpadPrefView		Implicite
 1-Button	SettingsView		Buton-1

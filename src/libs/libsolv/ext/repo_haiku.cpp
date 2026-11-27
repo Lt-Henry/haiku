@@ -126,7 +126,16 @@ static Id add_package_info_to_repo(Repo *repo, Repodata *repoData,
   if (packageInfo.Architecture() == B_PACKAGE_ARCHITECTURE_ANY)
     solvable->arch = ARCH_ANY;
   else if (packageInfo.Architecture() == B_PACKAGE_ARCHITECTURE_SOURCE)
-    solvable->arch = ARCH_SRC;
+    solvable->arch = ARCH_ANY;
+		// The mapping from the Haiku package source architecture here to the
+		// libsolv any architecture is because Haiku and libsolv have different
+		// ideas about how source packages should work. In libsolv, the source
+		// package does not "provide" anything and so is searched by name, but
+		// this can't work with PackageKit because the packages' names are
+		// prefixed with `pkg:` and so will never be matched; instead by mapping
+		// to "any" architecture on the libsolv side, the source package is seen
+		// as an object that can "provide" something and so can be found for
+		// the purpose of installation.
   else
     solvable->arch = pool_str2id(pool,
       BPackageInfo::kArchitectureNames[packageInfo.Architecture()], 1);
@@ -164,6 +173,7 @@ static Id add_package_info_to_repo(Repo *repo, Repodata *repoData,
   return solvableId;
 }
 
+#if 0
 static void add_installed_packages(Repo *repo, Repodata *repoData,
   BPackageInstallationLocation location)
 {
@@ -191,6 +201,7 @@ int repo_add_haiku_installed_packages(Repo *repo, const char *rootdir,
 
   return 0;
 }
+#endif
 
 Id repo_add_haiku_package(Repo *repo, const char *hpkgPath, int flags)
 {
@@ -201,6 +212,7 @@ Id repo_add_haiku_package(Repo *repo, const char *hpkgPath, int flags)
   return repo_add_haiku_package_info(repo, packageInfo, flags);
 }
 
+#if 0
 int repo_add_haiku_packages(Repo *repo, const char *repoName, int flags)
 {
   BPackageRoster roster;
@@ -219,6 +231,7 @@ int repo_add_haiku_packages(Repo *repo, const char *repoName, int flags)
 
   return 0;
 }
+#endif
 
 Id repo_add_haiku_package_info(Repo *repo,
   const BPackageKit::BPackageInfo &packageInfo, int flags)

@@ -17,6 +17,9 @@
 #include <stdlib.h>
 
 #include <ACPI.h>
+
+#include <util/convertutf.h>
+
 #include "acpi_thermal.h"
 
 #define ACPI_THERMAL_MODULE_NAME "drivers/power/acpi_thermal/driver_v1"
@@ -156,18 +159,53 @@ status_t
 acpi_thermal_control(void* _cookie, uint32 op, void* arg, size_t len)
 {
 	acpi_thermal_device_info* device = (acpi_thermal_device_info*)_cookie;
-	status_t err = B_ERROR;
-
-	acpi_thermal_type* att = NULL;
-
-	acpi_object_type object;
-
-	acpi_data buffer;
-	buffer.pointer = &object;
-	buffer.length = sizeof(object);
+	status_t err = B_DEV_INVALID_IOCTL;
 
 	switch (op) {
+		case B_GET_DEVICE_NAME: {
+			acpi_data buffer;
+
+			buffer.pointer = NULL;
+			buffer.length = ACPI_ALLOCATE_BUFFER;
+
+			err = device->acpi->evaluate_method (device->acpi_cookie, "_STR",
+				NULL, &buffer);
+
+			if (err != B_OK) {
+				dprintf("acpi_thermal: could not get zone name: %s\n", strerror(err));
+				free(buffer.pointer);
+				break;
+			}
+
+			acpi_object_type* object = (acpi_object_type*)buffer.pointer;
+			if (object->object_type == ACPI_TYPE_STRING) {
+				err = user_strlcpy((char*)arg, object->string.string, min(object->string.len, len));
+				free(buffer.pointer);
+			} else if (object->object_type == ACPI_TYPE_BUFFER) {
+				char utf8[256];
+				ssize_t bytes = utf16le_to_utf8(object->buffer.buffer, object->buffer.length / 2,
+					utf8, sizeof(utf8));
+				free(buffer.pointer);
+				if (bytes < 0) {
+					err = bytes;
+					break;
+				}
+
+				err = user_strlcpy((char*)arg, utf8, min((size_t)bytes, len));
+			}
+
+			if (err > 0)
+				err = B_OK;
+			break;
+		}
 		case drvOpGetThermalType: {
+			acpi_object_type object;
+			acpi_thermal_type* att = NULL;
+
+			acpi_data buffer;
+			buffer.pointer = &object;
+			buffer.length = sizeof(object);
+
 			att = (acpi_thermal_type*)arg;
 
 			// Read basic temperature thresholds.
@@ -280,19 +318,21 @@ static status_t
 acpi_thermal_register_child_devices(void* _cookie)
 {
 	device_node* node = _cookie;
-	int path_id;
-	char name[128];
+	char name[B_DEV_NAME_LENGTH];
 
-	path_id = sDeviceManager->create_id(ACPI_THERMAL_PATHID_GENERATOR);
-	if (path_id < 0) {
+	int id = sDeviceManager->create_id(ACPI_THERMAL_PATHID_GENERATOR);
+	if (id < 0) {
 		dprintf("acpi_thermal_register_child_devices: couldn't create a path_id\n");
 		return B_ERROR;
 	}
 
-	snprintf(name, sizeof(name), ACPI_THERMAL_BASENAME, path_id);
+	snprintf(name, sizeof(name), ACPI_THERMAL_BASENAME, id);
 
-	return sDeviceManager->publish_device(node, name,
+	status_t status = sDeviceManager->publish_device(node, name,
 		ACPI_THERMAL_DEVICE_MODULE_NAME);
+	if (status != B_OK)
+		sDeviceManager->free_id(ACPI_THERMAL_PATHID_GENERATOR, id);
+	return status;
 }
 
 

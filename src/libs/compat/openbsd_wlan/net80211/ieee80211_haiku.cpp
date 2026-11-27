@@ -302,6 +302,9 @@ wlan_control(void* cookie, uint32 op, void* arg, size_t length)
 			ifr.ifr_data = (uint8_t*)&nwid;
 
 			if (op == SIOCS80211) {
+				if (ireq.i_len > IEEE80211_NWID_LEN)
+					return B_BAD_VALUE;
+
 				nwid.i_len = ireq.i_len;
 				if (user_memcpy(nwid.i_nwid, ireq.i_data, ireq.i_len) != B_OK)
 					return B_BAD_ADDRESS;
@@ -376,6 +379,8 @@ wlan_control(void* cookie, uint32 op, void* arg, size_t length)
 
 			if (user_memcpy(haiku_join, ireq.i_data, ireq.i_len) != B_OK)
 				return B_BAD_ADDRESS;
+			if (haiku_join->i_nwid_len > IEEE80211_NWID_LEN)
+				return B_BAD_VALUE;
 
 			struct ifreq ifr;
 			struct ieee80211_nwid nwid;
@@ -415,6 +420,8 @@ wlan_control(void* cookie, uint32 op, void* arg, size_t length)
 						wpaparams.i_akms |= IEEE80211_WPA_AKM_SHA256_PSK;
 
 					if (haiku_join->i_key_len != 0) {
+						if (haiku_join->i_key_len > sizeof(wpapsk.i_psk))
+							return B_BAD_VALUE;
 						wpapsk.i_enabled = 1;
 						memcpy(wpapsk.i_psk, haiku_join->i_key, haiku_join->i_key_len);
 						memset(&wpapsk.i_psk[haiku_join->i_key_len], 0,
@@ -489,13 +496,9 @@ ieee80211_rtm_80211info_task(void* arg)
 }
 
 
-#if 0
 void
-ieee80211_notify_scan_done(struct ieee80211vap* vap)
+ieee80211_notify_scan_done(struct ifnet* ifp)
 {
-	release_sem_etc(vap->iv_ifp->scan_done_sem, 1,
-		B_DO_NOT_RESCHEDULE | B_RELEASE_ALL);
-
 	TRACE("%s\n", __FUNCTION__);
 
 	if (sNotificationModule != NULL) {
@@ -503,9 +506,9 @@ ieee80211_notify_scan_done(struct ieee80211vap* vap)
 		KMessage message;
 		message.SetTo(messageBuffer, sizeof(messageBuffer), B_NETWORK_MONITOR);
 		message.AddInt32("opcode", B_NETWORK_WLAN_SCANNED);
-		message.AddString("interface", vap->iv_ifp->device_name);
+		message.AddString("interface", ifp->device_name);
 
 		sNotificationModule->send_notification(&message);
 	}
 }
-#endif
+

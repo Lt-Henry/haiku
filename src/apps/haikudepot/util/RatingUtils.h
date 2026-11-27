@@ -1,14 +1,16 @@
 /*
- * Copyright 2020-2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2020-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 #ifndef RATING_UTILS_H
 #define RATING_UTILS_H
 
 
+#include <Point.h>
 #include <Referenceable.h>
+#include <Size.h>
 
-#include "UserRatingInfo.h"
+#include "PackageUserRatingInfo.h"
 
 
 class BView;
@@ -36,8 +38,6 @@ public:
 	static	void			Draw(BView* target, BPoint at, float value,
 								const BBitmap* star);
 	static	void			Draw(BView* target, BPoint at, float value);
-
-	static	bool			ShouldTryPopulateUserRatings(UserRatingInfoRef userRatingInfo);
 };
 
 

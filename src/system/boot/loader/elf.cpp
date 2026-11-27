@@ -81,7 +81,7 @@ struct ELF32Class {
 		void** _mappedAddress)
 	{
 		status_t status = platform_allocate_region((void**)_address, size,
-			protection, false);
+			protection);
 		if (status != B_OK)
 			return status;
 
@@ -139,8 +139,7 @@ struct ELF64Class {
 		void* address = (void*)*_address;
 #endif
 
-		status_t status = platform_allocate_region(&address, size, protection,
-			false);
+		status_t status = platform_allocate_region(&address, size, protection);
 		if (status != B_OK)
 			return status;
 
@@ -314,8 +313,14 @@ ELFLoader<Class>::Load(int fd, preloaded_image* _image)
 		if (Class::AllocateRegion(&address, totalSize,
 				B_READ_AREA | B_WRITE_AREA | B_EXECUTE_AREA, &mappedRegion)
 				!= B_OK) {
+			dprintf("%s: AllocateRegion failed for address 0x%" B_PRIx64 " (size %" B_PRIuSIZE ")\n",
+				__func__, (int64)address, totalSize);
 			status = B_NO_MEMORY;
 			goto error1;
+		}
+		if (elfHeader.e_type != ET_DYN && address != firstRegion->start) {
+			panic("Non-relocatable ELF image assigned to address 0x%" B_PRIx64 ", not %" B_PRIx64,
+				(uint64)address, (uint64)firstRegion->start);
 		}
 		firstRegion->start = address;
 	}
@@ -600,6 +605,7 @@ ELFLoader<Class>::_ParseDynamicSection(ImageType* image)
 	for (int i = 0; d[i].d_tag != DT_NULL; i++) {
 		switch (d[i].d_tag) {
 			case DT_HASH:
+			case DT_GNU_HASH:
 			case DT_STRTAB:
 				break;
 			case DT_SYMTAB:
@@ -632,7 +638,7 @@ ELFLoader<Class>::_ParseDynamicSection(ImageType* image)
 				break;
 
 			default:
-				continue;
+				break;
 		}
 	}
 

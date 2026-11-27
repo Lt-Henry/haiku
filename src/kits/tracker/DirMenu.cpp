@@ -83,7 +83,7 @@ BDirMenu::~BDirMenu()
 
 
 void
-BDirMenu::Populate(const BEntry* startEntry, BWindow* originatingWindow,
+BDirMenu::Populate(const BEntry* startEntry, BWindow* source,
 	bool includeStartEntry, bool select, bool reverse, bool addShortcuts,
 	bool navMenuEntries)
 {
@@ -96,39 +96,48 @@ BDirMenu::Populate(const BEntry* startEntry, BWindow* originatingWindow,
 
 		ModelMenuItem* menu = NULL;
 
-		if (fMenuBar) {
+		if (fMenuBar != NULL) {
 			menu = new ModelMenuItem(&model, this, true, true);
 			fMenuBar->AddItem(menu);
 		}
 
 		BEntry entry(*startEntry);
 
-		bool showDesktop, showDisksIcon;
+		bool desktopIsRoot, showDisksIcon;
 		{
 			TrackerSettings settings;
-			showDesktop = settings.DesktopFilePanelRoot();
+			desktopIsRoot = settings.DesktopFilePanelRoot();
 			showDisksIcon = settings.ShowDisksIcon();
 		}
 
 		// might start one level above startEntry
 		if (!includeStartEntry) {
-			BDirectory parent;
-			BDirectory dir(&entry);
-
-			if (!showDesktop && dir.InitCheck() == B_OK
-				&& dir.IsRootDirectory()) {
-				// if we're at the root directory skip "mnt" and
-				// go straight to "/"
-				parent.SetTo("/");
-				parent.GetEntry(&entry);
-			} else
+			if (!desktopIsRoot) {
+				BDirectory startDir(&entry);
+				if (startDir.InitCheck() == B_OK && startDir.IsRootDirectory()) {
+					// if we're at the root directory skip "/mnt" and go straight to "/"
+					BDirectory parent;
+					parent.SetTo("/");
+					parent.GetEntry(&entry);
+				}
+			} else {
+				// set start entry to parent directory
 				FSGetParentVirtualDirectoryAware(entry, entry);
+			}
 		}
 
 		BDirectory desktopDir;
 		FSGetDeskDir(&desktopDir);
 		BEntry desktopEntry;
 		desktopDir.GetEntry(&desktopEntry);
+
+		BVolume boot;
+		BVolumeRoster volumeRoster;
+		volumeRoster.GetBootVolume(&boot);
+		BDirectory trashDir;
+		FSGetTrashDir(&trashDir, boot.Device());
+		BEntry trashEntry;
+		trashDir.GetEntry(&trashEntry);
 
 		for (;;) {
 			BNode node(&entry);
@@ -142,38 +151,44 @@ BDirMenu::Populate(const BEntry* startEntry, BWindow* originatingWindow,
 			BEntry parentEntry;
 			bool hitRoot = false;
 
-			BDirectory dir(&entry);
-			if (!showDesktop && dir.InitCheck() == B_OK
-				&& dir.IsRootDirectory()) {
-				// if we're at the root directory skip "mnt" and
-				// go straight to "/"
+			BDirectory startDir(&entry);
+			if (!desktopIsRoot && startDir.InitCheck() == B_OK && startDir.IsRootDirectory()) {
+				// if we're at the root directory skip "mnt" and go straight to "/"
 				hitRoot = true;
 				parentEntry.SetTo("/");
-			} else
+			} else {
+				// set parent entry
 				FSGetParentVirtualDirectoryAware(entry, parentEntry);
+			}
 
-			if (showDesktop) {
-				BEntry root("/");
-				// warp from "/" to Desktop properly
-				if (entry == root) {
+			if (entry == trashEntry) {
+				// Trash appears to be on Desktop
+				parentEntry = desktopEntry;
+					// warp from Trash to Desktop
+			}
+
+			BEntry rootEntry("/");
+			if (desktopIsRoot) {
+				if (entry == rootEntry) {
+					// Disks appears to be on Desktop
 					if (showDisksIcon)
-						AddDisksIconToMenu(reverse);
+						AddItemToDirMenu(&rootEntry, source, reverse, addShortcuts, navMenuEntries);
 					entry = desktopEntry;
+						// warp from "/" to Desktop
 				}
 
 				if (entry == desktopEntry)
 					hitRoot = true;
 			}
 
-			if (result == kReadAttrFailed || !info.fInvisible
-				|| (showDesktop && desktopEntry == entry)) {
-				AddItemToDirMenu(&entry, originatingWindow, reverse,
-					addShortcuts, navMenuEntries);
+			if (result == kReadAttrFailed || (!info.fInvisible || entry == trashEntry)
+				|| (desktopIsRoot && entry == desktopEntry)) {
+				AddItemToDirMenu(&entry, source, reverse, addShortcuts, navMenuEntries);
 			}
 
 			if (hitRoot) {
-				if (!showDesktop && showDisksIcon && *startEntry != "/")
-					AddDisksIconToMenu(reverse);
+				if (!desktopIsRoot && showDisksIcon && *startEntry != "/")
+					AddItemToDirMenu(&rootEntry, source, reverse, addShortcuts, navMenuEntries);
 				break;
 			}
 
@@ -186,8 +201,7 @@ BDirMenu::Populate(const BEntry* startEntry, BWindow* originatingWindow,
 		if (!select)
 			return;
 
-		ModelMenuItem* item
-			= dynamic_cast<ModelMenuItem*>(ItemAt(CountItems() - 1));
+		ModelMenuItem* item = dynamic_cast<ModelMenuItem*>(ItemAt(CountItems() - 1));
 		if (item != NULL) {
 			item->SetMarked(true);
 			if (menu) {
@@ -207,7 +221,7 @@ BDirMenu::Populate(const BEntry* startEntry, BWindow* originatingWindow,
 
 
 void
-BDirMenu::AddItemToDirMenu(const BEntry* entry, BWindow* originatingWindow,
+BDirMenu::AddItemToDirMenu(const BEntry* entry, BWindow* source,
 	bool atEnd, bool addShortcuts, bool navMenuEntries)
 {
 	Model model(entry);
@@ -219,16 +233,14 @@ BDirMenu::AddItemToDirMenu(const BEntry* entry, BWindow* originatingWindow,
 
 	// add reference to the container windows model so that we can
 	// close the window if
-	BContainerWindow* window = originatingWindow ?
-		dynamic_cast<BContainerWindow*>(originatingWindow) : 0;
+	BContainerWindow* window = dynamic_cast<BContainerWindow*>(source);
 	if (window != NULL) {
 		message->AddData("nodeRefsToClose", B_RAW_TYPE,
-			window->TargetModel()->NodeRef(), sizeof (node_ref));
+			window->TargetModel()->NodeRef(), sizeof(node_ref));
 	}
 	ModelMenuItem* item;
 	if (navMenuEntries) {
-		BNavMenu* subMenu = new BNavMenu(model.Name(), B_REFS_RECEIVED,
-			fTarget, window);
+		BNavMenu* subMenu = new BNavMenu(model.Name(), fCommand, fTarget, source);
 		entry_ref ref;
 		entry->GetRef(&ref);
 		subMenu->SetNavDir(&ref);
@@ -254,31 +266,10 @@ BDirMenu::AddItemToDirMenu(const BEntry* entry, BWindow* originatingWindow,
 	item->SetTarget(fTarget);
 
 	if (fMenuBar != NULL) {
-		ModelMenuItem* menu
-			= dynamic_cast<ModelMenuItem*>(fMenuBar->ItemAt(0));
+		ModelMenuItem* menu = dynamic_cast<ModelMenuItem*>(fMenuBar->ItemAt(0));
 		if (menu != NULL) {
 			ThrowOnError(menu->SetEntry(entry));
 			item->SetMarked(true);
 		}
 	}
-}
-
-
-void
-BDirMenu::AddDisksIconToMenu(bool atEnd)
-{
-	BEntry entry("/");
-	Model model(&entry);
-	if (model.InitCheck() != B_OK)
-		return;
-
-	BMessage* message = new BMessage(fCommand);
-	message->AddRef(fEntryName.String(), model.EntryRef());
-
-	ModelMenuItem* item = new ModelMenuItem(&model,
-		B_TRANSLATE(B_DISKS_DIR_NAME), message);
-	if (atEnd)
-		AddItem(item);
-	else
-		AddItem(item, 0);
 }

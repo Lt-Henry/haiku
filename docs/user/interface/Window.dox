@@ -1025,6 +1025,11 @@
 	MessageReceived() instead to alter the window's message dispatching
 	mechanism.
 
+	\warning BWindow::DispatchMessage() calls MenusBeginning() and MenusEnded()
+	when \c B_COMMAND_KEY is held down to register shortcuts in dynamically
+	created menus. BeOS did this so we must too. For shortcuts that use
+	\c B_NO_COMMAND_KEY you must register them in dynamic menus yourself.
+
 	\see BLooper::DispatchMessage()
 
 	\since BeOS R3
@@ -1085,8 +1090,9 @@
 	\brief Hook method that gets called just before a menu owned by the window is
 	       shown.
 
-	\note This method is not invoked by a message, there is no
-	      \c B_MENUS_BEGINNING flag.
+	It will also be invoked while dispatching shortcuts.
+
+	\note This method is not invoked by a message.
 
 	\since BeOS R3
 */
@@ -1097,8 +1103,9 @@
 	\brief Hook method that gets called just before a menu owned by the window is
 	       hidden.
 
-	\note This method is not invoked by a message, there is no
-	      \c B_MENUS_ENDED flag.
+	It will also be invoked after dispatching shortcuts.
+
+	\note This method is not invoked by a message.
 
 	\since BeOS R3
 */
@@ -1294,24 +1301,6 @@
 
 
 //! @{
-
-
-/*!
-	\fn void BWindow::AddShortcut(uint32 key, uint32 modifiers, BMenuItem* item)
-	\brief Creates a keyboard shortcut that activates a menu \a item.
-
-	\param key The character that activates the shortcut, case-insensitive.
-	\param modifiers A bit mask of modifiers in addition to \c B_COMMAND_KEY,
-	       options include:
-	       - \c B_SHIFT_KEY
-	       - \c B_OPTION_KEY
-	       - \c B_CONTROL_KEY
-	       - \c B_MENU_KEY
-	       To remove \c B_COMMAND_KEY specify \c B_NO_COMMAND_KEY.
-	\param item The menu \a item to activate.
-
-	\since Haiku R1
-*/
 
 
 /*!

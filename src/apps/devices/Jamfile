@@ -2,6 +2,7 @@ SubDir HAIKU_TOP src apps devices ;
 
 UsePrivateHeaders shared ;
 UsePrivateHeaders interface ;
+UsePrivateHeaders app ;
 UsePrivateKernelHeaders ;
 UsePrivateSystemHeaders ;
 
@@ -19,8 +20,8 @@ rule ISAPnPHeaderGen
 
 actions ISAPnPHeaderGen1
 {
-	grep '^PNP[[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]] '  $(2[1]) \
-| awk -f $(2[2]) > $(1) ;
+	grep '^PNP[[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]]'  $(2[1]) \
+| $(HOST_AWK) -f $(2[2]) > $(1) ;
 }
 
 ISAPnPHeaderGen [ FGristFiles isapnpids.h ] : isapnp_devids.txt : devlist2h.awk ;
@@ -37,7 +38,7 @@ rule PCIHeaderGen
 
 actions PCIHeaderGen1
 {
-	awk -v HEADERFILE=$(1) -f $(2[2]) $(2[1])
+	$(HOST_AWK) -v HEADERFILE=$(1) -f $(2[2]) $(2[1])
 }
 
 local pciidsFile = pci.ids ;
@@ -57,7 +58,7 @@ rule USBHeaderGen
 
 actions USBHeaderGen1
 {
-	awk -v HEADERFILE=$(1) -f $(2[2]) $(2[1])
+	$(HOST_AWK) -v HEADERFILE=$(1) -f $(2[2]) $(2[1])
 }
 
 local usbidsFile = usb.ids ;
@@ -77,21 +78,24 @@ rule ACPIPnPHeaderGen
 
 actions ACPIPnPHeaderGen1
 {
-	awk -f $(2[1]) $(2[2-]) > $(1) ;
+	$(HOST_PYTHON) $(2[1]) $(2[2-]) > $(1) ;
 }
 
-# files can be updated so:
-# curl --fail -L -o acpi_id_registry.html 'https://uefi.org/uefi-acpi-export'
-# curl --fail -L -o pnp_id_registry.html 'https://uefi.org/uefi-pnp-export'
-local acpiidsFiles = acpi_id_registry.html pnp_id_registry.html ;
+# files can be downloaded from:
+# - acpi_id_registry.csv: https://uefi.org/uefi-acpi-export
+# - pnp_id_registry.csv: https://uefi.org/uefi-pnp-export
+# Note that they are protected by CloudFlare so you have to download through a browser and pass a
+# robot protection check.
+local acpiidsFiles = acpi_id_registry.csv pnp_id_registry.csv ;
 SEARCH on $(acpiidsFiles) = [ FDirName $(HAIKU_TOP) src data ids ] ;
 
 ACPIPnPHeaderGen [ FGristFiles acpipnpids.h ]
-	:  acpipnplist2h.awk : $(acpiidsFiles) ;
+	:  acpipnplist2h.py : $(acpiidsFiles) ;
 
 Application Devices :
 	DevicesApplication.cpp
 	DevicesView.cpp
+	DriverUtils.cpp
 	dm_wrapper.c
 	DeviceACPI.cpp
 	DevicePCI.cpp
@@ -99,7 +103,7 @@ Application Devices :
 	DeviceUSB.cpp
 	Device.cpp
 	PropertyList.cpp
-	: be libcolumnlistview.a tracker [ TargetLibsupc++ ]
+	: be device libcolumnlistview.a tracker shared package [ TargetLibsupc++ ]
 		[ TargetLibstdc++ ]	localestub
 	: Devices.rdef
 ;
@@ -116,7 +120,6 @@ DoCatalogs Devices :
 	Device.cpp
 ;
 
-Includes [ FGristFiles DeviceACPI.cpp ] : [ FGristFiles acpipnpids.h ] ;
+Includes [ FGristFiles DeviceACPI.cpp ] : [ FGristFiles acpipnpids.h isapnpids.h ] ;
 Includes [ FGristFiles DevicePCI.cpp ] : [ FGristFiles pcihdr.h ] ;
 Includes [ FGristFiles DeviceUSB.cpp ] : [ FGristFiles usbhdr.h ] ;
-

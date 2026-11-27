@@ -1,4 +1,4 @@
-1	danish	x-vnd.Haiku-MediaPlayer	100393349
+1	danish	x-vnd.Haiku-MediaPlayer	1255288322
 Remove Entry into Trash	MediaPlayer-RemovePLItemsCmd		Flyt element til papirkurv
 Close	MediaPlayer-PlaylistWindow		Luk
 Volume of background clips	MediaPlayer-SettingsWindow		Lydstyrke for baggrundsklip
@@ -24,7 +24,6 @@ Resume:	MediaPlayer-SettingsWindow		Genoptag:
 Duration	MediaPlayer-InfoWin		Varighed
 Import Entries	MediaPlayer-ImportPLItemsCmd		Importér elementer
 Open network stream	MediaPlayer-Main		Åbn netværksstrøm
-Move file to Trash	MediaPlayer-PlaylistWindow		Flyt fil til papirkurv
 Open file…	MediaPlayer-Main		Åbn fil…
 Scale controls in full screen mode	MediaPlayer-SettingsWindow		Skalér kontroller i fuldskærmstilstand
 View options	MediaPlayer-SettingsWindow		Visningsvalgmuligheder
@@ -44,7 +43,6 @@ Close	MediaPlayer-Main		Luk
 Save error	MediaPlayer-PlaylistWindow		Fejl ved gemning
 Attributes	MediaPlayer-Main		Attributter
 Bottom of screen	MediaPlayer-SettingsWindow		Nederst på skærmen
-MediaPlayer settings	MediaPlayer-SettingsWindow		Medieafspiller-indstillinger
 Copyright	MediaPlayer-InfoWin		Ophavsret
 Invalid URL inserted!	MediaPlayer-NetworkStream		Ugyldig URL indsat!
 Aspect ratio	MediaPlayer-Main		Højde-bredde-forhold

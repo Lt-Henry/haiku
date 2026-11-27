@@ -1,10 +1,13 @@
 /*
- * Copyright 2018-2022, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2018-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 #ifndef ABSTRACT_PROCESS_H
 #define ABSTRACT_PROCESS_H
 
+
+#include <Locker.h>
+#include <StopWatch.h>
 #include <String.h>
 #include <Url.h>
 
@@ -30,7 +33,7 @@ public:
 	virtual						~AbstractProcess();
 
 	virtual	const char*			Name() const = 0;
-	virtual	const char*			Description() const = 0;
+	virtual	const BString		Description() = 0;
 	virtual float				Progress();
 			status_t			Run();
 			status_t			Stop();
@@ -50,15 +53,19 @@ protected:
 
 	static	char				_ProcessStateIdentifier(process_state value);
 
+			bool				_ShouldProcessProgress();
+
 protected:
 			BLocker				fLock;
 
 private:
+			BStopWatch			fStopWatch;
 			ProcessListener*	fListener;
 			bool				fWasStopped;
 			process_state		fProcessState;
 			status_t			fErrorStatus;
 			double				fDurationSeconds;
+			bigtime_t			fLastProgressUpdate;
 };
 
 #endif // ABSTRACT_PROCESS_H

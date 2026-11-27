@@ -7,19 +7,24 @@
 
 #include "Extent.h"
 
+#include "Utility.h"
 #include "VerifyHeader.h"
 
 
 Extent::Extent(Inode* inode)
 	:
 	fInode(inode),
-	fOffset(0)
+	fMap(NULL),
+	fOffset(0),
+	fBlockBuffer(NULL)
 {
 }
 
 
 Extent::~Extent()
 {
+	delete fMap;
+	delete[] fBlockBuffer;
 }
 
 
@@ -150,6 +155,14 @@ Extent::EntrySize(int len) const
 
 
 status_t
+Extent::Rewind()
+{
+	fOffset = 0;
+	return B_OK;
+}
+
+
+status_t
 Extent::GetNext(char* name, size_t* length, xfs_ino_t* ino)
 {
 	TRACE("Extend::GetNext\n");
@@ -232,8 +245,7 @@ Extent::Lookup(const char* name, size_t length, xfs_ino_t* ino)
 		TRACE("offset:(%" B_PRIu32 ")\n", offset);
 		ExtentDataEntry* entry = (ExtentDataEntry*)(fBlockBuffer + offset);
 
-		int retVal = strncmp(name, (char*)entry->name, entry->namelen);
-		if (retVal == 0) {
+		if (xfs_name_comp(name, length, entry->name, entry->namelen)) {
 			*ino = B_BENDIAN_TO_HOST_INT64(entry->inumber);
 			TRACE("ino:(%" B_PRIu64 ")\n", *ino);
 			return B_OK;

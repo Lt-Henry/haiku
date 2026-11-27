@@ -12,7 +12,6 @@
 #include <string.h>
 
 #include <KernelExport.h>
-#include <Locker.h>
 #include <module.h>
 #include <PCI.h>
 
@@ -145,6 +144,8 @@ struct device_node : DoublyLinkedListLinkImpl<device_node> {
 			bool			IsProbed() const { return fLastUpdateCycle != 0; }
 			uint32			Flags() const { return fFlags; }
 
+			uint32			ID() const { return fID; }
+
 			void			Acquire();
 			bool			Release();
 
@@ -187,6 +188,7 @@ private:
 	uint32					fFlags;
 	float					fSupportsParent;
 	uint32					fLastUpdateCycle;
+	uint32					fID;
 
 	const char*				fModuleName;
 
@@ -211,7 +213,28 @@ enum node_flags {
 
 static device_node *sRootNode;
 static recursive_lock sLock;
+static int32 sNextNodeID = 1;
 static const char* sGenericContextPath;
+
+
+static device_node*
+find_node(uint32 id, device_node* parent = sRootNode)
+{
+	if (id == 0 || parent == NULL)
+		return NULL;
+
+	if (parent->ID() == id)
+		return parent;
+
+	NodeList::ConstIterator iterator = parent->Children().GetIterator();
+	while (iterator.HasNext()) {
+		device_node* node = find_node(id, iterator.Next());
+		if (node != NULL)
+			return node;
+	}
+
+	return NULL;
+}
 
 
 //	#pragma mark -
@@ -342,9 +365,8 @@ static status_t
 control_device_manager(const char* subsystem, uint32 function, void* buffer,
 	size_t bufferSize)
 {
-	// TODO: this function passes pointers to userland, and uses pointers
-	// to device nodes that came from userland - this is completely unsafe
-	// and should be changed.
+	RecursiveLocker _(sLock);
+
 	switch (function) {
 		case DM_GET_ROOT:
 		{
@@ -353,7 +375,11 @@ control_device_manager(const char* subsystem, uint32 function, void* buffer,
 				return B_BAD_ADDRESS;
 			if (bufferSize != sizeof(device_node_cookie))
 				return B_BAD_VALUE;
-			cookie = (device_node_cookie)sRootNode;
+
+			if (sRootNode == NULL)
+				return B_ENTRY_NOT_FOUND;
+
+			cookie = (device_node_cookie)sRootNode->ID();
 
 			// copy back to user space
 			return user_memcpy(buffer, &cookie, sizeof(device_node_cookie));
@@ -370,14 +396,17 @@ control_device_manager(const char* subsystem, uint32 function, void* buffer,
 			if (user_memcpy(&cookie, buffer, sizeof(device_node_cookie)) < B_OK)
 				return B_BAD_ADDRESS;
 
-			device_node* node = (device_node*)cookie;
+			device_node* node = find_node((uint32)cookie);
+			if (node == NULL)
+				return B_ENTRY_NOT_FOUND;
+
 			NodeList::ConstIterator iterator = node->Children().GetIterator();
 
 			if (!iterator.HasNext()) {
 				return B_ENTRY_NOT_FOUND;
 			}
 			node = iterator.Next();
-			cookie = (device_node_cookie)node;
+			cookie = (device_node_cookie)node->ID();
 
 			// copy back to user space
 			return user_memcpy(buffer, &cookie, sizeof(device_node_cookie));
@@ -394,8 +423,8 @@ control_device_manager(const char* subsystem, uint32 function, void* buffer,
 			if (user_memcpy(&cookie, buffer, sizeof(device_node_cookie)) < B_OK)
 				return B_BAD_ADDRESS;
 
-			device_node* last = (device_node*)cookie;
-			if (!last->Parent())
+			device_node* last = find_node((uint32)cookie);
+			if (last == NULL || last->Parent() == NULL)
 				return B_ENTRY_NOT_FOUND;
 
 			NodeList::ConstIterator iterator
@@ -412,7 +441,7 @@ control_device_manager(const char* subsystem, uint32 function, void* buffer,
 			if (!iterator.HasNext())
 				return B_ENTRY_NOT_FOUND;
 			device_node* node = iterator.Next();
-			cookie = (device_node_cookie)node;
+			cookie = (device_node_cookie)node->ID();
 
 			// copy back to user space
 			return user_memcpy(buffer, &cookie, sizeof(device_node_cookie));
@@ -428,15 +457,15 @@ control_device_manager(const char* subsystem, uint32 function, void* buffer,
 			if (user_memcpy(&attrInfo, buffer, sizeof(device_attr_info)) < B_OK)
 				return B_BAD_ADDRESS;
 
-			device_node* node = (device_node*)attrInfo.node_cookie;
-			device_attr* last = (device_attr*)attrInfo.cookie;
-			AttributeList::Iterator iterator = node->Attributes().GetIterator();
-			// skip those we already traversed
-			while (iterator.HasNext() && last != NULL) {
-				device_attr* attr = iterator.Next();
+			device_node* node = find_node((uint32)attrInfo.node_cookie);
+			if (node == NULL)
+				return B_ENTRY_NOT_FOUND;
 
-				if (attr == last)
-					break;
+			AttributeList::Iterator iterator = node->Attributes().GetIterator();
+			uint32 index = 0;
+			while (iterator.HasNext() && index < attrInfo.cookie) {
+				iterator.Next();
+				index++;
 			}
 
 			if (!iterator.HasNext()) {
@@ -445,7 +474,7 @@ control_device_manager(const char* subsystem, uint32 function, void* buffer,
 			}
 
 			device_attr* attr = iterator.Next();
-			attrInfo.cookie = (device_node_cookie)attr;
+			attrInfo.cookie++;
 			if (attr->name != NULL)
 				strlcpy(attrInfo.name, attr->name, 254);
 			else
@@ -470,15 +499,72 @@ control_device_manager(const char* subsystem, uint32 function, void* buffer,
 					else
 						attrInfo.value.string[0] = '\0';
 					break;
-				/*case B_RAW_TYPE:
-					if (attr.value.raw.length > attr_info->attr.value.raw.length)
-						attr.value.raw.length = attr_info->attr.value.raw.length;
-					user_memcpy(attr.value.raw.data, attr_info->attr.value.raw.data,
-						attr.value.raw.length);
-					break;*/
+				case B_RAW_TYPE:
+				{
+					size_t userLength = attrInfo.value.raw.length;
+					attrInfo.value.raw.length = min_c(userLength, attr->value.raw.length);
+					if (attrInfo.value.raw.length > 0) {
+						if (!IS_USER_ADDRESS(attrInfo.value.raw.data))
+							return B_BAD_ADDRESS;
+						if (user_memcpy(attrInfo.value.raw.data, attr->value.raw.data,
+								attrInfo.value.raw.length)
+							< B_OK) {
+							return B_BAD_ADDRESS;
+						}
+					}
+					break;
+				}
 			}
 
 			// copy back to user space
+			return user_memcpy(buffer, &attrInfo, sizeof(device_attr_info));
+		}
+
+		case DM_GET_DRIVER_PATH:
+		{
+			struct device_attr_info attrInfo;
+			if (!IS_USER_ADDRESS(buffer))
+				return B_BAD_ADDRESS;
+			if (bufferSize != sizeof(device_attr_info))
+				return B_BAD_VALUE;
+			if (user_memcpy(&attrInfo, buffer, sizeof(device_attr_info)) < B_OK)
+				return B_BAD_ADDRESS;
+
+			device_node* node = find_node((uint32)attrInfo.node_cookie);
+			if (node == NULL)
+				return B_ENTRY_NOT_FOUND;
+
+			const char* driverPath = NULL;
+			if (node->ModuleName() != NULL)
+				driverPath = node->ModuleName();
+
+			if (driverPath == NULL || strncmp(driverPath, "drivers/", 8) != 0) {
+				NodeList::ConstIterator iterator = node->Children().GetIterator();
+				while (iterator.HasNext()) {
+					device_node* child = iterator.Next();
+					if (child->ModuleName() != NULL
+						&& strncmp(child->ModuleName(), "drivers/", 8) == 0) {
+						driverPath = child->ModuleName();
+						break;
+					}
+				}
+			}
+
+			if (driverPath == NULL || driverPath[0] == '\0')
+				return B_ENTRY_NOT_FOUND;
+
+			char* allocatedPath = NULL;
+			status_t status = module_get_path(driverPath, &allocatedPath);
+
+			if (status == B_OK && allocatedPath != NULL) {
+				strlcpy(attrInfo.value.string, allocatedPath, sizeof(attrInfo.value.string));
+				free(allocatedPath);
+			} else {
+				attrInfo.value.string[0] = '\0';
+			}
+
+			attrInfo.type = B_STRING_TYPE;
+
 			return user_memcpy(buffer, &attrInfo, sizeof(device_attr_info));
 		}
 	}
@@ -596,8 +682,8 @@ get_next_child_node(device_node* parent, const device_attr* attributes,
 	while (iterator.HasNext() && last != NULL) {
 		device_node* node = iterator.Next();
 
-		if (node != last)
-			continue;
+		if (node == last)
+			break;
 	}
 
 	// find the next one that fits
@@ -676,7 +762,7 @@ publish_device(device_node *node, const char *path, const char *moduleName)
 	attr = new(std::nothrow) device_attr_private();
 	if (attr != NULL) {
 		char buf[256];
-		sprintf(buf, "dev/%" B_PRIdINO "/path", device->ID());
+		snprintf(buf, sizeof(buf), "dev/%" B_PRIdINO "/path", device->ID());
 		attr->name = strdup(buf);
 		attr->type = B_STRING_TYPE;
 		attr->value.string = strdup(path);
@@ -686,10 +772,20 @@ publish_device(device_node *node, const char *path, const char *moduleName)
 	attr = new(std::nothrow) device_attr_private();
 	if (attr != NULL) {
 		char buf[256];
-		sprintf(buf, "dev/%" B_PRIdINO "/driver", device->ID());
+		snprintf(buf, sizeof(buf), "dev/%" B_PRIdINO "/driver", device->ID());
 		attr->name = strdup(buf);
 		attr->type = B_STRING_TYPE;
 		attr->value.string = strdup(moduleName);
+		node->Attributes().Add(attr);
+	}
+
+	attr = new(std::nothrow) device_attr_private();
+	if (attr != NULL) {
+		attr->name = strdup(B_DEVICE_PUBLISHED_PATH);
+		attr->type = B_STRING_TYPE;
+		char buf[256];
+		snprintf(buf, sizeof(buf), "/dev/%s", path);
+		attr->value.string = strdup(buf);
 		node->Attributes().Add(attr);
 	}
 
@@ -1231,6 +1327,9 @@ device_node::device_node(const char* moduleName, const device_attr* attrs)
 
 	get_attr_uint32(this, B_DEVICE_FLAGS, &fFlags, false);
 	fFlags &= NODE_FLAG_PUBLIC_MASK;
+
+	// Create ID
+	fID = atomic_add(&sNextNodeID, 1);
 }
 
 
@@ -1585,6 +1684,9 @@ device_node::_GetNextDriverPath(void*& cookie, KPath& _path)
 					case PCI_nvm:
 						_AddPath(*stack, "drivers", "disk");
 						break;
+					case PCI_ufs:
+						_AddPath(*stack, "busses", "scsi");
+						break;
 					default:
 						_AddPath(*stack, "busses");
 						break;
@@ -1679,7 +1781,7 @@ device_node::_GetNextDriverPath(void*& cookie, KPath& _path)
 					}
 					const char* bus;
 					if (get_attr_string(this, B_DEVICE_BUS, &bus, false) == B_OK) {
-						if (strcmp(bus, "virtio") == 0)
+						if (strcmp(bus, "virtio") == 0 || strcmp(bus, "hyperv") == 0)
 							_AddPath(*stack, "busses/scsi");
 					}
 					_AddPath(*stack, "drivers", sGenericContextPath);
@@ -1978,8 +2080,8 @@ device_node::Probe(const char* devicePath, uint32 updateCycle)
 			} else if (!strcmp(devicePath, "power")) {
 				matches = type == PCI_data_acquisition;
 			} else if (!strcmp(devicePath, "input")) {
-				matches = type == PCI_data_acquisition
-					&& subType == PCI_data_acquisition_other;
+				matches = type == PCI_input
+					|| (type == PCI_data_acquisition && subType == PCI_data_acquisition_other);
 			}
 		} else {
 			// This driver does not support types, but still wants to its
@@ -2102,6 +2204,9 @@ device_node::UninitUnusedDriver()
 void
 device_node::DeviceRemoved()
 {
+	if ((fFlags & NODE_FLAG_DEVICE_REMOVED) != 0)
+		return;
+
 	// notify children
 	NodeList::ConstIterator iterator = Children().GetIterator();
 	while (iterator.HasNext()) {
@@ -2123,7 +2228,7 @@ device_node::DeviceRemoved()
 	fFlags |= NODE_FLAG_DEVICE_REMOVED;
 
 	if (IsInitialized() && DriverModule()->device_removed != NULL)
-		DriverModule()->device_removed(this);
+		DriverModule()->device_removed(DriverData());
 
 	if ((fFlags & B_KEEP_DRIVER_LOADED) != 0) {
 		// There is no point in keeping this driver loaded when its device
@@ -2357,6 +2462,9 @@ device_manager_probe(const char* path, uint32 updateCycle)
 {
 	TRACE(("device_manager_probe(\"%s\")\n", path));
 	RecursiveLocker _(sLock);
+
+	if (sRootNode == NULL || !sRootNode->IsRegistered())
+		return B_NO_INIT;
 
 	// first, publish directories in the driver directory
 	publish_directories(path);

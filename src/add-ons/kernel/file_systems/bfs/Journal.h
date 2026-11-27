@@ -28,18 +28,22 @@ public:
 			status_t		Lock(Transaction* owner,
 								bool separateSubTransactions);
 			status_t		Unlock(Transaction* owner, bool success);
+			void			AssertLocked() { ASSERT_LOCKED_RECURSIVE(&fLock); }
 
 			status_t		ReplayLog();
 
-			Transaction*	CurrentTransaction() const { return fOwner; }
 			size_t			CurrentTransactionSize() const;
 			bool			CurrentTransactionTooLarge() const;
 
 			status_t		FlushLogAndBlocks();
+			status_t		FlushLogAndLockJournal();
+
 			Volume*			GetVolume() const { return fVolume; }
 			int32			TransactionID() const { return fTransactionID; }
 
 	inline	uint32			FreeLogBlocks() const;
+
+			status_t		MoveLog(block_run newLog);
 
 #ifdef BFS_DEBUGGER_COMMANDS
 			void			Dump();
@@ -49,7 +53,8 @@ private:
 			bool			_HasSubTransaction() const
 								{ return fHasSubtransaction; }
 
-			status_t		_FlushLog(bool canWait, bool flushBlocks);
+			status_t		_FlushLog(bool canWait, bool flushBlocks,
+								bool alreadyLocked = false);
 			uint32			_TransactionSize() const;
 			status_t		_WriteTransactionToLog();
 			status_t		_CheckRunArray(const run_array* array);

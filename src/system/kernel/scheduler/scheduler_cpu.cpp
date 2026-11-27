@@ -112,15 +112,14 @@ CPUEntry::Stop()
 
 	// get rid of irqs
 	SpinLocker locker(entry->irqs_lock);
-	irq_assignment* irq
-		= (irq_assignment*)list_get_first_item(&entry->irqs);
+	irq_assignment* irq = entry->irqs.First();
 	while (irq != NULL) {
 		locker.Unlock();
 
 		assign_io_interrupt_to_cpu(irq->irq, -1);
 
 		locker.Lock();
-		irq = (irq_assignment*)list_get_first_item(&entry->irqs);
+		irq = entry->irqs.First();
 	}
 	locker.Unlock();
 }
@@ -326,7 +325,7 @@ CPUEntry::_RequestPerformanceLevel(ThreadData* threadData)
 		return;
 	}
 
-	int32 load = std::max(threadData->GetLoad(), fCore->GetLoad());
+	int32 load = std::min(std::max(threadData->GetLoad(), fCore->GetLoad()), kMaxLoad);
 	ASSERT_PRINT(load >= 0 && load <= kMaxLoad, "load is out of range %"
 		B_PRId32 " (max of %" B_PRId32 " %" B_PRId32 ")", load,
 		threadData->GetLoad(), fCore->GetLoad());
@@ -468,6 +467,8 @@ CoreEntry::AddCPU(CPUEntry* cpu)
 	ASSERT(fCPUCount >= 0);
 	ASSERT(fIdleCPUCount >= 0);
 
+	WriteSpinLocker coreLocker(gCoreHeapsLock);
+
 	fIdleCPUCount++;
 	if (fCPUCount++ == 0) {
 		// core has been reenabled
@@ -490,10 +491,12 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 	ASSERT(fCPUCount > 0);
 	ASSERT(fIdleCPUCount > 0);
 
+	WriteSpinLocker coreLocker(gCoreHeapsLock);
+
 	fIdleCPUCount--;
 	fCPUSet.ClearBit(cpu->ID());
 	if (--fCPUCount == 0) {
-		// unassign threads
+		// unassign non-queued threads
 		thread_map(CoreEntry::_UnassignThread, this);
 
 		// core has been disabled
@@ -510,16 +513,19 @@ CoreEntry::RemoveCPU(CPUEntry* cpu, ThreadProcessing& threadPostProcessing)
 		fPackage->RemoveIdleCore(this);
 
 		// get rid of threads
+		coreLocker.Unlock();
 		while (fRunQueue.PeekMaximum() != NULL) {
 			ThreadData* threadData = fRunQueue.PeekMaximum();
 
 			Remove(threadData);
+			threadData->UnassignCore();
 
 			ASSERT(threadData->Core() == NULL);
 			threadPostProcessing(threadData);
 		}
+		coreLocker.Lock();
 
-		fThreadCount = 0;
+		ASSERT(fThreadCount == 0);
 	}
 
 	fCPUHeap.ModifyKey(cpu, -1);
@@ -608,7 +614,7 @@ CoreEntry::_UnassignThread(Thread* thread, void* data)
 	CoreEntry* core = static_cast<CoreEntry*>(data);
 	ThreadData* threadData = thread->scheduler_data;
 
-	if (threadData->Core() == core && thread->pinned_to_cpu == 0)
+	if (!threadData->IsEnqueued() && threadData->Core() == core && thread->pinned_to_cpu == 0)
 		threadData->UnassignCore();
 }
 

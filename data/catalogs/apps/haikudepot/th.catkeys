@@ -1,4 +1,4 @@
-1	thai	x-vnd.Haiku-HaikuDepot	2640598917
+1	thai	x-vnd.Haiku-HaikuDepot	793320247
 Available packages	MainWindow		แพ็คเกจที่มี
 It was not possible to create the new user.	UserLoginWindow		ไม่สามารถสร้างผู้ใช้ใหม่ได้
 Create account	UserLoginWindow		สร้างบัญชี
@@ -15,14 +15,12 @@ Name	PackageListView		ชื่ิอ
 Authorization or security issue. Logout and log back in again to check that your password is correct and also check that you have agreed to the latest usage conditions.	ServerHelper		ปัญหาการอนุญาตหรือความปลอดภัย ออกจากระบบและเข้าสู่ระบบอีกครั้งเพื่อตรวจสอบว่ารหัสผ่านของคุณถูกต้องและตรวจสอบว่าคุณได้ยอมรับเงื่อนไขการใช้งานล่าสุด
 Rate %Package%	RatePackageWindow		อัตรา %Package%
 An error occurred while initializing the package manager: %message%	LocalPkgDataLoadProcess		เกิดข้อผิดพลาดขณะเตรียมใช้งานตัวจัดการแพคเกจ: %message%
-Quit HaikuDepot	App		ออกจาก HaikuDepot
 Category	FilterView		หมวดหมู่
 A response to the captcha question must be provided.	UserLoginWindow		ต้องตอบคำถาม captcha
 An unexpected error '%Message%' has arisen with property '%Property%'	UserLoginWindow		ข้อผิดพลาดที่ไม่คาดคิด '%Message%' เกิดขึ้นกับคุณสมบัติ '%Property%'
 A requested object or an object involved in the request was not found on the server.	ServerHelper		ไม่พบวัตถุที่ร้องขอหรือวัตถุที่เกี่ยวข้องในคำขอบนเซิร์ฟเวอร์
 No changelog available.	PackageInfoView		ไม่มีการเปลี่ยนแปลง
 Version	PackageListView		เวอร์ชั่น
-No, quit HaikuDepot	App		ไม่, ปิด HaikuDepot
 Not logged in	MainWindow		ไม่ได้เข้าสู่ระบบ
 Featured packages	FeaturedPackagesView		แพคเกจเฉพาะ
 Available	PackageListView		พร้อมใช้งาน
@@ -45,8 +43,8 @@ The email is malformed.	UserLoginWindow		อีเมลผิดรูปแบ
 Synchronizing package data for repository '%REPO_NAME%'	ServerPkgDataUpdateProcess		การซิงโครไนซ์ข้อมูลแพ็คเกจสำหรับที่เก็บ '%REPO_NAME%'
 View the usage conditions	UserLoginWindow		ดูเงื่อนไขการใช้งาน
 Size	PackageListView		ขนาด
-Your rating was updated.	RatePackageWindow		คะแนนของคุณได้รับการอัพเดท
 All categories	FilterView		ทุกประเภท
+Your rating was updated.	RatePackageWindow		คะแนนของคุณได้รับการอัพเดท
 n/a	PackageInfoView		n/a
 Cancel	MainWindow		ยกเลิก
 Refresh repositories	MainWindow		รีเฟรชการจัดเก็บ
@@ -76,7 +74,6 @@ Authentication failed	UserLoginWindow		การรับรองความ�
 Captcha error	UserLoginWindow		ข้อผิดพลาด Captcha
 Manage repositories…	MainWindow		จัดการที่เก็บ
 The nickname must be unique, but the supplied nickname is already taken. Choose a different nickname.	UserLoginWindow		ชื่อเล่นจะต้องไม่ซ้ำกัน แต่ชื่อเล่นที่ให้มาได้ถูกใช้ไปแล้ว เลือกชื่อเล่นอื่น
-Open %DeskbarLink%	PackageManager		เปิด %DeskbarLink%
 Input validation	UserLoginWindow		การตรวจสอบอินพุต
 Log in…	MainWindow		เข้าใช้งาน
 Client version too old	ServerHelper		รุ่นไคลเอ็นต์เก่าเกินไป
@@ -100,14 +97,12 @@ This application writes and reads some working files on your computer in order t
 <Package contents not available for remote packages>	PackageContentsView		<เนื้อหาแพ็คเกจไม่พร้อมใช้งานสำหรับแพ็คเกจแบบรีโมต>
 Ratings	PackageInfoView		อัตรา
 Local	LocalPkgDataLoadProcess		ท้องถิ่น
-User rating	RatePackageWindow		คะแนนจากผู้ใช้
 Installed packages	MainWindow		แพคเกจที่ติดตั้ง
-Error	App		ผิดพลาด
+User rating	RatePackageWindow		คะแนนจากผู้ใช้
 There was a puzzling response from the web service.	UserLoginWindow		มีการตอบสนองที่น่าสงสัยจากบริการบนเว็บ
 Your rating was uploaded successfully. You can update or remove it at the HaikuDepot Server website.	RatePackageWindow		คะแนนของคุณได้รับการอัปโหลดเรียบร้อยแล้ว คุณสามารถอัปเดตหรือลบได้ที่เว็บไซต์เซิร์ฟเวอร์ HaikuDepot
 It was not possible to communicate with the server to obtain a captcha image required to create a new user.	UserLoginWindow		ไม่สามารถสื่อสารกับเซิร์ฟเวอร์เพื่อรับอิมเมจ captcha ที่ต้องการเพื่อสร้างผู้ใช้ใหม่
 The supplied response to the captcha is incorrect. A new captcha will be generated; try again.	UserLoginWindow		การตอบกลับที่ระบุไปยัง captcha ไม่ถูกต้อง captcha ใหม่จะถูกสร้างขึ้น ลองอีกครั้ง.
-HaikuDepot needs the package daemon to function, and it appears to be not running.\nWould you like to start it now?	App		HaikuDepot ต้องการ package daemon เพื่อทำงานและดูเหมือนว่าจะไม่ทำงาน \nคุณต้องการเริ่มต้นทันทีไหม?
 The password must be at least eight characters long, consist of at least two digits and one upper case character.	UserLoginWindow		รหัสผ่านจะต้องมีความยาวอย่างน้อยแปดตัวอักษรประกอบด้วยอย่างน้อยสองหลักและตัวอักษรตัวใหญ่หนึ่งตัว
 Contents	PackageInfoView		เนื้อหา
 Close	PackageManager		ปิด
@@ -116,8 +111,8 @@ About	PackageInfoView		เกี่ยวกับ
 Password:	UserLoginWindow		รหัส:
 Stability	RatePackageWindow		ความเสถียร
 The password must be repeated in order to reduce the chance of entering the password incorrectly.	UserLoginWindow		ต้องทำซ้ำรหัสผ่านเพื่อลดโอกาสในการป้อนรหัสผ่านไม่ถูกต้อง
-Cancel	RatePackageWindow		ยกเลิก
 Inactive	PackageListView		ไม่ใช้งาน
+Cancel	RatePackageWindow		ยกเลิก
 Nickname:	UserLoginWindow		ชื่อเล่น:
 Synchronizing meta-data about repositories	ServerRepositoryDataUpdateProcess		การซิงโครไนซ์ข้อมูลเมตาเกี่ยวกับที่เก็บ
 OK	MainWindow		ตกลง

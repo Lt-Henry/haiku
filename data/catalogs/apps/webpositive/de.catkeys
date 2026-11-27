@@ -1,4 +1,4 @@
-1	german	x-vnd.Haiku-WebPositive	371749163
+1	german	x-vnd.Haiku-WebPositive	3459776802
 Authentication required	Authentication Panel		Anmeldung erforderlich
 Previous	WebPositive Window		Zurück
 Copy	Console Window		Kopieren
@@ -63,7 +63,6 @@ WebPositive	System name		WebPositive
 Old name: %s	BookmarkBar		Alter Name: %s
 Expiration	Cookie Manager		Ablaufdatum
 Reload	WebPositive Window		Aktualisieren
-Your CPU is too old and does not support the SSE2 extensions, without which WebPositive cannot run. We recommend installing NetSurf instead.	WebPositive		Der Prozessor ist zu alt und unterstützt keine SSE2-Erweiterungen, ohne die WebPositive nicht läuft. Es wird empfohlen NetSurf zu installieren.
 Download finished	Download Window		Download abgeschlossen
 Cookie manager	WebPositive Window		Cookieverwaltung
 Username:	Authentication Panel		Benutzername:
@@ -90,6 +89,7 @@ New tab	WebPositive Window		Neuer Reiter
 Increase size	WebPositive Window		Vergrößern
 Today	WebPositive Window		Heute
 Open location	WebPositive Window		URL öffnen
+There are still downloads in progress, do you really want to quit %appname% now?	WebPositive		Es werden noch Dateien heruntergeladen. Soll %appname% wirklich beendet werden?
 New browser window	Download Window		Neues Browser-Fenster
 Open	Download Window		Öffnen
 New window	WebPositive Window		Neues Fenster
@@ -109,6 +109,7 @@ Apply	Settings Window		Anwenden
 There was an error trying to show the Bookmarks folder.\n\nError: %error	WebPositive Window	Don't translate variable %error	Der Lesezeichen-Ordner kann nicht angezeigt werden.\n\nFehler: %error
 Revert	Settings Window		Anfangswerte
 Copy	WebPositive Window		Kopieren
+Your CPU is too old and does not support the SSE2 extensions, without which %appname% cannot run. We recommend installing NetSurf instead.	WebPositive		Der Prozessor ist zu alt und unterstützt keine SSE2-Erweiterungen, ohne die %appname% nicht läuft. Es wird empfohlen NetSurf zu installieren.
 {0, plural,one{Last line repeated # time.}other{Last line repeated # times.}}	Console Window		{0, plural,one{Die letzte Zeile wurde einmal wiederholt.}other{Die letzte Zeile wurde # mal wiederholt.}}
 Default standard font size:	Settings Window		Größe der Standard-Schrift:
 Custom	Settings Window		Benutzerdefiniert
@@ -118,7 +119,6 @@ Remove	Download Window		Entfernen
 Close tab	WebPositive Window		Reiter schließen
 About	WebPositive Window		Über
 Continue downloads	WebPositive		Downloads fortsetzen
-There are still downloads in progress, do you really want to quit WebPositive now?	WebPositive		Es werden noch Dateien heruntergeladen. Soll WebPositive wirklich beendet werden?
 Proxy server requires authentication	Settings Window		Der Proxy-Server verlangt eine Authentifizierung
 Cancel	Settings Window		Abbrechen
 Reset size	WebPositive Window		Größe zurücksetzen
@@ -142,7 +142,6 @@ Next	WebPositive Window		Vorwärts
 Bookmark error	WebPositive Window		Lesezeichen Fehler
 OK	WebPositive Window		OK
 (%currentSize% of %expectedSize%, %rate%/s)	Download Window		(%currentSize% von %expectedSize%, %rate%/s)
-WebPositive	Download Window		WebPositive
 Save page as…	WebPositive Window		Seite speichern unter …
 Zoom text only	WebPositive Window		Nur Text vergrößern
 Page source error	WebPositive Window		Fehler im Quellcode der Seite
@@ -153,6 +152,8 @@ Window	WebPositive Window		Fenster
 Proxy server address:	Settings Window		Proxy-Serveradresse:
 Search page:	Settings Window		Suchmachine:
 Settings	WebPositive Window		Einstellungen
+Show in Tracker	BookmarkBar		In Tracker zeigen
+(%currentSize% received, %rate%/s)	Download Window		(%currentSize% empfangen, %rate%/s)
 Clear	URL Bar		Leeren
 Loading %url	WebPositive Window		%url wird geladen
 The quick brown fox jumps over the lazy dog.	Font Selection view	Don't translate this literally ! Use a phrase showing all chars from A to Z.	Falsches Üben von Xylophonmusik quält jeden größeren Zwerg.

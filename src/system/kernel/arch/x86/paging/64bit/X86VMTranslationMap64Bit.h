@@ -13,7 +13,7 @@
 struct X86PagingStructures64Bit;
 
 
-struct X86VMTranslationMap64Bit final : X86VMTranslationMap {
+struct X86VMTranslationMap64Bit : X86VMTranslationMap {
 								X86VMTranslationMap64Bit(bool la57);
 	virtual						~X86VMTranslationMap64Bit();
 
@@ -27,9 +27,6 @@ struct X86VMTranslationMap64Bit final : X86VMTranslationMap {
 									uint32 attributes, uint32 memoryType,
 									vm_page_reservation* reservation);
 	virtual	status_t			Unmap(addr_t start, addr_t end);
-
-	virtual	status_t			DebugMarkRangePresent(addr_t start, addr_t end,
-									bool markPresent);
 
 	virtual	status_t			UnmapPage(VMArea* area, addr_t address,
 									bool updatePageQueue,

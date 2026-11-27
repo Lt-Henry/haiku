@@ -18,7 +18,7 @@
 #include <arch/smp.h>
 #include <arch_system_info.h>
 #include <boot/kernel_args.h>
-#include <int.h>
+#include <interrupts.h>
 #include <thread.h>
 #include <vm/vm.h>
 #include <vm/VMAddressSpace.h>
@@ -326,13 +326,6 @@ X86PagingMethod32Bit::Init(kernel_args* args,
 	large_memory_physical_page_ops_init(args, pool, poolCount, sizeof(*pool),
 		fPhysicalPageMapper, fKernelPhysicalPageMapper);
 		// TODO: Select the best page mapper!
-
-	// enable global page feature if available
-	if (x86_check_feature(IA32_FEATURE_PGE, FEATURE_COMMON)) {
-		// this prevents kernel pages from being flushed from TLB on
-		// context-switch
-		x86_write_cr4(x86_read_cr4() | IA32_CR4_GLOBAL_PAGES);
-	}
 
 	TRACE("X86PagingMethod32Bit::Init(): done\n");
 

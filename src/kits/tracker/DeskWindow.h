@@ -65,10 +65,9 @@ public:
 
 	DesktopPoseView* PoseView() const;
 
-	void UpdateDesktopBackgroundImages();
-		// Desktop window has special background image handling
-
 	void SaveDesktopPoseLocations();
+
+	virtual bool ShouldHaveDraggableFolderIcon() { return false; };
 
 protected:
 	virtual BPoseView* NewPoseView(Model*, uint32);
@@ -85,7 +84,6 @@ private:
 
 	BRect fOldFrame;
 
-	node_ref* fNodeRef;
 	char* fShortcutsSettings;
 
 	typedef BContainerWindow _inherited;

@@ -1,4 +1,4 @@
-1	ukrainian	x-vnd.Haiku-LaunchBox	1878360293
+1	ukrainian	x-vnd.Haiku-LaunchBox	574531707
 Set description…	LaunchBox		Додати опис…
 Really close this pad?\n(The pad will not be remembered.)	LaunchBox		Дійсно закрити цю панель?\n(Вона не збережеться.)
 OK	LaunchBox		ОК
@@ -7,10 +7,11 @@ Show on all workspaces	LaunchBox		Показувати на усіх робоч�
 Name Panel	LaunchBox		Назва панелі
 Autostart	LaunchBox		Автозапуск
 Clone	LaunchBox		Клонувати
-Description for '%3'	LaunchBox		Опис для '%3'
+Description for '%3'	LaunchBox		Опис для «%3»
 Show window border	LaunchBox		Показувати рамку вікна
-\n\nFailed to launch application with signature '%2'.\n\nError:	LaunchBox		\n\nНе вдалось запустити програму з сигнатурою'%2'.\n\nПомилка:
-Failed to launch 'something', error in Pad data.	LaunchBox		Не вдалось запустити 'дещо'. Помилка в даних панелі.
+Failed to open folder - is Tracker running?	LaunchBox		Не вдалося відкрити папку – чи працює Tracker?
+\n\nFailed to launch application with signature '%2'.\n\nError:	LaunchBox		\n\nНе вдалося запустити програму з сигнатурою «%2».\n\nПомилка:
+Failed to launch 'something', error in Pad data.	LaunchBox		Не вдалось запустити «дещо». Помилка в даних панелі.
 LaunchBox	System name		LaunchBox
 Auto-raise	LaunchBox		Випливати автоматично
 %ld × %ld	LaunchBox	The '×' is the Unicode multiplication sign U+00D7	%ld × %ld
@@ -24,7 +25,7 @@ Bummer	LaunchBox		Помилка
 last chance	LaunchBox		остання спроба
 You can drag an icon here.	LaunchBox		Ви можете перетягнути значок сюди.
 Pad 1	LaunchBox		Панель 1
-Failed to launch '%1'.\n\nError:	LaunchBox		Невдалий запуск '%1'.\n\nПомилка:
+Failed to launch '%1'.\n\nError:	LaunchBox		Невдалий запуск «%1».\n\nПомилка:
 Settings	LaunchBox		Налаштування
 Vertical layout	LaunchBox		Розмістити вертикально
 Pad	LaunchBox		Панель

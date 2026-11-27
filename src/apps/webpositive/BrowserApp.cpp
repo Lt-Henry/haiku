@@ -88,10 +88,11 @@ BrowserApp::BrowserApp()
 	get_cpuid(&info, 1, 0);
 
 	if ((info.eax_1.features & (1 << 26)) == 0) {
-		BAlert alert(B_TRANSLATE("No SSE2 support"), B_TRANSLATE("Your CPU is "
+		BString text(B_TRANSLATE("Your CPU is "
 			"too old and does not support the SSE2 extensions, without which "
-			"WebPositive cannot run. We recommend installing NetSurf instead."),
-			B_TRANSLATE("Darn!"));
+			"%appname% cannot run. We recommend installing NetSurf instead."));
+		text.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("WebPositive"));
+		BAlert alert(B_TRANSLATE("No SSE2 support"), text, B_TRANSLATE("Darn!"));
 		alert.Go();
 		exit(-1);
 	}
@@ -248,47 +249,57 @@ BrowserApp::ReadyToRun()
 
 	int32 pagesCreated = 0;
 	bool fullscreen = false;
-	if (fLaunchRefsMessage) {
-		_RefsReceived(fLaunchRefsMessage, &pagesCreated, &fullscreen);
-		delete fLaunchRefsMessage;
-		fLaunchRefsMessage = NULL;
-	}
 
-	// If no refs led to a new open page, open new session if set
-	if (fSession->InitCheck() == B_OK && pagesCreated == 0) {
+	// Handle startup session / page
+	if (fSession->InitCheck() == B_OK) {
 		const char* kSettingsKeyStartUpPolicy = "start up policy";
 		uint32 fStartUpPolicy = fSettings->GetValue(kSettingsKeyStartUpPolicy,
 			(uint32)ResumePriorSession);
+		// If requested not to load previous session
 		if (fStartUpPolicy == StartNewSession) {
-			PostMessage(NEW_WINDOW);
+			// Check if lauchrefs will open a page
+			if (fLaunchRefsMessage == NULL) {
+				// else open new window
+				PostMessage(NEW_WINDOW);
+			}
 		} else {
 			// otherwise, restore previous session
 			BMessage archivedWindow;
 			for (int i = 0; fSession->FindMessage("window", i, &archivedWindow)
 				== B_OK; i++) {
 				BRect frame = archivedWindow.FindRect("window frame");
+				uint32 workspaces = B_CURRENT_WORKSPACE;
+				archivedWindow.FindUInt32("window workspaces", 0, &workspaces);
 				BString url;
-				archivedWindow.FindString("tab", 0, &url);
-				BrowserWindow* window = new(std::nothrow) BrowserWindow(frame,
-					fSettings, url, fContext);
+				if (archivedWindow.FindString("tab", 0, &url) == B_OK) {
+					BrowserWindow* window = new(std::nothrow) BrowserWindow(frame, fSettings, url,
+						fContext, INTERFACE_ELEMENT_ALL, NULL, workspaces);
 
-				if (window != NULL) {
-					window->Show();
-					pagesCreated++;
-
-					for (int j = 1; archivedWindow.FindString("tab", j, &url)
-						== B_OK; j++) {
-						printf("Create %d:%d\n", i, j);
-						_CreateNewTab(window, url, false);
+					if (window != NULL) {
+						window->Show();
 						pagesCreated++;
+
+						for (int j = 1; archivedWindow.FindString("tab", j, &url)
+							== B_OK; j++) {
+							printf("Create %d:%d\n", i, j);
+							_CreateNewTab(window, url, false);
+							pagesCreated++;
+						}
 					}
 				}
 			}
 		}
 	}
+	// If there is fLauchRefs message,
+	if (fLaunchRefsMessage != NULL) {
+		_RefsReceived(fLaunchRefsMessage, &pagesCreated, &fullscreen);
+		delete fLaunchRefsMessage;
+		fLaunchRefsMessage = NULL;
+	}
 
-	// If previous session did not contain any window, create a new empty one.
-	if (pagesCreated == 0)
+	// If previous session did not contain any window on this workspace, create a new empty one.
+	BrowserWindow* window = _FindWindowOnCurrentWorkspace();
+	if (pagesCreated == 0 || window == NULL)
 		_CreateNewWindow("", fullscreen);
 
 	PostMessage(PRELOAD_BROWSING_HISTORY);
@@ -379,10 +390,11 @@ bool
 BrowserApp::QuitRequested()
 {
 	if (fDownloadWindow->DownloadsInProgress()) {
-		BAlert* alert = new BAlert(B_TRANSLATE("Downloads in progress"),
-			B_TRANSLATE("There are still downloads in progress, do you really "
-			"want to quit WebPositive now?"), B_TRANSLATE("Quit"),
-			B_TRANSLATE("Continue downloads"));
+		BString text(B_TRANSLATE("There are still downloads in progress, do you really "
+			"want to quit %appname% now?"));
+		text.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("WebPositive"));
+		BAlert* alert = new BAlert(B_TRANSLATE("Downloads in progress"), text,
+			B_TRANSLATE("Quit"), B_TRANSLATE("Continue downloads"));
 		int32 choice = alert->Go();
 		if (choice == 1) {
 			if (fWindowCount == 0) {
@@ -470,6 +482,8 @@ BrowserApp::_RefsReceived(BMessage* message, int32* _pagesCreated,
 	bool* _fullscreen)
 {
 	int32 pagesCreated = 0;
+	if (_pagesCreated != NULL)
+		pagesCreated = *_pagesCreated;
 
 	BrowserWindow* window = NULL;
 	if (message->FindPointer("window", (void**)&window) != B_OK)
@@ -507,6 +521,29 @@ BrowserApp::_RefsReceived(BMessage* message, int32* _pagesCreated,
 
 
 BrowserWindow*
+BrowserApp::_FindWindowOnCurrentWorkspace()
+{
+	BrowserWindow* windowOnCurrentWorkspace = NULL;
+	uint32 workspace = 1 << current_workspace();
+
+	for (int i = 0; BWindow* window = WindowAt(i); i++) {
+		BrowserWindow* webWindow = dynamic_cast<BrowserWindow*>(window);
+		if (webWindow == NULL)
+			continue;
+
+		if (webWindow->Lock()) {
+			if (webWindow->Workspaces() & workspace)
+				windowOnCurrentWorkspace = webWindow;
+			webWindow->Unlock();
+			if (windowOnCurrentWorkspace)
+				return windowOnCurrentWorkspace;
+		}
+	}
+	return NULL;
+}
+
+
+BrowserWindow*
 BrowserApp::_CreateNewPage(const BString& url, BrowserWindow* webWindow,
 	bool fullscreen, bool useBlankTab)
 {
@@ -524,30 +561,28 @@ BrowserApp::_CreateNewPage(const BString& url, BrowserWindow* webWindow,
 	}
 
 	// Otherwise, try to find one in the current workspace
-	uint32 workspace = 1 << current_workspace();
-
 	bool loadedInWindowOnCurrentWorkspace = false;
-	for (int i = 0; BWindow* window = WindowAt(i); i++) {
-		webWindow = dynamic_cast<BrowserWindow*>(window);
-		if (!webWindow)
-			continue;
+	BrowserWindow* window = _FindWindowOnCurrentWorkspace();
 
-		if (webWindow->Lock()) {
-			if (webWindow->Workspaces() & workspace) {
-				if (useBlankTab && webWindow->IsBlankTab()) {
-					if (url.Length() != 0)
-						webWindow->CurrentWebView()->LoadURL(url);
-				} else
-					webWindow->CreateNewTab(url, true);
-				webWindow->Activate();
-				webWindow->CurrentWebView()->MakeFocus(true);
-				loadedInWindowOnCurrentWorkspace = true;
-			}
-			webWindow->Unlock();
+	if (window == NULL)
+		return _CreateNewWindow(url, fullscreen);
+
+
+	if (window->Lock()) {
+		if (useBlankTab && window->IsBlankTab()) {
+			if (url.Length() != 0)
+				window->CurrentWebView()->LoadURL(url);
+		} else {
+			window->CreateNewTab(url, true);
 		}
-		if (loadedInWindowOnCurrentWorkspace)
-			return webWindow;
+		window->Activate();
+		window->CurrentWebView()->MakeFocus(true);
+		loadedInWindowOnCurrentWorkspace = true;
+
+		window->Unlock();
 	}
+	if (loadedInWindowOnCurrentWorkspace)
+		return window;
 
 	// Finally, if no window is available, let's create one.
 	return _CreateNewWindow(url, fullscreen);

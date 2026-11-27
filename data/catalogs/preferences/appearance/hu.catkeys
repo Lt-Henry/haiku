@@ -1,4 +1,4 @@
-1	hungarian	x-vnd.Haiku-Appearance	211365410
+1	hungarian	x-vnd.Haiku-Appearance	838951555
 Control border	Colors tab		Vezérlőelem kerete
 Control mark	Colors tab		Vezérlőelem jelölése
 Off	AntialiasingSettingsView		Ki
@@ -47,6 +47,7 @@ Automatically pick secondary colors	Colors tab		A másodlagos színek automatiku
 Window tab text	Colors tab		Ablakfül szövege
 Navigation pulse	Colors tab		Navigációs pulzálás
 LCD subpixel	AntialiasingSettingsView		LCD-szubpixel
+Progress bar	Colors tab		Folyamatjelző
 Window tab	Colors tab		Ablakfül
 Link text	Colors tab		Hivatkozás szövege
 Tooltip background	Colors tab		Eszköztár háttere
@@ -75,6 +76,5 @@ Inactive window border	Colors tab		Inaktív ablakkeret
 Colors	APRWindow		Színek
 About control look	DecorSettingsView		Névjegy
 Control highlight	Colors tab		Kiválasztott vezérlőelem
-Status bar	Colors tab		Állapotsor
 Link hover	Colors tab		Kijelölt hivatkozás
 Single:	DecorSettingsView		Egyszeres:

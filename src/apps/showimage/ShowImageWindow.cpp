@@ -1,5 +1,5 @@
 /*
- * Copyright 2003-2014, Haiku, Inc. All Rights Reserved.
+ * Copyright 2003-2026, Haiku, Inc. All Rights Reserved.
  * Copyright 2004-2005 yellowTAB GmbH. All Rights Reserverd.
  * Copyright 2006 Bernd Korz. All Rights Reserved
  * Distributed under the terms of the MIT License.
@@ -12,6 +12,7 @@
  *		Bernd Korz
  *		Axel Dörfler, axeld@pinc-software.de
  *		Stephan Aßmus <superstippi@gmx.de>
+ *		Philippe Houdoin
  */
 
 
@@ -51,8 +52,9 @@
 #include <TranslationUtils.h>
 #include <TranslatorRoster.h>
 
+#include <posix/locale.h>
+
 #include "ImageCache.h"
-#include "ProgressWindow.h"
 #include "ShowImageApp.h"
 #include "ShowImageConstants.h"
 #include "ShowImageStatusView.h"
@@ -65,8 +67,8 @@
 const char* kTypeField = "be:type";
 const char* kTranslatorField = "be:translator";
 
-const bigtime_t kDefaultSlideShowDelay = 3000000;
-	// 3 seconds
+const bigtime_t kDefaultSlideShowDelay = 3000000; // 3 seconds
+const bigtime_t kQuietLoadingDelay = 200000; // 200ms
 
 
 // message constants
@@ -103,25 +105,11 @@ enum {
 	kMsgStretchToWindow			= 'mStW',
 	kMsgNextSlide				= 'mNxS',
 	kMsgToggleToolBar			= 'mTTB',
+	kMsgToggleBoundariesMarks	= 'mTBM',
 	kMsgSlideToolBar			= 'mSTB',
-	kMsgFinishSlidingToolBar	= 'mFST'
+	kMsgFinishSlidingToolBar	= 'mFST',
+	kMsgShowLoadingProgress		= 'mSLP'
 };
-
-
-// This is temporary solution for building BString with printf like format.
-// will be removed in the future.
-static void
-bs_printf(BString* string, const char* format, ...)
-{
-	va_list ap;
-	char* buf;
-
-	va_start(ap, format);
-	vasprintf(&buf, format, ap);
-	string->SetTo(buf);
-	free(buf);
-	va_end(ap);
-}
 
 
 //	#pragma mark -- ShowImageWindow
@@ -134,7 +122,7 @@ bs_printf(BString* string, const char* format, ...)
 ShowImageWindow::ShowImageWindow(BRect frame, const entry_ref& ref,
 	const BMessenger& trackerMessenger)
 	:
-	BWindow(frame, "", B_DOCUMENT_WINDOW, 0),
+	BWindow(frame, kApplicationName, B_DOCUMENT_WINDOW, 0),
 	fNavigator(ref, trackerMessenger),
 	fSavePanel(NULL),
 	fBar(NULL),
@@ -144,14 +132,15 @@ ShowImageWindow::ShowImageWindow(BRect frame, const entry_ref& ref,
 	fToolBar(NULL),
 	fImageView(NULL),
 	fStatusView(NULL),
-	fProgressWindow(new ProgressWindow()),
 	fModified(false),
 	fFullScreen(false),
 	fShowCaption(true),
 	fShowToolBar(true),
+	fShowBoundariesMarks(false),
 	fPrintSettings(NULL),
 	fSlideShowRunner(NULL),
-	fSlideShowDelay(kDefaultSlideShowDelay)
+	fSlideShowDelay(kDefaultSlideShowDelay),
+	fQuietLoadRunner(NULL)
 {
 	_ApplySettings();
 
@@ -243,6 +232,8 @@ ShowImageWindow::ShowImageWindow(BRect frame, const entry_ref& ref,
 	fImageView->SetExplicitMinSize(BSize(0, 0));
 	gridLayout->AddView(fImageView, 0, 0, 2, 1);
 
+	fImageView->EnableBoundariesMarks(fShowBoundariesMarks);
+
 	// create the scroll bars (wrapped to avoid double borders)
 	fVScrollBar = new BScrollBar(NULL, NULL, 0, 0, B_VERTICAL); {
 		BGroupView* vScrollBarContainer = new BGroupView(B_VERTICAL, 0);
@@ -252,11 +243,13 @@ ShowImageWindow::ShowImageWindow(BRect frame, const entry_ref& ref,
 	}
 
 	fHScrollBar = new BScrollBar(NULL, NULL, 0, 0, B_HORIZONTAL); {
-		BGroupView* hScrollBarContainer = new BGroupView(B_VERTICAL, 0);
+		BGroupView* hScrollBarContainer = new BGroupView(B_HORIZONTAL, 0);
 		hScrollBarContainer->GroupLayout()->AddView(fHScrollBar);
 		hScrollBarContainer->GroupLayout()->SetInsets(0, -1, -1, -1);
 		gridLayout->AddView(hScrollBarContainer, 1, 1);
 	}
+
+	fToolBar->ResizeTo(-fVScrollBar->PreferredSize().width, fToolBar->MinSize().height);
 
 	fVScrollBar->SetTarget(fImageView);
 	fHScrollBar->SetTarget(fImageView);
@@ -268,13 +261,6 @@ ShowImageWindow::ShowImageWindow(BRect frame, const entry_ref& ref,
 	float toolBarMinWidth = fToolBar->MinSize().width;
 	SetSizeLimits(std::max(menuBarMinWidth, toolBarMinWidth), 100000,
 		fBar->MinSize().height + gridLayout->MinSize().height, 100000);
-
-	// finish creating the window
-	if (_LoadImage() != B_OK) {
-		_LoadError(ref);
-		Quit();
-		return;
-	}
 
 	// add View menu here so it can access ShowImageView methods
 	BMenu* menu = new BMenu(B_TRANSLATE_CONTEXT("View", "Menus"));
@@ -299,16 +285,20 @@ ShowImageWindow::ShowImageWindow(BRect frame, const entry_ref& ref,
 	// and tell this window if it contains interesting data or not
 	be_app_messenger.SendMessage(B_CLIPBOARD_CHANGED);
 
-	// The window will be shown on screen automatically
+	status_t status = _LoadImage();
+	if (status != B_OK) {
+		_LoadError(ref, status);
+		Quit();
+		return;
+	}
+
+	// The window will show up on screen automatically
 	Run();
 }
 
 
 ShowImageWindow::~ShowImageWindow()
 {
-	fProgressWindow->Lock();
-	fProgressWindow->Quit();
-
 	_StopSlideShow();
 }
 
@@ -372,6 +362,10 @@ ShowImageWindow::_BuildViewMenu(BMenu* menu, bool popupMenu)
 
 	_MarkMenuItem(menu, MSG_SCALE_BILINEAR, fImageView->ScaleBilinear());
 	_MarkMenuItem(menu, kMsgStretchToWindow, fImageView->StretchesToBounds());
+
+	_AddItemMenu(menu, B_TRANSLATE("Show boundaries marks"),
+		kMsgToggleBoundariesMarks, 'M', 0, this);
+	_MarkMenuItem(menu, kMsgToggleBoundariesMarks, fImageView->IsBoundariesMarksEnabled());
 
 	if (!popupMenu) {
 		_AddItemMenu(menu, B_TRANSLATE("Show tool bar"), kMsgToggleToolBar,
@@ -542,9 +536,8 @@ ShowImageWindow::_ResizeWindowToImage()
 
 	// TODO: use View::GetPreferredSize() instead?
 	BRect r(bitmap->Bounds());
-	float width = r.Width() + be_control_look->GetScrollBarWidth(B_VERTICAL);
-	float height = r.Height() + 1 + fBar->Frame().Height()
-		+ be_control_look->GetScrollBarWidth(B_HORIZONTAL);
+	float width = r.Width() + fVScrollBar->PreferredSize().width;
+	float height = r.Height() + 1 + fBar->Frame().Height() + fHScrollBar->PreferredSize().height;
 
 	BRect frame = screen.Frame();
 	const float windowBorder = 5;
@@ -650,8 +643,6 @@ ShowImageWindow::MessageReceived(BMessage* message)
 	switch (message->what) {
 		case kMsgImageCacheImageLoaded:
 		{
-			fProgressWindow->Stop();
-
 			BitmapOwner* bitmapOwner = NULL;
 			message->FindPointer("bitmapOwner", (void**)&bitmapOwner);
 
@@ -674,12 +665,17 @@ ShowImageWindow::MessageReceived(BMessage* message)
 				break;
 			}
 
+			// image loading done
+			delete fQuietLoadRunner;
+			fQuietLoadRunner = NULL;
+			fStatusView->SetBusy(false);
+
 			status_t status = fImageView->SetImage(message);
 			if (status != B_OK) {
 				if (bitmapOwner != NULL)
 					bitmapOwner->ReleaseReference();
 
-				_LoadError(ref);
+				_LoadError(ref, status);
 
 				// quit if file could not be opened
 				if (first)
@@ -708,12 +704,24 @@ ShowImageWindow::MessageReceived(BMessage* message)
 
 		case kMsgImageCacheProgressUpdate:
 		{
-			entry_ref ref;
-			if (message->FindRef("ref", &ref) == B_OK
-				&& ref == fNavigator.CurrentRef()) {
-				message->what = kMsgProgressUpdate;
-				fProgressWindow->PostMessage(message);
+			_LoadProgressUpdate(message);
+			break;
+		}
+
+		case kMsgShowLoadingProgress:
+		{
+			delete fQuietLoadRunner;
+			fQuietLoadRunner = NULL;
+
+			if (fImageView->Bitmap() == NULL) {
+				// first image still loading, show window now
+				// so user can see loading progress status
+				Show();
+				BPath path(&fNavigator.CurrentRef());
+				SetTitle(path.Path());
 			}
+			// long image loading, show progress status
+			fStatusView->SetBusy();
 			break;
 		}
 
@@ -751,8 +759,11 @@ ShowImageWindow::MessageReceived(BMessage* message)
 			_EnableMenuItem(fBar, MSG_PAGE_PREV, fNavigator.HasPreviousPage());
 			fGoToPageMenu->SetEnabled(pages > 1);
 
-			_EnableMenuItem(fBar, MSG_FILE_NEXT, fNavigator.HasNextFile());
-			_EnableMenuItem(fBar, MSG_FILE_PREV, fNavigator.HasPreviousFile());
+			// Disable next/previous if this is the only image in the folder.
+			if (!fNavigator.HasNextFile() && !fNavigator.HasPreviousFile()) {
+				_EnableMenuItem(fBar, MSG_FILE_NEXT, false);
+				_EnableMenuItem(fBar, MSG_FILE_PREV, false);
+			}
 
 			if (fGoToPageMenu->CountItems() != pages) {
 				// Only rebuild the submenu if the number of
@@ -902,8 +913,13 @@ ShowImageWindow::MessageReceived(BMessage* message)
 			break;
 
 		case MSG_FILE_PREV:
-			if (_ClosePrompt() && fNavigator.PreviousFile())
-				_LoadImage(false);
+			if (_ClosePrompt()) {
+				if (!fNavigator.PreviousFile()) {
+					// Wrap to last file
+					fNavigator.LastFile();
+				}
+				_LoadImage();
+			}
 			break;
 
 		case MSG_FILE_NEXT:
@@ -1089,6 +1105,20 @@ ShowImageWindow::MessageReceived(BMessage* message)
 			}
 			break;
 		}
+
+		case kMsgToggleBoundariesMarks:
+		{
+			fShowBoundariesMarks = _ToggleMenuItem(message->what);
+			fImageView->EnableBoundariesMarks(fShowBoundariesMarks);
+
+			ShowImageSettings* settings = my_app->Settings();
+			if (settings->Lock()) {
+				settings->SetBool("ShowBoundariesMarks", fShowBoundariesMarks);
+				settings->Unlock();
+			}
+			break;
+		}
+
 		case kShowToolBarIfEnabled:
 		{
 			bool show;
@@ -1097,6 +1127,7 @@ ShowImageWindow::MessageReceived(BMessage* message)
 			_SetToolBarVisible(fShowToolBar && show, true);
 			break;
 		}
+
 		case kMsgSlideToolBar:
 		{
 			float offset;
@@ -1109,6 +1140,7 @@ ShowImageWindow::MessageReceived(BMessage* message)
 			}
 			break;
 		}
+
 		case kMsgFinishSlidingToolBar:
 		{
 			float offset;
@@ -1169,13 +1201,12 @@ ShowImageWindow::_UpdateStatusText(const BMessage* message)
 
 
 void
-ShowImageWindow::_LoadError(const entry_ref& ref)
+ShowImageWindow::_LoadError(const entry_ref& ref, status_t status)
 {
-	// TODO: give a better error message!
-	BAlert* alert = new BAlert(B_TRANSLATE_SYSTEM_NAME("ShowImage"),
-		B_TRANSLATE_CONTEXT("Could not load image! Either the "
-			"file or an image translator for it does not exist.",
-			"LoadAlerts"),
+	locale_t locale = newlocale(LC_ALL_MASK, "", 0);
+	const char* errorMessage = strerror_l(status, locale);
+	freelocale(locale);
+	BAlert* alert = new BAlert(kApplicationName, errorMessage,
 		B_TRANSLATE_CONTEXT("OK", "Alerts"), NULL, NULL,
 		B_WIDTH_AS_USUAL, B_STOP_ALERT);
 	alert->SetFlags(alert->Flags() | B_CLOSE_ON_ESCAPE);
@@ -1295,15 +1326,16 @@ ShowImageWindow::_ClosePrompt()
 	BString prompt;
 
 	if (count > 1) {
-		bs_printf(&prompt,
-			B_TRANSLATE("The document '%s' (page %d) has been changed. Do you "
-				"want to close the document?"),
-			fImageView->Image()->name, page);
+		BString pageString;
+		pageString << page;
+		prompt = B_TRANSLATE("The document '%filename%' (page %number%)"
+			" has been changed. Do you want to close the document?");
+		prompt.ReplaceFirst("%filename%", fImageView->Image()->name);
+		prompt.ReplaceFirst("%number%", pageString);
 	} else {
-		bs_printf(&prompt,
-			B_TRANSLATE("The document '%s' has been changed. Do you want to "
-				"close the document?"),
-			fImageView->Image()->name);
+		prompt = B_TRANSLATE("The document '%filename%' has been changed."
+			" Do you want to close the document?"),
+		prompt.ReplaceFirst("%filename%", fImageView->Image()->name);
 	}
 
 	BAlert* alert = new BAlert(B_TRANSLATE("Close document"), prompt.String(),
@@ -1334,7 +1366,11 @@ ShowImageWindow::_LoadImage(bool forward)
 	if (status != B_OK)
 		return status;
 
-	fProgressWindow->Start(this);
+	// start of quiet loading phase
+	// fire a runner to show load progress if it take too long time
+	fStatusView->SetBusyText("Loading...");
+	fQuietLoadRunner
+		= new BMessageRunner(this, new BMessage(kMsgShowLoadingProgress), kQuietLoadingDelay, 1);
 
 	// Preload previous/next images - two in the navigation direction, one
 	// in the opposite direction.
@@ -1363,6 +1399,29 @@ ShowImageWindow::_PreloadImage(bool forward, entry_ref& ref)
 
 
 void
+ShowImageWindow::_LoadProgressUpdate(const BMessage* message)
+{
+	entry_ref ref;
+	if (message->FindRef("ref", &ref) != B_OK || ref != fNavigator.CurrentRef()) {
+		// not the current image, ignore
+		return;
+	}
+
+	float percent;
+	const char* text = NULL;
+
+	bool hasPercent = message->FindFloat("percent", &percent) == B_OK;
+	message->FindString("message", &text);
+
+	if (text)
+		fStatusView->SetBusyText(BString(text));
+
+	if (hasPercent)
+		fStatusView->SetBusyProgress(percent / 100.0f);
+}
+
+
+void
 ShowImageWindow::_ToggleFullScreen()
 {
 	BRect frame;
@@ -1372,8 +1431,8 @@ ShowImageWindow::_ToggleFullScreen()
 		fWindowFrame = Frame();
 		frame = screen.Frame();
 		frame.top -= fBar->Bounds().Height() + 1;
-		frame.right += be_control_look->GetScrollBarWidth(B_VERTICAL);
-		frame.bottom += be_control_look->GetScrollBarWidth(B_HORIZONTAL);
+		frame.right += fVScrollBar->PreferredSize().width;
+		frame.bottom += fHScrollBar->PreferredSize().height;
 
 		SetFlags(Flags() | B_NOT_RESIZABLE | B_NOT_MOVABLE);
 
@@ -1394,6 +1453,7 @@ ShowImageWindow::_ToggleFullScreen()
 
 	fImageView->SetHideIdlingCursor(fFullScreen);
 	fImageView->SetShowCaption(fFullScreen && fShowCaption);
+	fImageView->SetNoBackground(fFullScreen && fSlideShowRunner != NULL);
 
 	Layout(false);
 		// We need to manually relayout here, as the views are layouted
@@ -1424,6 +1484,8 @@ ShowImageWindow::_ApplySettings()
 			settings->GetFloat("PO:Height", fPrintOptions.Height()));
 
 		fShowToolBar = settings->GetBool("ShowToolBar", fShowToolBar);
+
+		fShowBoundariesMarks = settings->GetBool("ShowBoundariesMarks", fShowBoundariesMarks);
 
 		settings->Unlock();
 	}

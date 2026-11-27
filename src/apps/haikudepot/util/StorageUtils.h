@@ -5,9 +5,11 @@
 #ifndef PATH_UTILS_H
 #define PATH_UTILS_H
 
+
 #include <Path.h>
 
 #include "Language.h"
+
 
 class StorageUtils {
 
@@ -50,6 +52,7 @@ public:
     static	status_t		DumpExportPkgDataPath(BPath& path, const BString& repositorySourceCode,
     							const LanguageRef language);
 
+	static	status_t		FreeBytesForPackageInstall(off_t* size);
 };
 
 #endif // PATH_UTILS_H

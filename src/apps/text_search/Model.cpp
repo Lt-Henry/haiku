@@ -208,22 +208,58 @@ Model::AddToHistory(const char* text)
 
 
 void
+Model::ClearHistory()
+{
+	BList items;
+	if (!_LoadHistory(items))
+		return;
+
+	items.RemoveItems(0, items.CountItems());
+
+	_SaveHistory(items);
+	_FreeHistory(items);
+}
+
+
+void
 Model::FillHistoryMenu(BMenu* menu) const
 {
 	BList items;
 	if (!_LoadHistory(items))
 		return;
 
+	BFont font;
+	menu->GetFont(&font);
+	float maxWidth = font.StringWidth("M") * 80;
+
 	for (int32 t = items.CountItems() - 1; t >= 0; --t) {
 		BString* item = static_cast<BString*>(items.ItemAtFast(t));
 		BMessage* message = new BMessage(MSG_SELECT_HISTORY);
 		message->AddString("text", item->String());
+		font.TruncateString(item, B_TRUNCATE_MIDDLE, maxWidth);
 		menu->AddItem(new BMenuItem(item->String(), message));
 	}
 
 	_FreeHistory(items);
 }
 
+
+BString
+Model::GetHistoryItem(int32 index)
+{
+	BList items;
+	if (!_LoadHistory(items))
+		return NULL;
+
+	int32 itemCount = items.CountItems() - 1;
+	if (index > itemCount)
+		return NULL;
+
+	// latest entry is at the end of the BList
+	BString* itemtext = static_cast<BString*>(items.ItemAt(itemCount - index));
+
+	return itemtext->String();
+}
 
 // #pragma mark - private
 

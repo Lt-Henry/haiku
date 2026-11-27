@@ -8,25 +8,39 @@
 #include <boot/stage2.h>
 #include <boot/stdio.h>
 
+#include "arm_registers.h"
 #include "efi_platform.h"
 #include "generic_mmu.h"
 #include "mmu.h"
 #include "serial.h"
+#include "smp.h"
 
 #include "aarch64.h"
 
-extern "C" void arch_enter_kernel(
-	struct kernel_args* kernelArgs, addr_t kernelEntry, addr_t kernelStackTop);
 
 extern const char* granule_type_str(int tg);
 
-extern uint32_t arch_mmu_generate_post_efi_page_tables(size_t memory_map_size,
-	efi_memory_descriptor* memory_map, size_t descriptor_size, uint32_t descriptor_version);
 
-extern void arch_mmu_post_efi_setup(size_t memory_map_size, efi_memory_descriptor* memory_map,
-	size_t descriptor_size, uint32_t descriptor_version);
+// From entry.S
+extern "C" void arch_enter_kernel(struct kernel_args* kernelArgs,
+	addr_t kernelEntry, addr_t kernelStackTop, uint32 cpu);
 
-extern void arch_mmu_setup_EL1(uint64 tcr);
+// From arch_mmu.cpp
+extern void arch_mmu_post_efi_setup(size_t memoryMapSize,
+	efi_memory_descriptor *memoryMap, size_t descriptorSize,
+	uint32_t descriptorVersion);
+
+extern phys_addr_t arch_mmu_generate_post_efi_page_tables(size_t memoryMapSize,
+	efi_memory_descriptor *memoryMap, size_t descriptorSize,
+	uint32_t descriptorVersion);
+
+
+void arm64_mmu_setup();
+
+// Primary CPU EL2 register values (TTBR0_EL2, MAIR_EL2, VBAR_EL2)
+static uint64 sTranslationBaseRegister;
+static uint64 sMemoryBaseRegister;
+static uint64 sVectorBaseRegister;
 
 
 void
@@ -37,49 +51,101 @@ arch_convert_kernel_args(void)
 
 
 void
+arm64_common_cpu_startup(uint32 cpu)
+{
+	arch_cache_disable();
+
+	// Enable EL2 host bits if FEAT_VHE is available
+	uint64 el = arch_exception_level();
+	bool e2h = false;
+	if (el == 2) {
+		uint64 id_aa64mmfr1_el1 = READ_SPECIALREG(ID_AA64MMFR1_EL1);
+		if (ID_AA64MMFR1_VH(id_aa64mmfr1_el1) == ID_AA64MMFR1_VH_IMPL) {
+			e2h = true;
+			WRITE_SPECIALREG(HCR_EL2, HCR_RW | HCR_TGE | HCR_E2H | HCR_AMO | HCR_IMO | HCR_FMO);
+			WRITE_SPECIALREG(CPACR_EL1, CPACR_FPEN_TRAP_NONE);
+		}
+	}
+
+	// EL2 with E2H enabled behaves as a superset of EL1
+	//
+	// EL2 without E2H enabled does not, so we need to drop to EL1
+	if (el == 1 || e2h) {
+		arm64_mmu_setup();
+	} else {
+		arm64_mmu_setup();
+		// A secondary CPU released from a spin table starts with EL2 registers uninitialized
+		// so we need to copy them from the primary CPU before calling _arch_transition_EL2_EL1
+		if (cpu == 0) {
+			sTranslationBaseRegister = READ_SPECIALREG(TTBR0_EL2);
+			sMemoryBaseRegister = READ_SPECIALREG(MAIR_EL2);
+			sVectorBaseRegister = READ_SPECIALREG(VBAR_EL2);
+		} else {
+			WRITE_SPECIALREG(TTBR0_EL2, sTranslationBaseRegister);
+			WRITE_SPECIALREG(MAIR_EL2, sMemoryBaseRegister);
+			WRITE_SPECIALREG(VBAR_EL2, sVectorBaseRegister);
+			arm64_isb();
+		}
+		_arch_transition_EL2_EL1();
+	}
+
+	WRITE_SPECIALREG(CNTKCTL_EL1, 0b11);
+
+	WRITE_SPECIALREG(SCTLR_EL1, SCTLR_LSMAOE | SCTLR_nTLSMD
+		| SCTLR_UCI | SCTLR_SPAN | SCTLR_IESB | SCTLR_nTWE | SCTLR_nTWI
+		| SCTLR_UCT | SCTLR_DZE | SCTLR_SED | SCTLR_SA0 | SCTLR_SA);
+
+	arch_cache_enable();
+}
+
+
+void
 arch_start_kernel(addr_t kernelEntry)
 {
 	// Prepare to exit EFI boot services.
 	// Read the memory map.
 	// First call is to determine the buffer size.
-	size_t memory_map_size = 0;
+	size_t memoryMapSize = 0;
 	efi_memory_descriptor dummy;
-	efi_memory_descriptor* memory_map;
-	size_t map_key;
-	size_t descriptor_size;
-	uint32_t descriptor_version;
-	if (kBootServices->GetMemoryMap(
-			&memory_map_size, &dummy, &map_key, &descriptor_size, &descriptor_version)
-		!= EFI_BUFFER_TOO_SMALL) {
+	size_t mapKey;
+	size_t descriptorSize;
+	uint32_t descriptorVersion;
+	if (kBootServices->GetMemoryMap(&memoryMapSize, &dummy, &mapKey,
+			&descriptorSize, &descriptorVersion) != EFI_BUFFER_TOO_SMALL) {
 		panic("Unable to determine size of system memory map");
 	}
 
 	// Allocate a buffer twice as large as needed just in case it gets bigger
 	// between calls to ExitBootServices.
-	size_t actual_memory_map_size = memory_map_size * 2;
-	memory_map = (efi_memory_descriptor*) kernel_args_malloc(actual_memory_map_size);
+	size_t actualMemoryMapSize = memoryMapSize * 2;
+	efi_memory_descriptor *memoryMap
+		= (efi_memory_descriptor *)kernel_args_malloc(actualMemoryMapSize);
 
-	if (memory_map == NULL)
+	if (memoryMap == NULL)
 		panic("Unable to allocate memory map.");
 
 	// Read (and print) the memory map.
-	memory_map_size = actual_memory_map_size;
-	if (kBootServices->GetMemoryMap(
-			&memory_map_size, memory_map, &map_key, &descriptor_size, &descriptor_version)
-		!= EFI_SUCCESS) {
+	memoryMapSize = actualMemoryMapSize;
+	if (kBootServices->GetMemoryMap(&memoryMapSize, memoryMap, &mapKey,
+			&descriptorSize, &descriptorVersion) != EFI_SUCCESS) {
 		panic("Unable to fetch system memory map.");
 	}
 
-	addr_t addr = (addr_t) memory_map;
+	addr_t addr = (addr_t)memoryMap;
 	efi_physical_addr loaderCode = 0LL;
 	dprintf("System provided memory map:\n");
-	for (size_t i = 0; i < memory_map_size / descriptor_size; ++i) {
-		efi_memory_descriptor* entry = (efi_memory_descriptor*) (addr + i * descriptor_size);
-		dprintf("  phys: 0x%0lx-0x%0lx, virt: 0x%0lx-0x%0lx, size = 0x%0lx, type: %s (%#x), attr: "
-				"%#lx\n",
-			entry->PhysicalStart, entry->PhysicalStart + entry->NumberOfPages * B_PAGE_SIZE,
-			entry->VirtualStart, entry->VirtualStart + entry->NumberOfPages * B_PAGE_SIZE,
-			entry->NumberOfPages * B_PAGE_SIZE, memory_region_type_str(entry->Type), entry->Type,
+	for (size_t i = 0; i < memoryMapSize / descriptorSize; i++) {
+		efi_memory_descriptor *entry
+			= (efi_memory_descriptor *)(addr + i * descriptorSize);
+		dprintf("  phys: 0x%08" PRIx64 "-0x%08" PRIx64
+			", virt: 0x%08" PRIx64 "-0x%08" PRIx64
+			", size = 0x%08" PRIx64 ", type: %s (%#x), attr: %#" PRIx64 "\n",
+			entry->PhysicalStart,
+			entry->PhysicalStart + entry->NumberOfPages * B_PAGE_SIZE,
+			entry->VirtualStart,
+			entry->VirtualStart + entry->NumberOfPages * B_PAGE_SIZE,
+			entry->NumberOfPages * B_PAGE_SIZE,
+			memory_region_type_str(entry->Type), entry->Type,
 			entry->Attribute);
 		if (entry->Type == EfiLoaderCode)
 			loaderCode = entry->PhysicalStart;
@@ -118,8 +184,8 @@ arch_start_kernel(addr_t kernelEntry)
 	}
 
 	// Generate page tables for use after ExitBootServices.
-	arch_mmu_generate_post_efi_page_tables(
-		memory_map_size, memory_map, descriptor_size, descriptor_version);
+	uint64 ttbr1 = arch_mmu_generate_post_efi_page_tables(
+		memoryMapSize, memoryMap, descriptorSize, descriptorVersion);
 
 	// Attempt to fetch the memory map and exit boot services.
 	// This needs to be done in a loop, as ExitBootServices can change the
@@ -136,51 +202,37 @@ arch_start_kernel(addr_t kernelEntry)
 	serial_disable();
 
 	while (true) {
-		if (kBootServices->ExitBootServices(kImage, map_key) == EFI_SUCCESS) {
+		if (kBootServices->ExitBootServices(kImage, mapKey) == EFI_SUCCESS) {
 			// Disconnect from EFI serial_io / stdio services
 			serial_kernel_handoff();
 			dprintf("Unhooked from EFI serial services\n");
 			break;
 		}
 
-		memory_map_size = actual_memory_map_size;
-		if (kBootServices->GetMemoryMap(
-				&memory_map_size, memory_map, &map_key, &descriptor_size, &descriptor_version)
-			!= EFI_SUCCESS) {
+		memoryMapSize = actualMemoryMapSize;
+		if (kBootServices->GetMemoryMap(&memoryMapSize, memoryMap, &mapKey,
+				&descriptorSize, &descriptorVersion) != EFI_SUCCESS) {
 			panic("Unable to fetch system memory map.");
 		}
 	}
 
 	// Update EFI, generate final kernel physical memory map, etc.
-	arch_mmu_post_efi_setup(memory_map_size, memory_map, descriptor_size, descriptor_version);
+	arch_mmu_post_efi_setup(memoryMapSize, memoryMap,
+		descriptorSize, descriptorVersion);
 
 	// Re-init and activate serial in a horrific post-EFI landscape. Clowns roam the land freely.
 	serial_init();
 	serial_enable();
 
-	switch (el) {
-		case 1:
-			arch_mmu_setup_EL1(READ_SPECIALREG(TCR_EL1));
-			break;
-		case 2:
-			arch_mmu_setup_EL1(READ_SPECIALREG(TCR_EL2));
-			arch_cache_disable();
-			_arch_transition_EL2_EL1();
-			break;
-		default:
-			panic("Unexpected Exception Level\n");
-			break;
-	}
+	arm64_common_cpu_startup(0);
 
-	arch_cache_enable();
-
-	// smp_boot_other_cpus(final_pml4, kernelEntry, (addr_t)&gKernelArgs);
+	smp_boot_other_cpus(ttbr1, kernelEntry, (addr_t)&gKernelArgs);
 
 	if (arch_mmu_read_access(kernelEntry)
 		&& arch_mmu_read_access(gKernelArgs.cpu_kstack[0].start)) {
 		// Enter the kernel!
 		arch_enter_kernel(&gKernelArgs, kernelEntry,
-			gKernelArgs.cpu_kstack[0].start + gKernelArgs.cpu_kstack[0].size);
+			gKernelArgs.cpu_kstack[0].start + gKernelArgs.cpu_kstack[0].size, 0);
 	} else {
 		// _arch_exception_panic("Kernel or Stack memory not accessible\n", __LINE__);
 		panic("Kernel or Stack memory not accessible\n");

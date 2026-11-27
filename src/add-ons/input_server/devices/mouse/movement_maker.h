@@ -1,6 +1,6 @@
 /*
  * Copyright 2008-2011, Clemens Zeidler <haiku@clemens-zeidler.de>
- * Copyright 2022, Haiku, Inc. All rights reserved.
+ * Copyright 2022-2025, Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  */
 #ifndef MOVEMENT_MAKER_H
@@ -26,7 +26,7 @@ public:
 protected:
 			void				StartNewMovment();
 			void				GetMovement(uint32 posX, uint32 posY);
-			void				GetScrolling(uint32 posX, uint32 posY);
+			void				GetScrolling(uint32 posX, uint32 posY, bool reverse);
 
 			touchpad_specs		fSpecs;
 			touchpad_settings	fSettings;
@@ -42,8 +42,11 @@ private:
 			
 			bool				fMovementMakerStarted;
 
+protected:
 			uint32				fPreviousX;
 			uint32				fPreviousY;
+
+private:
 			float				fDeltaSumX;
 			float				fDeltaSumY;
 
@@ -63,6 +66,7 @@ enum button_ids
 class TouchpadMovement : public MovementMaker {
 public:
 								TouchpadMovement();
+	virtual						~TouchpadMovement();
 
 			status_t			EventToMovement(const touchpad_movement *event,
 									mouse_movement *movement, bigtime_t &repeatTimeout);
@@ -72,12 +76,15 @@ private:
 			void				_UpdateButtons(mouse_movement *movement);
 			bool				_EdgeMotion(const touchpad_movement *event,
 									mouse_movement *movement, bool validStart);
+	inline	bool				_ClickFingerButtonEmulator(touchpad_movement *event);
+	inline	void				_SoftwareButtonAreas(touchpad_movement *event);
 	inline	void				_NoTouchToMovement(const touchpad_movement *event,
 									mouse_movement *movement);
 	inline	void				_MoveToMovement(const touchpad_movement *event,
 									mouse_movement *movement);
 	inline	bool				_CheckScrollingToMovement(const touchpad_movement *event,
 									mouse_movement *movement);
+	inline	void				_CheckTapStarted(const touchpad_movement *event);
 
 
 			bool				fMovementStarted;
@@ -87,6 +94,7 @@ private:
 			int32				fTapDeltaX;
 			int32				fTapDeltaY;
 			int32				fTapClicks;
+			int32				fTapFingers;
 			bool				fTapdragStarted;
 
 			bool				fValidEdgeMotion;

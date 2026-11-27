@@ -22,10 +22,15 @@ public:
 									int32 numGuardPages,
 									uint32 allocationFlags);
 
+	virtual	status_t			Adopt(VMCache* source, off_t offset, off_t size,
+									off_t newOffset);
 	virtual	ssize_t				Discard(off_t offset, off_t size);
 
+	virtual	off_t				Commitment() const;
 	virtual	bool				CanOvercommit();
 	virtual	status_t			Commit(off_t size, int priority);
+	virtual	void				TakeCommitmentFrom(VMCache* from, off_t commitment);
+
 	virtual	bool				StoreHasPage(off_t offset);
 
 	virtual	int32				GuardSize()	{ return fGuardedSize; }
@@ -46,6 +51,9 @@ public:
 
 protected:
 	virtual	void				DeleteObject();
+
+public:
+			off_t				committed_size;
 
 private:
 			bool				fCanOvercommit;

@@ -105,8 +105,7 @@ static thread_id thread_get_current_thread_id(void);
 static inline thread_id
 thread_get_current_thread_id(void)
 {
-	Thread *thread = thread_get_current_thread();
-	return thread ? thread->id : 0;
+	return thread_get_current_thread()->id;
 }
 
 static inline bool
@@ -404,13 +403,16 @@ static inline void
 thread_pin_to_current_cpu(Thread* thread)
 {
 	thread->pinned_to_cpu++;
+	memory_full_barrier();
 }
 
 
 static inline void
 thread_unpin_from_current_cpu(Thread* thread)
 {
+	memory_full_barrier();
 	thread->pinned_to_cpu--;
+	ASSERT(thread->pinned_to_cpu >= 0);
 }
 
 

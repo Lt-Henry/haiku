@@ -10,7 +10,9 @@
 
 
 #include <arch/debug.h>
+#include <arch/x86/timer.h>
 
+#include <x86gprintrin.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -958,24 +960,6 @@ dump_iframes(int argc, char** argv)
 }
 
 
-static bool
-is_calling(Thread* thread, addr_t ip, const char* pattern, addr_t start,
-	addr_t end)
-{
-	if (pattern == NULL)
-		return ip >= start && ip < end;
-
-	if (!IS_KERNEL_ADDRESS(ip))
-		return false;
-
-	const char* symbol;
-	if (lookup_symbol(thread, ip, NULL, &symbol, NULL, NULL) != B_OK)
-		return false;
-
-	return strstr(symbol, pattern);
-}
-
-
 static int
 cmd_in_context(int argc, char** argv)
 {
@@ -1055,8 +1039,7 @@ arch_debug_stack_trace(void)
 
 
 bool
-arch_debug_contains_call(Thread* thread, const char* symbol, addr_t start,
-	addr_t end)
+arch_debug_walk_stack(Thread* thread, bool (*callback)(void*, addr_t), void* context)
 {
 	DebuggedThreadSetter threadSetter(thread);
 
@@ -1080,25 +1063,21 @@ arch_debug_contains_call(Thread* thread, const char* symbol, addr_t start,
 	}
 
 	for (;;) {
-		if (!is_kernel_stack_address(thread, bp))
-			break;
-
 		if (is_iframe(thread, bp)) {
 			iframe* frame = (iframe*)bp;
 
-			if (is_calling(thread, frame->ip, symbol, start, end))
+			if (callback(context, frame->ip))
 				return true;
 
  			bp = frame->bp;
 		} else {
 			addr_t ip, nextBp;
 
-			if (get_next_frame_no_debugger(bp, &nextBp, &ip, true,
-					thread) != B_OK
+			if (get_next_frame_debugger(bp, &nextBp, &ip) != B_OK
 				|| ip == 0 || bp == 0)
 				break;
 
-			if (is_calling(thread, ip, symbol, start, end))
+			if (callback(context, ip))
 				return true;
 
 			bp = nextBp;
@@ -1124,7 +1103,7 @@ arch_debug_contains_call(Thread* thread, const char* symbol, addr_t start,
 	\return The number of return addresses written to the given array.
 */
 int32
-arch_debug_get_stack_trace(addr_t* returnAddresses, int32 maxCount,
+arch_get_stack_trace(addr_t* returnAddresses, int32 maxCount,
 	int32 skipIframes, int32 skipFrames, uint32 flags)
 {
 	// Keep skipping normal stack frames until we've skipped the iframes we're
@@ -1357,10 +1336,66 @@ arch_debug_gdb_get_registers(char* buffer, size_t bufferSize)
 }
 
 
+static void (*sDebugSnooze)(uint32) = NULL;
+static uint64 sDebugSnoozeConversionFactor = 0;
+
+
+static void
+debug_snooze_mwaitx(uint32 delay)
+{
+	// monitorx (r/eax = pointer, ecx = extensions, edx = hints)
+	asm volatile(".byte 0x0f, 0x01, 0xfa;"
+		:: "a" (sDebugSnooze), "c" (0), "d" (0));
+
+	// mwaitx (eax = hints, ecx = extensions, ebx = timeout)
+	asm volatile(".byte 0x0f, 0x01, 0xfb;"
+		:: "a" (0xf0 /* disable C-states */), "c" (0x2 /* enable timer */), "b" (delay));
+}
+
+
+static void
+debug_snooze_tpause(uint32 delay)
+{
+	memory_read_barrier();
+	uint64 target = __rdtsc() + delay;
+
+	// tpause (ecx = options, eax = target [low 32], edx = target [high 32])
+	uint32 low = target, high = target >> 32;
+	asm volatile(".byte 0x66, 0x0f, 0xae, 0xf1;"
+		:: "c" (0x0), "a" (low), "d" (high));
+}
+
+
+void
+arch_debug_snooze(bigtime_t duration)
+{
+	uint32 delay = (duration * sDebugSnoozeConversionFactor) / 1000;
+	if (delay == 0)
+		delay = 1;
+
+	if (sDebugSnooze != NULL) {
+		sDebugSnooze(delay);
+		return;
+	}
+
+	memory_read_barrier();
+	uint64 target = __rdtsc() + delay;
+
+	while (__rdtsc() < target)
+		arch_cpu_pause();
+}
+
+
 status_t
 arch_debug_init(kernel_args* args)
 {
-	// at this stage, the debugger command system is alive
+	// Store the TSC frequency in kHz.
+	sDebugSnoozeConversionFactor =
+		(uint64(1000) << 32) / gSystemTimeConversionFactor;
+	if (x86_check_feature(IA32_FEATURE_AMD_EXT_MWAITX, FEATURE_EXT_AMD_ECX))
+		sDebugSnooze = debug_snooze_mwaitx;
+	if (x86_check_feature(IA32_FEATURE_WAITPKG, FEATURE_7_ECX))
+		sDebugSnooze = debug_snooze_tpause;
 
 	add_debugger_command("where", &stack_trace, "Same as \"sc\"");
 	add_debugger_command("bt", &stack_trace, "Same as \"sc\" (as in gdb)");
@@ -1379,4 +1414,3 @@ arch_debug_init(kernel_args* args)
 
 	return B_NO_ERROR;
 }
-

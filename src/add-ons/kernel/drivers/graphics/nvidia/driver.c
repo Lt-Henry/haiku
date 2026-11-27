@@ -528,7 +528,6 @@ map_device(device_info *di)
 	uint32	tmpUlong, tmpROMshadow;
 	pci_info *pcii = &(di->pcii);
 	phys_addr_t physicalAddress;
-	system_info sysinfo;
 
 	CALLED();
 	/* variables for making copy of ROM */
@@ -548,17 +547,6 @@ map_device(device_info *di)
 	/* disable ISA I/O access */
 	tmpUlong &= ~PCI_command_io;
 	set_pci(PCI_command, 2, tmpUlong);
-
- 	/*work out which version of BeOS is running*/
- 	get_system_info(&sysinfo);
- 	if (0)//sysinfo.kernel_build_date[0]=='J')/*FIXME - better ID version*/
- 	{
- 		si->use_clone_bugfix = 1;
- 	}
- 	else
- 	{
- 		si->use_clone_bugfix = 0;
- 	}
 
 	/* work out a name for the register mapping */
 	sprintf(buffer, DEVICE_FORMAT " regs",
@@ -581,7 +569,6 @@ map_device(device_info *di)
 		B_ANY_KERNEL_ADDRESS,
 		B_CLONEABLE_AREA | B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA,
 		(void **)&(di->regs));
-	si->clone_bugfix_regs = (uint32 *) di->regs;
 
 	/* if mapping registers to vmem failed then pass on error */
 	if (si->regs_area < 0) return si->regs_area;
@@ -710,7 +697,7 @@ map_device(device_info *di)
 
 	//fixme: retest for card coldstart and PCI/virt_mem mapping!!
 	/* remember the DMA address of the frame buffer for BDirectWindow?? purposes */
-	si->framebuffer_pci = (void *) physicalAddress;
+	si->framebuffer_pci = (void*)(uintptr_t)physicalAddress;
 
 	/* note the amount of memory mapped by the kerneldriver so we can make sure we
 	 * don't attempt to adress more later on */
@@ -955,8 +942,8 @@ open_hook(const char* name, uint32 flags, void** cookie)
 	 * fed into the GPU's engine later on. Get an aligned adress so we can use MTRR-WC
 	 * even on older CPU's. */
 	get_memory_map(unaligned_dma_buffer, B_PAGE_SIZE, map, 1);
-	si->dma_buffer_pci = (void*)
-		((map[0].address + net_buf_size - 1) & ~(net_buf_size - 1));
+	si->dma_buffer_pci
+		= (void*)(uintptr_t)((map[0].address + net_buf_size - 1) & ~(net_buf_size - 1));
 
 	/* map the net DMA command buffer into vmem, using Write Combining */
 	si->dma_area = map_physical_memory(

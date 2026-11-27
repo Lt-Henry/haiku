@@ -36,7 +36,7 @@ sched_tx_processing(bt_usb_dev* bdev)
 			/* Do while this bit is on... so someone should set it before we
 			 * stop the iterations
 			 */
-			bdev->state = CLEAR_BIT(bdev->state, SENDING);
+			bdev->state &= ~SENDING;
 			// check Commands
 	#ifdef EMPTY_COMMAND_QUEUE
 			while (!list_is_empty(&bdev->nbuffersTx[BT_COMMAND])) {
@@ -54,13 +54,26 @@ sched_tx_processing(bt_usb_dev* bdev)
 				}
 			}
 
+#ifdef EMPTY_SCO_QUEUE
+			while (!list_is_empty(&bdev->nbuffersTx[BT_SCO])) {
+#else
+			if (!list_is_empty(&bdev->nbuffersTx[BT_SCO])) {
+#endif
+				nbuf = (net_buffer*)list_remove_head_item(&bdev->nbuffersTx[BT_SCO]);
+				err = submit_tx_sco(bdev, nbuf);
+				if (err != B_OK) {
+					// re-head it
+					list_insert_item_before(&bdev->nbuffersTx[BT_SCO],
+						list_get_first_item(&bdev->nbuffersTx[BT_SCO]), nbuf);
+				}
+			}
+
 			// check ACl
-	#define EMPTY_ACL_QUEUE
-	#ifdef EMPTY_ACL_QUEUE
+#ifdef EMPTY_ACL_QUEUE
 			while (!list_is_empty(&bdev->nbuffersTx[BT_ACL])) {
-	#else
+#else
 			if (!list_is_empty(&bdev->nbuffersTx[BT_ACL])) {
-	#endif
+#endif
 				nbuf = (net_buffer*)
 					list_remove_head_item(&bdev->nbuffersTx[BT_ACL]);
 				err = submit_tx_acl(bdev, nbuf);
@@ -72,17 +85,13 @@ sched_tx_processing(bt_usb_dev* bdev)
 				}
 			}
 
-			if (!list_is_empty(&bdev->nbuffersTx[BT_SCO])) {
-				// TODO to be implemented
-			}
+		} while ((bdev->state & SENDING) != 0);
 
-		} while (GET_BIT(bdev->state, SENDING));
-
-		bdev->state = CLEAR_BIT(bdev->state, PROCESSING);
+		bdev->state &= ~PROCESSING;
 
 	} else {
 		// We are processing so MARK that we need to still go on with that
-		bdev->state = SET_BIT(bdev->state, SENDING);
+		bdev->state |= SENDING;
 	}
 }
 

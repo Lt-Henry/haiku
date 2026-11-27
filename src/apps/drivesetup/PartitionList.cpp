@@ -297,10 +297,10 @@ PartitionListRow::PartitionListRow(BPartition* partition)
 		SetField(new BStringField(partition->ContentName()), kVolumeNameColumn);
 	} else if (partition->IsDevice()) {
 		SetField(new BStringField(kUnavailableString), kFilesystemColumn);
+		BString deviceName(kUnavailableString);
 		if (partition->Name() != NULL && partition->Name()[0])
-			SetField(new BStringField(partition->Name()), kVolumeNameColumn);
-		else
-			SetField(new BStringField(kUnavailableString), kVolumeNameColumn);
+			deviceName.SetTo(partition->Name());
+		SetField(new BStringField(deviceName.Trim()), kVolumeNameColumn);
 	} else if (partition->CountChildren() > 0) {
 		SetField(new BStringField(kUnavailableString), kFilesystemColumn);
 		SetField(new BStringField(kUnavailableString), kVolumeNameColumn);
@@ -412,8 +412,8 @@ PartitionListRow::DevicePath()
 // #pragma mark - PartitionListView
 
 
-PartitionListView::PartitionListView(const BRect& frame, uint32 resizeMode)
-	: Inherited(frame, "partitionlist", resizeMode, 0, B_NO_BORDER, true)
+PartitionListView::PartitionListView()
+	: Inherited("partitionlist", B_SUPPORTS_LAYOUT, B_NO_BORDER, true)
 {
 	AddColumn(new PartitionColumn(B_TRANSLATE("Device"), 150, 50, 500,
 		B_TRUNCATE_MIDDLE), kDeviceColumn);

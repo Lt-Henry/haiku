@@ -153,7 +153,12 @@ ReadBatteryInfo(battery_driver_cookie* cookie,
 			goto exit;
 	}
 
+	if (buffer.pointer == NULL) {
+		status = B_ERROR;
+		goto exit;
+	}
 	object = (acpi_object_type*)buffer.pointer;
+
 	TRACE("ReadBatteryInfo %d %u\n", object->object_type,
 		object->package.count);
 	if (object->object_type != ACPI_TYPE_PACKAGE
@@ -512,8 +517,8 @@ acpi_battery_support(device_node *parent)
 
 	// check whether it's a battery device
 	const char *name;
-	if (sDeviceManager->get_attr_string(parent, ACPI_DEVICE_HID_ITEM, &name,
-		false) != B_OK || strcmp(name, ACPI_NAME_BATTERY)) {
+	if (sDeviceManager->get_attr_string(parent, ACPI_DEVICE_HID_ITEM, &name, false) != B_OK
+	    || (strcmp(name, ACPI_NAME_BATTERY) && strcmp(name, "MSHW0146"))) {
 		return 0.0;
 	}
 
@@ -593,11 +598,14 @@ acpi_battery_register_child_devices(void *cookie)
 		return B_ERROR;
 	}
 
-	char name[128];
+	char name[B_DEV_NAME_LENGTH];
 	snprintf(name, sizeof(name), ACPI_BATTERY_BASENAME, pathID);
 
-	return sDeviceManager->publish_device(device->node, name,
+	status_t status = sDeviceManager->publish_device(device->node, name,
 		ACPI_BATTERY_DEVICE_NAME);
+	if (status != B_OK)
+		sDeviceManager->free_id(ACPI_BATTERY_PATHID_GENERATOR, pathID);
+	return status;
 }
 
 

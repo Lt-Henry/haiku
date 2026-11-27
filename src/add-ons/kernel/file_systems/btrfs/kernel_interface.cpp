@@ -169,7 +169,8 @@ btrfs_read_fs_info(fs_volume* _volume, struct fs_info* info)
 	info->io_size = BTRFS_IO_SIZE;
 	info->block_size = volume->BlockSize();
 	info->total_blocks = volume->SuperBlock().TotalSize() / volume->BlockSize();
-	info->free_blocks = 0; //volume->NumFreeBlocks();
+	info->free_blocks = (volume->SuperBlock().TotalSize() - volume->SuperBlock().UsedSize())
+		/ volume->BlockSize();
 
 	// Volume name
 	strlcpy(info->volume_name, volume->Name(), sizeof(info->volume_name));
@@ -253,7 +254,7 @@ btrfs_can_page(fs_volume* _volume, fs_vnode* _node, void* _cookie)
 
 
 static status_t
-btrfs_read_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
+btrfs_read_pages(fs_volume* _volume, fs_vnode* _node, void*,
 	off_t pos, const iovec* vecs, size_t count, size_t* _numBytes)
 {
 	Volume* volume = (Volume*)_volume->private_volume;
@@ -297,7 +298,7 @@ btrfs_read_pages(fs_volume* _volume, fs_vnode* _node, void* _cookie,
 
 
 static status_t
-btrfs_io(fs_volume* _volume, fs_vnode* _node, void* _cookie,
+btrfs_io(fs_volume* _volume, fs_vnode* _node, void*,
 	io_request* request)
 {
 	Volume* volume = (Volume*)_volume->private_volume;
@@ -431,7 +432,7 @@ btrfs_read_stat(fs_volume* _volume, fs_vnode* _node, struct stat* stat)
 	inode->GetCreationTime(stat->st_crtim);
 
 	stat->st_size = inode->Size();
-	stat->st_blocks = (inode->Size() + 511) / 512;
+	stat->st_blocks = (inode->Size() + DEV_BSIZE - 1) / DEV_BSIZE;
 
 	return B_OK;
 }
@@ -466,7 +467,7 @@ btrfs_write_stat(fs_volume* _volume, fs_vnode* _node, const struct stat* stat,
 		if (!hasWriteAccess)
 			RETURN_ERROR(B_NOT_ALLOWED);
 
-		//TODO: implement file shrinking/growing
+		// TODO: implement file shrinking/growing
 		return B_NOT_SUPPORTED;
 	}
 
@@ -867,8 +868,7 @@ btrfs_rewind_dir(fs_volume* /*_volume*/, fs_vnode* /*node*/, void* _cookie)
 
 
 static status_t
-btrfs_close_dir(fs_volume * /*_volume*/, fs_vnode * /*node*/,
-	   	void * /*_cookie*/)
+btrfs_close_dir(fs_volume * /*_volume*/, fs_vnode * /*node*/, void * /*_cookie*/)
 {
 	return B_OK;
 }

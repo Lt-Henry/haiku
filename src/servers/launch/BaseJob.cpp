@@ -4,13 +4,16 @@
  */
 
 
+#define _DEFAULT_SOURCE
 #include "BaseJob.h"
 
 #include <errno.h>
+#include <spawn.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+#include <AutoDeleter.h>
 #include <Message.h>
 
 #include "Conditions.h"
@@ -196,62 +199,72 @@ void
 BaseJob::_GetSourceFileEnvironment(const char* script, BStringList& environment)
 {
 	int pipes[2];
-	if (pipe(&pipes[0]) != 0) {
+	if (pipe2(&pipes[0], O_CLOEXEC) != 0) {
 		// TODO: log error
 		return;
 	}
 
-	pid_t child = fork();
-	if (child < 0) {
+	FileDescriptorCloser pipes0(pipes[0]);
+	FileDescriptorCloser pipes1(pipes[1]);
+
+	posix_spawn_file_actions_t fileActions;
+	int status = posix_spawn_file_actions_init(&fileActions);
+	if (status != 0) {
+		// TODO: log error
+		return;
+	}
+	CObjectDeleter<posix_spawn_file_actions_t, int, posix_spawn_file_actions_destroy>
+		actionsDeleter(&fileActions);
+
+	// redirect stdout in the child
+	posix_spawn_file_actions_addclose(&fileActions, STDOUT_FILENO);
+	posix_spawn_file_actions_addclose(&fileActions, STDERR_FILENO);
+	posix_spawn_file_actions_adddup2(&fileActions, pipes[1], STDOUT_FILENO);
+	posix_spawn_file_actions_adddup2(&fileActions, pipes[1], STDERR_FILENO);
+
+	for (int32 i = 0; i < 2; i++)
+		posix_spawn_file_actions_addclose(&fileActions, pipes[i]);
+
+	BString command;
+	command.SetToFormat(". \"%s\"; export -p", script);
+
+	const char* argv[] = {"/bin/sh", "-c", command.String(), NULL};
+
+	pid_t child;
+	status = posix_spawn(&child, argv[0], &fileActions, NULL, (char**)argv, NULL);
+
+	if (status != 0) {
 		// TODO: log error
 		debug_printf("could not fork: %s\n", strerror(errno));
-	} else if (child == 0) {
-		// We're the child, redirect stdout
-		close(STDOUT_FILENO);
-		close(STDERR_FILENO);
-		dup2(pipes[1], STDOUT_FILENO);
-		dup2(pipes[1], STDERR_FILENO);
+		return;
+	}
 
-		for (int32 i = 0; i < 2; i++)
-			close(pipes[i]);
+	// Retrieve environment from child
 
-		BString command;
-		command.SetToFormat(". \"%s\"; export -p", script);
-		execl("/bin/sh", "/bin/sh", "-c", command.String(), NULL);
-		exit(1);
-	} else {
-		// Retrieve environment from child
+	pipes1.Delete();
 
-		close(pipes[1]);
-
-		BString line;
-		char buffer[4096];
-		while (true) {
-			ssize_t bytesRead = read(pipes[0], buffer, sizeof(buffer) - 1);
-			if (bytesRead <= 0)
-				break;
-
-			// Make sure the buffer is null terminated
-			buffer[bytesRead] = 0;
-
-			const char* chunk = buffer;
-			while (true) {
-				const char* separator = strchr(chunk, '\n');
-				if (separator == NULL) {
-					line.Append(chunk, bytesRead);
-					break;
-				}
-				line.Append(chunk, separator - chunk);
-				chunk = separator + 1;
-
-				_ParseExportVariable(environment, line);
-				line.Truncate(0);
-			}
+	BString lines;
+	char buffer[4096];
+	while (true) {
+		ssize_t bytesRead;
+		do {
+			bytesRead = read(pipes[0], buffer, sizeof(buffer));
+		} while (bytesRead < 0 && errno == EINTR);
+		if (bytesRead <= 0) {
+			if (bytesRead == 0 && !lines.IsEmpty())
+				_ParseExportVariable(environment, lines);
+			break;
 		}
-		if (!line.IsEmpty())
-			_ParseExportVariable(environment, line);
+		lines.Append(buffer, bytesRead);
 
-		close(pipes[0]);
+		while (true) {
+			int32 newline = lines.FindFirst('\n');
+			if (newline < 0)
+				break;
+			BString line(lines, newline);
+			_ParseExportVariable(environment, line);
+			lines.Remove(0, newline + 1);
+		}
 	}
 }
 

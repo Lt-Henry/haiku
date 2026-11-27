@@ -1,4 +1,4 @@
-1	german	x-vnd.Haiku-Time	3691539601
+1	german	x-vnd.Haiku-Time	365252571
 OK	Time		OK
 Message receiving failed	Time		Nachricht wurde nicht erhalten
 Australia	Time		Australien
@@ -16,13 +16,13 @@ Asia	Time		Asien
 Try all servers	Time		Alle Server abfragen
 Time	Time		Time - Datum & Zeit
 Current time:	Time		Aktuelle Zeit:
-The following error occured while synchronizing:\n%s: %s	Time		Folgender Fehler trat beim Synchronisieren auf:\n%s: %s
 Europe	Time		Europa
 Show day of week	Time		Wochentag anzeigen
 Local time (Windows compatible)	Time		Lokalzeit (Windows-kompatibel)
 Hardware clock set to:	Time		Hardware-Uhr gestellt auf:
 Arctic	Time		Arktis
 Antarctica	Time		Antarktis
+The following error occurred while synchronizing:\n%s: %s	Time		Während der Synchronisation ist folgender Fehler aufgetreten:\n%s: %s
 GMT (UNIX compatible)	Time		GMT (Unix-kompatibel)
 Africa	Time		Afrika
 Stop	Time		Stopp

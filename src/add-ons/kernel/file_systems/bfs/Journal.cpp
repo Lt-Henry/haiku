@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2020, Axel Dörfler, axeld@pinc-software.de.
+ * Copyright 2001-2026, Axel Dörfler, axeld@pinc-software.de.
  * This file may be used under the terms of the MIT License.
  */
 
@@ -924,17 +924,19 @@ Journal::_WriteTransactionToLog()
 
 
 /*!	Flushes the current log entry to disk. If \a flushBlocks is \c true it will
-	also write back all dirty blocks for this volume.
+	also write back all dirty blocks for this volume. If \a alreadyLocked is \c
+	true, we allow the lock to be held when the function is called.
 */
 status_t
-Journal::_FlushLog(bool canWait, bool flushBlocks)
+Journal::_FlushLog(bool canWait, bool flushBlocks, bool alreadyLocked)
 {
 	status_t status = canWait ? recursive_lock_lock(&fLock)
 		: recursive_lock_trylock(&fLock);
 	if (status != B_OK)
 		return status;
 
-	if (recursive_lock_get_recursion(&fLock) > 1) {
+	int32 allowedLocks = alreadyLocked ? 2 : 1;
+	if (recursive_lock_get_recursion(&fLock) > allowedLocks) {
 		// whoa, FlushLogAndBlocks() was called from inside a transaction
 		recursive_lock_unlock(&fLock);
 		return B_OK;
@@ -963,6 +965,26 @@ status_t
 Journal::FlushLogAndBlocks()
 {
 	return _FlushLog(true, true);
+}
+
+
+/*!	Locks the journal, in addition to flushing the log and blocks. A return
+	value of \c B_OK indicates that the operation was successful, and that
+	the journal is locked.
+*/
+status_t
+Journal::FlushLogAndLockJournal()
+{
+	status_t status = Lock(NULL, true);
+	if (status != B_OK)
+		return status;
+
+	status = _FlushLog(true, true, true);
+
+	if (status != B_OK)
+		recursive_lock_unlock(&fLock);
+
+	return status;
 }
 
 
@@ -1042,7 +1064,7 @@ Journal::Unlock(Transaction* owner, bool success)
 		if (fSeparateSubTransactions
 			&& recursive_lock_get_recursion(&fLock) == 1)
 			fSeparateSubTransactions = false;
-	} else
+	} else if (owner != NULL)
 		owner->MoveListenersTo(fOwner);
 
 	recursive_lock_unlock(&fLock);
@@ -1094,6 +1116,111 @@ Journal::_TransactionDone(bool success)
 	}
 
 	return _WriteTransactionToLog();
+}
+
+
+status_t
+Journal::MoveLog(block_run newLog)
+{
+	block_run oldLog = fVolume->Log();
+	if (newLog == oldLog)
+		return B_OK;
+
+	off_t newEnd = newLog.Start() + newLog.Length();
+	off_t oldEnd = oldLog.Start() + oldLog.Length();
+
+	// make sure the new log position is ok
+	if (newLog.AllocationGroup() != 0)
+		return B_BAD_VALUE;
+
+	if (fVolume->ValidateBlockRun(newLog) != B_OK)
+		return B_BAD_VALUE;
+
+	if (newLog.Start() < 1 + fVolume->NumBitmapBlocks())
+		return B_BAD_VALUE;
+
+	if (newEnd > fVolume->NumBlocks())
+		return B_BAD_VALUE;
+
+	status_t status;
+	block_run allocatedRun = {};
+
+	BlockAllocator& allocator = fVolume->Allocator();
+
+	// allocate blocks if necessary
+	if (newEnd > oldEnd) {
+		if (oldEnd > newLog.Start())
+			allocatedRun.SetTo(newLog.AllocationGroup(), oldEnd, newEnd - oldEnd);
+		else
+			allocatedRun = newLog;
+
+		Transaction transaction(fVolume, 0);
+
+		status = allocator.AllocateBlockRun(transaction, allocatedRun);
+		if (status != B_OK) {
+			FATAL(("MoveLog: Could not allocate space to move log area!\n"));
+			return status;
+		}
+
+		status = transaction.Done();
+		if (status != B_OK)
+			return status;
+	}
+
+	MutexLocker volumeLock(fVolume->Lock());
+
+	status = FlushLogAndLockJournal();
+	if (status != B_OK)
+		return status;
+
+	// update references to the log location and size
+	fVolume->SuperBlock().log_blocks = newLog;
+	status = fVolume->WriteSuperBlock();
+	if (status != B_OK) {
+		fVolume->SuperBlock().log_blocks = oldLog;
+
+		Unlock(NULL, true);
+
+		// if we had to allocate some blocks, try to free them
+		if (!allocatedRun.IsZero()) {
+			Transaction transaction(fVolume, 0);
+			status_t freeStatus = allocator.Free(transaction, allocatedRun);
+			if (freeStatus == B_OK)
+				freeStatus = transaction.Done();
+
+			// don't really care if we fail
+			if (freeStatus != B_OK)
+				REPORT_ERROR(freeStatus);
+		}
+
+		return status;
+	}
+
+	fLogSize = newLog.Length();
+	fMaxTransactionSize = fLogSize / 2 - 5;
+
+	Unlock(NULL, true);
+	volumeLock.Unlock();
+
+	// at this point, the log is moved and functional in its new location
+
+	// free blocks if necessary
+	if (newEnd < oldEnd) {
+		block_run runToFree = block_run::Run(0, newEnd, oldEnd - newEnd);
+
+		Transaction transaction(fVolume, 0);
+
+		status = allocator.Free(transaction, runToFree);
+		if (status == B_OK)
+			status = transaction.Done();
+
+		// we've already moved the log, no sense in failing just because we
+		// couldn't free a couple of blocks
+		if (status != B_OK)
+			REPORT_ERROR(status);
+	}
+
+	return B_OK;
 }
 
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2024-2025, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
@@ -14,7 +14,8 @@
 PackageClassificationInfo::PackageClassificationInfo()
 	:
 	fCategories(),
-	fProminence(-1L),
+	fProminence(PROMINANCE_ORDERING_NONE),
+	fIsDesktop(false),
 	fIsNativeDesktop(false)
 {
 }
@@ -24,8 +25,23 @@ PackageClassificationInfo::PackageClassificationInfo(const PackageClassification
 	:
 	fCategories(other.fCategories),
 	fProminence(other.Prominence()),
+	fIsDesktop(other.IsDesktop()),
 	fIsNativeDesktop(other.IsNativeDesktop())
 {
+}
+
+
+uint32
+PackageClassificationInfo::Prominence() const
+{
+	return fProminence;
+}
+
+
+bool
+PackageClassificationInfo::HasProminence() const
+{
+	return fProminence != 0;
 }
 
 
@@ -36,18 +52,10 @@ PackageClassificationInfo::CountCategories() const
 }
 
 
-CategoryRef
+const CategoryRef
 PackageClassificationInfo::CategoryAtIndex(int32 index) const
 {
 	return fCategories[index];
-}
-
-
-void
-PackageClassificationInfo::ClearCategories()
-{
-	if (!fCategories.empty())
-		fCategories.clear();
 }
 
 
@@ -55,7 +63,7 @@ bool
 PackageClassificationInfo::AddCategory(const CategoryRef& category)
 {
 	std::vector<CategoryRef>::const_iterator itInsertionPt = std::lower_bound(fCategories.begin(),
-		fCategories.end(), category, &IsPackageCategoryBefore);
+		fCategories.end(), category, &IsPackageCategoryRefLess);
 
 	if (itInsertionPt == fCategories.end()) {
 		fCategories.push_back(category);
@@ -92,6 +100,20 @@ PackageClassificationInfo::IsProminent() const
 
 
 bool
+PackageClassificationInfo::IsDesktop() const
+{
+	return fIsDesktop;
+}
+
+
+void
+PackageClassificationInfo::SetIsDesktop(bool value)
+{
+	fIsDesktop = value;
+}
+
+
+bool
 PackageClassificationInfo::IsNativeDesktop() const
 {
 	return fIsNativeDesktop;
@@ -108,6 +130,9 @@ PackageClassificationInfo::SetIsNativeDesktop(bool value)
 bool
 PackageClassificationInfo::operator==(const PackageClassificationInfo& other) const
 {
+	if (fIsDesktop != other.IsDesktop())
+		return false;
+
 	if (fIsNativeDesktop != other.IsNativeDesktop())
 		return false;
 
@@ -130,4 +155,118 @@ bool
 PackageClassificationInfo::operator!=(const PackageClassificationInfo& other) const
 {
 	return !(*this == other);
+}
+
+
+// #pragma mark - PackageClassificationInfoBuilder
+
+
+PackageClassificationInfoBuilder::PackageClassificationInfoBuilder()
+	:
+	fCategories(),
+	fProminence(PROMINANCE_ORDERING_NONE),
+	fIsDesktop(false),
+	fIsNativeDesktop(false)
+{
+}
+
+
+PackageClassificationInfoBuilder::PackageClassificationInfoBuilder(
+	const PackageClassificationInfoRef& value)
+	:
+	fCategories(),
+	fProminence(PROMINANCE_ORDERING_NONE),
+	fIsNativeDesktop(false)
+{
+	fSource = value;
+}
+
+
+PackageClassificationInfoBuilder::~PackageClassificationInfoBuilder()
+{
+}
+
+
+void
+PackageClassificationInfoBuilder::_InitFromSource()
+{
+	if (fSource.IsSet()) {
+		_Init(fSource.Get());
+		fSource.Unset();
+	}
+}
+
+
+void
+PackageClassificationInfoBuilder::_Init(const PackageClassificationInfo* value)
+{
+	for (int32 i = value->CountCategories() - 1; i >= 0; i--)
+		fCategories.push_back(value->CategoryAtIndex(i));
+	fProminence = value->Prominence();
+	fIsNativeDesktop = value->IsNativeDesktop();
+}
+
+
+PackageClassificationInfoRef
+PackageClassificationInfoBuilder::BuildRef() const
+{
+	if (fSource.IsSet())
+		return fSource;
+
+	PackageClassificationInfo* classificationInfo = new PackageClassificationInfo();
+
+	classificationInfo->SetProminence(fProminence);
+	classificationInfo->SetIsDesktop(fIsDesktop);
+	classificationInfo->SetIsNativeDesktop(fIsNativeDesktop);
+
+	std::vector<CategoryRef>::const_iterator it;
+
+	for (it = fCategories.begin(); it != fCategories.end(); it++)
+		classificationInfo->AddCategory(*it);
+
+	return PackageClassificationInfoRef(classificationInfo, true);
+}
+
+
+PackageClassificationInfoBuilder&
+PackageClassificationInfoBuilder::WithProminence(uint32 prominence)
+{
+	if (!fSource.IsSet() || fSource->Prominence() != prominence) {
+		_InitFromSource();
+		fProminence = prominence;
+	}
+	return *this;
+}
+
+
+PackageClassificationInfoBuilder&
+PackageClassificationInfoBuilder::WithIsDesktop(bool value)
+{
+	if (!fSource.IsSet() || fSource->IsDesktop() != value) {
+		_InitFromSource();
+		fIsDesktop = value;
+	}
+	return *this;
+}
+
+
+PackageClassificationInfoBuilder&
+PackageClassificationInfoBuilder::WithIsNativeDesktop(bool value)
+{
+	if (!fSource.IsSet() || fSource->IsNativeDesktop() != value) {
+		_InitFromSource();
+		fIsNativeDesktop = value;
+	}
+	return *this;
+}
+
+
+PackageClassificationInfoBuilder&
+PackageClassificationInfoBuilder::AddCategory(const CategoryRef& category)
+{
+	if (!fSource.IsSet() || fSource->HasCategoryByCode(category->Code())) {
+		_InitFromSource();
+		fCategories.push_back(category);
+	}
+	return *this;
 }

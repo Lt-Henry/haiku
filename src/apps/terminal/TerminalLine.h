@@ -24,8 +24,10 @@ struct Attributes {
 	uint32 background;
 	uint32 underline;
 	int underlineStyle;
+	uint32 hyperlink;
 
-	Attributes() : state(0), foreground(0), background(0), underline(0), underlineStyle(0) {}
+	Attributes() : state(0), foreground(0), background(0), underline(0), underlineStyle(0),
+		hyperlink(0) {}
 
 	inline void Reset()
 	{
@@ -40,6 +42,8 @@ struct Attributes {
 	inline bool IsBold() const { return (state & BOLD) == BOLD; }
 	inline bool IsUnder() const { return (state & UNDERLINE) == UNDERLINE; }
 	inline bool IsInverse() const { return (state & INVERSE) == INVERSE; }
+	inline bool IsOver() const { return (state & OVERLINE) == OVERLINE; }
+	inline bool IsHidden() const { return (state & HIDDEN) == HIDDEN; }
 	inline bool IsMouse() const { return (state & MOUSE) == MOUSE; }
 	inline bool IsForeSet() const { return (state & FORESET) == FORESET; }
 	inline bool IsBackSet() const { return (state & BACKSET) == BACKSET; }
@@ -95,6 +99,11 @@ struct Attributes {
 		state |= UNDERLINE;
 	}
 
+	inline void SetHyperlink(uint32 id)
+	{
+		hyperlink = id;
+	}
+
 	inline void UnsetForeground()
 	{
 		state &= ~FORESET;
@@ -120,14 +129,19 @@ struct Attributes {
 	}
 
 	inline rgb_color
-	ForegroundColor(const rgb_color* indexedColors) const
+	ForegroundColor(const rgb_color* indexedColors, bool brightenAnsi = false) const
 	{
+		// Check for 24-bit RGB specified foreground color vs indexed color.
 		if ((foreground & 0x80000000) != 0)
 			return make_color((foreground >> 16) & 0xFF,
 				(foreground >> 8) & 0xFF,
 				foreground & 0xFF);
-		else
-			return indexedColors[(state & FORECOLOR) >> 16];
+		else {
+			uint8 index = (uint8)((state & FORECOLOR) >> 16);
+			if (IsBold() && brightenAnsi && index < 8)
+				index += 8;
+			return indexedColors[index];
+		}
 	}
 
 	inline rgb_color
@@ -158,6 +172,12 @@ struct Attributes {
 		return underlineStyle;
 	}
 
+	inline uint32
+	Hyperlink() const
+	{
+		return hyperlink;
+	}
+
 	inline Attributes&
 	operator&=(uint32 value) { state &= value; return *this; }
 
@@ -177,7 +197,8 @@ struct Attributes {
 			&& foreground == other.foreground
 			&& background == other.background
 			&& underline == other.underline
-			&& underlineStyle == other.underlineStyle;
+			&& underlineStyle == other.underlineStyle
+			&& hyperlink == other.hyperlink;
 	}
 
 	inline bool
@@ -187,7 +208,8 @@ struct Attributes {
 			|| foreground != other.foreground
 			|| background != other.background
 			|| underline != other.underline
-			|| underlineStyle != other.underlineStyle;
+			|| underlineStyle != other.underlineStyle
+			|| hyperlink != other.hyperlink;
 	}
 };
 
@@ -202,7 +224,8 @@ struct TerminalCell {
 		return (attributes.state & CHAR_ATTRIBUTES)
 				!= (other.state & CHAR_ATTRIBUTES)
 			|| attributes.foreground != other.foreground
-			|| attributes.background != other.background;
+			|| attributes.background != other.background
+			|| attributes.hyperlink != other.hyperlink;
 	}
 };
 
@@ -210,12 +233,12 @@ struct TerminalCell {
 struct TerminalLine {
 	uint16			length;
 	bool			softBreak;	// soft line break
-	Attributes		attributes;
 	TerminalCell	cells[1];
 
 	inline void Clear()
 	{
 		Clear(Attributes());
+		length = 0;
 	}
 
 	inline void Clear(size_t count)
@@ -225,11 +248,12 @@ struct TerminalLine {
 
 	inline void Clear(Attributes attr, size_t count = 0)
 	{
-		length = 0;
-		attributes = attr;
+		length = count;
 		softBreak = false;
-		for (size_t i = 0; i < count; i++)
+		for (size_t i = 0; i < count; i++) {
 			cells[i].attributes = attr;
+			cells[i].character = kNonCharacter;
+		}
 	}
 };
 

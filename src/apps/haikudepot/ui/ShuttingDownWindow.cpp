@@ -2,11 +2,12 @@
  * Copyright 2021, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
+
+
 #include "ShuttingDownWindow.h"
 
 #include <Catalog.h>
 #include <LayoutBuilder.h>
-#include <Locker.h>
 
 
 #undef B_TRANSLATION_CONTEXT
@@ -28,8 +29,10 @@ ShuttingDownWindow::ShuttingDownWindow(BWindow* parent)
 	textView->AdoptSystemColors();
 	textView->MakeEditable(false);
 	textView->MakeSelectable(false);
-	textView->SetText(B_TRANSLATE("HaikuDepot is stopping or completing "
+	BString text(B_TRANSLATE("%appname% is stopping or completing "
 		"running operations before quitting."));
+	text.ReplaceFirst("%appname%", B_TRANSLATE_SYSTEM_NAME("HaikuDepot"));
+	textView->SetText(text);
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
 			.SetInsets(B_USE_WINDOW_SPACING, B_USE_WINDOW_SPACING,

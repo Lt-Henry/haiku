@@ -3,6 +3,7 @@
  * All rights reserved. Distributed under the terms of the MIT License.
  */
 
+
 #include "StorageUtils.h"
 
 #include <errno.h>
@@ -11,13 +12,15 @@
 #include <algorithm>
 
 #include <Directory.h>
+#include <Entry.h>
 #include <File.h>
 #include <FindDirectory.h>
-#include <Entry.h>
 #include <String.h>
+#include <Volume.h>
 
 #include "HaikuDepotConstants.h"
 #include "Logger.h"
+
 
 #define FILE_TO_STRING_BUFFER_LEN 64
 
@@ -497,4 +500,24 @@ StorageUtils::DumpExportPkgDataPath(BPath& path, const BString& repositorySource
 	BString leaf;
 	leaf.SetToFormat("pkg-all-%s-%s.json.gz", repositorySourceCode.String(), language->ID());
 	return LocalWorkingFilesPath(leaf, path);
+}
+
+
+/*static*/ status_t
+StorageUtils::FreeBytesForPackageInstall(off_t* size)
+{
+	BPath path;
+	status_t result = find_directory(B_SYSTEM_PACKAGES_DIRECTORY, &path);
+
+	*size = 0;
+
+	if (result == B_OK) {
+		BDirectory directory(path.Path());
+		BVolume volume;
+		result = directory.GetVolume(&volume);
+		if (result == B_OK)
+			*size = volume.FreeBytes();
+	}
+
+	return result;
 }

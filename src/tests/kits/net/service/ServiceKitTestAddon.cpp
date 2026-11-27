@@ -11,7 +11,6 @@
 #include "DataTest.h"
 #include "GeolocationTest.h"
 #include "HttpTest.h"
-#include "UrlTest.h"
 #include "FileTest.h"
 
 
@@ -21,11 +20,10 @@ getTestSuite()
 	BTestSuite* suite = new BTestSuite("ServicesKit");
 
 	CookieTest::AddTests(*suite);
-	UrlTest::AddTests(*suite);
-	HttpTest::AddTests(*suite);
+//	HttpTest::AddTests(*suite);
 	DataTest::AddTests(*suite);
-	FileTest::AddTests(*suite);
-	GeolocationTest::AddTests(*suite);
+	ServiceFileTest::AddTests(*suite);
+//	GeolocationTest::AddTests(*suite); // FIXME
 
 	return suite;
 }

@@ -16,9 +16,11 @@ local avxSource = [ FGristFiles hello_avx.c ] ;
 local avxObject = $(avxSource:S=$(SUFOBJ)) ;
 CCFLAGS on $(avxObject) = -mavx ;
 
+SimpleTest fp_excepts_test : fp_excepts.c ;
+
 SimpleTest live_query :
 	live_query.cpp
-	: be
+	: be [ TargetLibsupc++ ]
 ;
 
 SimpleTest lock_node_test :
@@ -76,6 +78,8 @@ SimpleTest yield_test : yield_test.cpp ;
 SimpleTest sigint_bug113_test : sigint_bug113_test.cpp ;
 
 SimpleTest sigsuspend_test : sigsuspend_test.cpp ;
+SimpleTest sig_fault_blocked_test : sig_fault_blocked_test.cpp ;
+SimpleTest sig_corrupt_frame_test : sig_corrupt_frame_test.cpp ;
 
 SubInclude HAIKU_TOP src tests system kernel cache ;
 SubInclude HAIKU_TOP src tests system kernel fs ;

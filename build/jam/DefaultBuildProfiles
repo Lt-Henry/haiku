@@ -20,6 +20,14 @@ switch $(HAIKU_BUILD_PROFILE) {
 		TARGET_DEFINES += HAIKU_MINIMUM_BUILD ;
 	}
 
+	case "test-*" : {
+		HAIKU_BUILD_TYPE = test ;
+		EnableBuildFeatures minimum_image ;
+
+		HAIKU_DEFINES += HAIKU_MINIMUM_BUILD ;
+		TARGET_DEFINES += HAIKU_MINIMUM_BUILD ;
+	}
+
 	case "*" : {
 		HAIKU_BUILD_TYPE = regular ;
 		EnableBuildFeatures regular_image ;
@@ -64,6 +72,9 @@ rule DefineDefaultBuildProfiles
 	DefineBuildProfile minimum-anyboot : anyboot-image
 		: "haiku-minimum-anyboot.iso" ;
 
+	# test profiles
+	DefineBuildProfile test-raw : image : "haiku-test.image" ;
+
 	switch $(HAIKU_BUILD_PROFILE) {
 		case "release-*" : {
 			Echo Building Haiku R1/development preview ;
@@ -87,15 +98,16 @@ rule DefineDefaultBuildProfiles
 				openssh
 				pdfwriter
 				pe
+				sounds_community_default
 				timgmsoundfont
 				vision
 				wonderbrush
 				wpa_supplicant
 				# Some packages can't be built with gcc2, so we install the gcc13
 				# secondary architecture package instead in this case
-				!gcc2 @{ nano p7zip python3.10 xz_utils }@
+				!gcc2 @{ nano p7zip python3.14 xz_utils }@
 				gcc2 @{ nano_x86@secondary_x86 p7zip_x86@secondary_x86
-					python3.10_x86@secondary_x86 xz_utils_x86@secondary_x86 }@
+					python3.14_x86@secondary_x86 xz_utils_x86@secondary_x86 }@
 				;
 			AddHaikuImageSourcePackages
 				bepdf
@@ -138,6 +150,7 @@ rule DefineDefaultBuildProfiles
 				openssh
 				openssl3
 				pe
+				sounds_community_default
 				vision
 				wpa_supplicant
 				# xz_utils can't be built with gcc2, so we install it for
@@ -176,6 +189,28 @@ rule DefineDefaultBuildProfiles
 				;
 		}
 
+		case "test-*" : {
+			Echo Building Haiku UnitTest Target ;
+			HAIKU_ROOT_USER_NAME = user ;
+			HAIKU_ROOT_USER_REAL_NAME = "Tester" ;
+			HAIKU_IMAGE_HOST_NAME ?= shredder ;
+			if $(DEBUG) != 0 {
+				HAIKU_IMAGE_SIZE ?= 450 ;
+			} else {
+				HAIKU_IMAGE_SIZE ?= 300 ;
+			}
+
+			AddHaikuImageSystemPackages
+				openssh
+				openssl3
+				!gcc2 @{ python3.14 nano }@
+				gcc2 @{
+					python3.14_x86@secondary_x86
+					nano_x86@secondary_x86
+				}@
+				;
+		}
+
 		case "bootstrap-*" : {
 			Echo Building Haiku Bootstrap ;
 			HAIKU_IMAGE_HOST_NAME ?= shredder ;
@@ -184,24 +219,30 @@ rule DefineDefaultBuildProfiles
 			AddHaikuImageSystemPackages
 				binutils
 				bison
+				ca_root_certificates
 				expat
+				findutils
 				flex
 				gcc
 				grep
 				haikuporter
 				less
 				libedit
+				libffi
+				m4
 				make
 				ncurses6
 				noto
-				python
+				python3.10
 				sed
 				texinfo
 				!gcc2 @{ gawk grep }@
 				gcc2 @{ grep_x86@secondary_x86 mawk }@
 				;
 
-			AddHaikuImageDisabledPackages
+			# These devel packages must be active, so haikuporter can resolve
+			# them when building ports on the bootstrap system.
+			AddHaikuImageSystemPackages
 				freetype_devel
 				libedit_devel
 				ncurses6_devel

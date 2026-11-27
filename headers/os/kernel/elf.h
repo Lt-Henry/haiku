@@ -33,10 +33,12 @@ typedef Elf64_Half Elf64_Versym;
 	#define Elf_Addr Elf32_Addr
 	#define Elf_Phdr Elf32_Phdr
 	#define Elf_Half Elf32_Half
+	#define ElfW(x) Elf32_ ## x
 #elif B_HAIKU_64_BIT
 	#define Elf_Addr Elf64_Addr
 	#define Elf_Phdr Elf64_Phdr
 	#define Elf_Half Elf64_Half
+	#define ElfW(x) Elf64_ ## x
 #endif
 
 
@@ -397,10 +399,12 @@ typedef struct {
 #define ELF32_ST_BIND(i) ((i) >> 4)
 #define ELF32_ST_TYPE(i) ((i) & 0xf)
 #define ELF32_ST_INFO(b, t) (((b) << 4) + ((t) & 0xf))
+#define ELF32_ST_VISIBILITY(o) ((o) & 0x3)
 
 #define ELF64_ST_BIND(i) ((i) >> 4)
 #define ELF64_ST_TYPE(i) ((i) & 0xf)
 #define ELF64_ST_INFO(b, t) (((b) << 4) + ((t) & 0xf))
+#define ELF64_ST_VISIBILITY(o) ((o) & 0x3)
 
 /* symbol types */
 #define STT_NOTYPE 0
@@ -418,6 +422,12 @@ typedef struct {
 #define STB_WEAK 2
 #define STB_LOPROC 13
 #define STB_HIPROC 15
+
+/* symbol visibility */
+#define STV_DEFAULT 0
+#define STV_INTERNAL 1
+#define STV_HIDDEN 2
+#define STV_PROTECTED 3
 
 /* special symbol indices */
 #define STN_UNDEF 0
@@ -543,6 +553,7 @@ typedef struct {
 #define DT_ENCODING			32
 #define DT_PREINIT_ARRAY	32	/* preinitialization array */
 #define DT_PREINIT_ARRAYSZ	33	/* preinitialization array size */
+#define DT_NUM				38	/* size of the machine-independent dynamic section */
 
 #define	DT_GNU_HASH		0x6ffffef5	/* GNU-style hash table */
 
@@ -707,6 +718,8 @@ typedef struct {
 #define NT_IMAGES			0x696d6167 	/* images */
 #define NT_THREADS			0x74687264 	/* threads */
 #define NT_SYMBOLS			0x73796d73 	/* symbols */
+
+#define NT_GNU_BUILD_ID		3
 
 /* NT_TEAM: uint32 entrySize; Elf32_Note_Team; char[] args */
 typedef struct {

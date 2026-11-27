@@ -36,7 +36,7 @@ class PackageEntry;
 
 // The run queues. Holds the threads ready to run ordered by priority.
 // One queue per schedulable target per core. Additionally, each
-// logical processor has its sPinnedRunQueues used for scheduling
+// logical processor has a run queue (in CPUEntry) used for scheduling
 // pinned threads.
 class ThreadRunQueue : public RunQueue<ThreadData, THREAD_MAX_SET_PRIORITY> {
 public:
@@ -401,7 +401,7 @@ CoreEntry::GetLoad() const
 	SCHEDULER_ENTER_FUNCTION();
 
 	ASSERT(fCPUCount > 0);
-	return std::min(fLoad / fCPUCount, kMaxLoad);
+	return fLoad / fCPUCount;
 }
 
 

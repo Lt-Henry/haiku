@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2011, Haiku.
+ * Copyright 2004-2025, Haiku.
  * Distributed under the terms of the MIT License.
  *
  * Authors:
@@ -8,6 +8,7 @@
  *		Axel Dörfler, axeld@pinc-software.de
  *		Clemens Zeidler, haiku@clemens-zeidler.de
  *		Stephan Aßmus, superstippi@gmx.de
+ *		Samuel Rodríguez Pérez, samuelrp84@gmail.com
  */
 
 
@@ -41,54 +42,21 @@
 //#define TRACE_MOUSE_DEVICE
 #ifdef TRACE_MOUSE_DEVICE
 
-	class FunctionTracer {
-	public:
-		FunctionTracer(const void* pointer, const char* className,
-				const char* functionName,
-				int32& depth)
-			: fFunctionName(),
-			  fPrepend(),
-			  fFunctionDepth(depth),
-			  fPointer(pointer)
-		{
-			fFunctionDepth++;
-			fPrepend.Append(' ', fFunctionDepth * 2);
-			fFunctionName << className << "::" << functionName << "()";
-
-			debug_printf("%p -> %s%s {\n", fPointer, fPrepend.String(),
-				fFunctionName.String());
-		}
-
-		 ~FunctionTracer()
-		{
-			debug_printf("%p -> %s}\n", fPointer, fPrepend.String());
-			fFunctionDepth--;
-		}
-
-	private:
-		BString	fFunctionName;
-		BString	fPrepend;
-		int32&	fFunctionDepth;
-		const void* fPointer;
-	};
-
+#include <private/shared/FunctionTracer.h>
 
 	static int32 sFunctionDepth = -1;
-#	define MD_CALLED(x...)	FunctionTracer _ft(this, "MouseDevice", \
-								__FUNCTION__, sFunctionDepth)
-#	define MID_CALLED(x...)	FunctionTracer _ft(this, "MouseInputDevice", \
-								__FUNCTION__, sFunctionDepth)
+#	define CALLED(x...)	FunctionTracer _ft(debug_printf, this, \
+								__PRETTY_FUNCTION__, sFunctionDepth)
 #	define TRACE(x...)	do { BString _to; \
 							_to.Append(' ', (sFunctionDepth + 1) * 2); \
 							debug_printf("%p -> %s", this, _to.String()); \
 							debug_printf(x); } while (0)
 #	define LOG_EVENT(text...) do {} while (0)
-#	define LOG_ERR(text...) TRACE(text)
+#	define LOG_ERROR(text...) TRACE(text)
 #else
 #	define TRACE(x...) do {} while (0)
-#	define MD_CALLED(x...) TRACE(x)
-#	define MID_CALLED(x...) TRACE(x)
-#	define LOG_ERR(x...) debug_printf(x)
+#	define CALLED(x...) TRACE(x)
+#	define LOG_ERROR(x...) debug_printf(x)
 #	define LOG_EVENT(x...) TRACE(x)
 #endif
 
@@ -177,7 +145,7 @@ MouseDevice::MouseDevice(MouseInputDevice& target, const char* driverPath)
 	fTouchpadSettingsMessage(NULL),
 	fTouchpadSettingsLock("Touchpad settings lock")
 {
-	MD_CALLED();
+	CALLED();
 
 	fDeviceRef.name = _BuildShortName();
 	fDeviceRef.type = B_POINTING_DEVICE;
@@ -192,7 +160,7 @@ MouseDevice::MouseDevice(MouseInputDevice& target, const char* driverPath)
 
 MouseDevice::~MouseDevice()
 {
-	MD_CALLED();
+	CALLED();
 	TRACE("delete\n");
 
 	if (fActive)
@@ -206,7 +174,7 @@ MouseDevice::~MouseDevice()
 status_t
 MouseDevice::Start()
 {
-	MD_CALLED();
+	CALLED();
 
 	fDevice = open(fPath.String(), O_RDWR);
 		// let the control thread handle any error on opening the device
@@ -226,7 +194,7 @@ MouseDevice::Start()
 	}
 
 	if (status < B_OK) {
-		LOG_ERR("%s: can't spawn/resume watching thread: %s\n",
+		LOG_ERROR("%s: can't spawn/resume watching thread: %s\n",
 			fDeviceRef.name, strerror(status));
 		if (fDevice >= 0)
 			close(fDevice);
@@ -241,7 +209,7 @@ MouseDevice::Start()
 void
 MouseDevice::Stop()
 {
-	MD_CALLED();
+	CALLED();
 
 	fActive = false;
 		// this will stop the thread as soon as it reads the next packet
@@ -263,7 +231,7 @@ MouseDevice::Stop()
 status_t
 MouseDevice::UpdateSettings()
 {
-	MD_CALLED();
+	CALLED();
 
 	if (fThread < 0)
 		return B_ERROR;
@@ -359,7 +327,7 @@ MouseDevice::_ControlThreadEntry(void* arg)
 void
 MouseDevice::_ControlThread()
 {
-	MD_CALLED();
+	CALLED();
 
 	if (fDevice < 0) {
 		_ControlThreadCleanup();
@@ -424,7 +392,10 @@ MouseDevice::_ControlThread()
 
 		if (!fIsTouchpad) {
 			if (ioctl(fDevice, MS_READ, &movements, sizeof(movements)) != B_OK) {
-				LOG_ERR("Mouse device exiting, %s\n", strerror(errno));
+				if (errno == B_INTERRUPTED)
+					continue;
+
+				LOG_ERROR("Mouse device exiting, %s\n", strerror(errno));
 				_ControlThreadCleanup();
 				// TOAST!
 				return;
@@ -436,20 +407,21 @@ MouseDevice::_ControlThread()
 			status_t status = ioctl(fDevice, MS_READ_TOUCHPAD, &read, sizeof(read));
 			if (status < 0)
 				status = errno;
-			if (status != B_OK && status != B_TIMED_OUT) {
-				LOG_ERR("Mouse (touchpad) device exiting, %s\n", strerror(errno));
+			if (status == B_TIMED_OUT || status == B_WOULD_BLOCK || status == B_BAD_DATA) {
+				read.event = MS_READ_TOUCHPAD;
+				read.u.touchpad = lastTouchpadMovement;
+			} else if (status != B_OK && status != B_INTERRUPTED) {
+				LOG_ERROR("Mouse (touchpad) device exiting, %s\n", strerror(errno));
 				_ControlThreadCleanup();
 				// TOAST!
 				return;
-			} else if (status == B_TIMED_OUT) {
-				read.event = MS_READ_TOUCHPAD;
-				read.u.touchpad = lastTouchpadMovement;
 			}
 
 			if (read.event == MS_READ_TOUCHPAD) {
-				lastTouchpadMovement = read.u.touchpad;
 				status = fTouchpadMovementMaker.EventToMovement(&read.u.touchpad,
 					&movements, touchpadEventTimeout);
+				if (status == B_OK)
+					lastTouchpadMovement = read.u.touchpad;
 			} else if (read.event == MS_READ) {
 				movements = read.u.mouse;
 				touchpadEventTimeout = -1;
@@ -480,12 +452,12 @@ MouseDevice::_ControlThread()
 		_ComputeAcceleration(movements, deltaX, deltaY, historyDeltaX,
 			historyDeltaY);
 
-		LOG_EVENT("%s: buttons: 0x%lx, x: %ld, y: %ld, clicks:%ld, "
-			"wheel_x:%ld, wheel_y:%ld\n",
+		LOG_EVENT("%s: buttons: 0x%" B_PRIx32 ", x: %" B_PRId32 ", y: %" B_PRId32
+			", clicks:%" B_PRId32 ", wheel_x:%" B_PRId32 ", wheel_y:%" B_PRId32 "\n",
 			fDeviceRef.name, movements.buttons,
 			movements.xdelta, movements.ydelta, movements.clicks,
 			movements.wheel_xdelta, movements.wheel_ydelta);
-		LOG_EVENT("%s: x: %ld, y: %ld (%.4f, %.4f)\n", fDeviceRef.name,
+		LOG_EVENT("%s: x: %" B_PRId32 ", y: %" B_PRId32 " (%.4f, %.4f)\n", fDeviceRef.name,
 			deltaX, deltaY, historyDeltaX, historyDeltaY);
 
 		// Send single messages for each event
@@ -562,11 +534,11 @@ MouseDevice::_ControlThreadCleanup()
 void
 MouseDevice::_UpdateSettings()
 {
-	MD_CALLED();
+	CALLED();
 	// retrieve current values
 
 	if (get_mouse_map(fDeviceRef.name, &fSettings.map) != B_OK)
-		LOG_ERR("error when get_mouse_map\n");
+		LOG_ERROR("error when get_mouse_map\n");
 	else
 		fDeviceRemapsButtons = ioctl(fDevice, MS_SET_MAP, &fSettings.map) == B_OK;
 
@@ -575,13 +547,13 @@ MouseDevice::_UpdateSettings()
 			fTouchpadMovementMaker.click_speed = fSettings.click_speed;
 		ioctl(fDevice, MS_SET_CLICKSPEED, &fSettings.click_speed);
 	} else
-		LOG_ERR("error when get_click_speed\n");
+		LOG_ERROR("error when get_click_speed\n");
 
 	if (get_mouse_speed(fDeviceRef.name, &fSettings.accel.speed) != B_OK)
-		LOG_ERR("error when get_mouse_speed\n");
+		LOG_ERROR("error when get_mouse_speed\n");
 	else {
 		if (get_mouse_acceleration(fDeviceRef.name, &fSettings.accel.accel_factor) != B_OK)
-			LOG_ERR("error when get_mouse_acceleration\n");
+			LOG_ERROR("error when get_mouse_acceleration\n");
 		else {
 			mouse_accel accel;
 			ioctl(fDevice, MS_GET_ACCEL, &accel);
@@ -592,7 +564,7 @@ MouseDevice::_UpdateSettings()
 	}
 
 	if (get_mouse_type(fDeviceRef.name, &fSettings.type) != B_OK)
-		LOG_ERR("error when get_mouse_type\n");
+		LOG_ERROR("error when get_mouse_type\n");
 	else
 		ioctl(fDevice, MS_SET_TYPE, &fSettings.type);
 }
@@ -612,6 +584,8 @@ status_t
 MouseDevice::_UpdateTouchpadSettings(BMessage* message)
 {
 	touchpad_settings settings;
+	settings = kDefaultTouchpadSettings;
+
 	message->FindBool("scroll_reverse", &settings.scroll_reverse);
 	message->FindBool("scroll_twofinger", &settings.scroll_twofinger);
 	message->FindBool("scroll_twofinger_horizontal",
@@ -629,6 +603,15 @@ MouseDevice::_UpdateTouchpadSettings(BMessage* message)
 		(int8*)&settings.scroll_acceleration);
 	message->FindInt8("tapgesture_sensibility",
 		(int8*)&settings.tapgesture_sensibility);
+
+	message->FindBool("scroll_twofinger_natural_scrolling",
+		&settings.scroll_twofinger_natural_scrolling);
+	message->FindInt8("edge_motion",
+		(int8*)&settings.edge_motion);
+	message->FindBool("finger_click",
+		&settings.finger_click);
+	message->FindBool("software_button_areas",
+		&settings.software_button_areas);
 
 	if (fIsTouchpad)
 		fTouchpadMovementMaker.SetSettings(settings);
@@ -730,7 +713,7 @@ MouseInputDevice::MouseInputDevice()
 	fDevices(2),
 	fDeviceListLock("MouseInputDevice list")
 {
-	MID_CALLED();
+	CALLED();
 
 	StartMonitoringDevice(kMouseDevicesDirectory);
 	StartMonitoringDevice(kTouchpadDevicesDirectory);
@@ -741,7 +724,7 @@ MouseInputDevice::MouseInputDevice()
 
 MouseInputDevice::~MouseInputDevice()
 {
-	MID_CALLED();
+	CALLED();
 
 	StopMonitoringDevice(kTouchpadDevicesDirectory);
 	StopMonitoringDevice(kMouseDevicesDirectory);
@@ -752,7 +735,7 @@ MouseInputDevice::~MouseInputDevice()
 status_t
 MouseInputDevice::InitCheck()
 {
-	MID_CALLED();
+	CALLED();
 
 	return BInputServerDevice::InitCheck();
 }
@@ -761,7 +744,7 @@ MouseInputDevice::InitCheck()
 status_t
 MouseInputDevice::Start(const char* name, void* cookie)
 {
-	MID_CALLED();
+	CALLED();
 
 	MouseDevice* device = (MouseDevice*)cookie;
 
@@ -785,7 +768,7 @@ status_t
 MouseInputDevice::Control(const char* name, void* cookie,
 	uint32 command, BMessage* message)
 {
-	TRACE("%s(%s, code: %lu)\n", __PRETTY_FUNCTION__, name, command);
+	TRACE("%s(%s, code: %" B_PRIu32 ")\n", __PRETTY_FUNCTION__, name, command);
 
 	MouseDevice* device = (MouseDevice*)cookie;
 
@@ -806,7 +789,7 @@ MouseInputDevice::Control(const char* name, void* cookie,
 status_t
 MouseInputDevice::_HandleMonitor(BMessage* message)
 {
-	MID_CALLED();
+	CALLED();
 
 	const char* path;
 	int32 opcode;
@@ -830,7 +813,7 @@ MouseInputDevice::_HandleMonitor(BMessage* message)
 void
 MouseInputDevice::_RecursiveScan(const char* directory)
 {
-	MID_CALLED();
+	CALLED();
 
 	BEntry entry;
 	BDirectory dir(directory);
@@ -854,7 +837,7 @@ MouseInputDevice::_RecursiveScan(const char* directory)
 MouseDevice*
 MouseInputDevice::_FindDevice(const char* path) const
 {
-	MID_CALLED();
+	CALLED();
 
 	for (int32 i = fDevices.CountItems() - 1; i >= 0; i--) {
 		MouseDevice* device = fDevices.ItemAt(i);
@@ -869,7 +852,7 @@ MouseInputDevice::_FindDevice(const char* path) const
 status_t
 MouseInputDevice::_AddDevice(const char* path)
 {
-	MID_CALLED();
+	CALLED();
 
 	BAutolock _(fDeviceListLock);
 
@@ -900,7 +883,7 @@ MouseInputDevice::_AddDevice(const char* path)
 status_t
 MouseInputDevice::_RemoveDevice(const char* path)
 {
-	MID_CALLED();
+	CALLED();
 
 	BAutolock _(fDeviceListLock);
 

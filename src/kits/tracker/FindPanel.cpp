@@ -71,6 +71,7 @@ All rights reserved.
 #include <SeparatorView.h>
 #include <Size.h>
 #include <SpaceLayoutItem.h>
+#include <StackOrHeapArray.h>
 #include <StringFormat.h>
 #include <TextControl.h>
 #include <TextView.h>
@@ -101,6 +102,8 @@ const uint32 kRunSaveAsTemplatePanel = 'svtm';
 const uint32 kLatchChanged = 'ltch';
 
 static const float kPopUpIndicatorWidth = 13.0f;
+
+static const int32 kMaxMostUsedItems = 5;
 
 const char* kDragNDropTypes[] = {
 	B_QUERY_MIMETYPE,
@@ -140,21 +143,22 @@ namespace BPrivate {
 class MostUsedNames {
 public:
 								MostUsedNames(const char* fileName, const char* directory,
-									int32 maxCount = 5);
+									int32 maxCount = kMaxMostUsedItems);
 								~MostUsedNames();
 
-			bool				ObtainList(BList* list);
+			bool				ObtainList(BStringList* list);
 			void				ReleaseList();
 
-			void 				AddName(const char*);
+			void 				AddName(const BString&);
 
 protected:
 			struct list_entry {
-				char* name;
+				BString name;
 				int32 count;
+				int32 index;
 			};
 
-		static int CompareNames(const void* a, const void* b);
+		static int CompareNames(const list_entry* a, const list_entry* b);
 		void LoadList();
 		void UpdateList();
 
@@ -162,7 +166,7 @@ protected:
 		const char*	fDirectory;
 		bool		fLoaded;
 		mutable Benaphore fLock;
-		BList		fList;
+		BObjectList<list_entry> fList;
 		int32		fCount;
 };
 
@@ -649,6 +653,7 @@ FindWindow::SaveQueryAsAttributes(BNode* file, BEntry* entry, bool queryTemplate
 	}
 
 	bool addAllVolumes = volMenu->ItemAt(0)->IsMarked();
+	bool addBootVolume = false;
 	BMessage messageContainingVolumeInfo;
 	for (int32 i = 0; i < volumeItemsCount; i++) {
 		BMenuItem* volumeMenuItem = volMenu->ItemAt(firstVolumeItem + i);
@@ -657,9 +662,28 @@ FindWindow::SaveQueryAsAttributes(BNode* file, BEntry* entry, bool queryTemplate
 		if (messageOfVolumeMenuItem->FindInt32("device", &device) != B_OK)
 			continue;
 
+		if (volumeMenuItem->IsMarked() && messageOfVolumeMenuItem->GetBool("boot", false))
+			addBootVolume = true;
+
 		if (volumeMenuItem->IsMarked() || addAllVolumes) {
 			BVolume volume(device);
 			EmbedUniqueVolumeInfo(&messageContainingVolumeInfo, &volume);
+		}
+	}
+
+	// Search packagefs volumes on "All disks" and boot volume
+	if (addAllVolumes || addBootVolume) {
+		BVolumeRoster roster;
+		BVolume volume;
+		roster.Rewind();
+		while (roster.GetNextVolume(&volume) == B_OK) {
+			if (volume.IsPersistent() && volume.KnowsQuery() && volume.Capacity() == 0) {
+				fs_info info;
+				if (fs_stat_dev(volume.Device(), &info) == B_OK
+					&& strcmp(info.fsh_name, "packagefs") == 0) {
+					EmbedUniqueVolumeInfo(&messageContainingVolumeInfo, &volume);
+				}
+			}
 		}
 	}
 
@@ -1164,14 +1188,14 @@ FindPanel::LoadDirectoryFiltersFromFile(const BNode* node)
 		return;
 
 	BString bufferString;
-	char* buffer = bufferString.LockBuffer(info.size);
-	if (node->ReadAttr("_trk/directories", B_MESSAGE_TYPE, 0, buffer, (size_t)info.size)
-		!= info.size) {
+	BStackOrHeapArray<char, 512> buffer(info.size);
+	if (!buffer.IsValid() || node->ReadAttr("_trk/directories", B_MESSAGE_TYPE, 0, buffer,
+		(size_t)info.size) != info.size) {
 		return;
 	}
 
 	BMessage message;
-	if (message.Unflatten(buffer) != B_OK)
+	if (message.Unflatten(buffer, info.size) != B_OK)
 		return;
 
 	int32 count;
@@ -1294,10 +1318,15 @@ FindPanel::SaveDirectoryFiltersToFile(BNode* node)
 	if (node->InitCheck() != B_OK)
 		return B_NO_INIT;
 
+	int32 count = fDirectoryFilters.CountItems();
+	if (count == 0) {
+		node->RemoveAttr("_trk/directories");
+		return B_OK;
+	}
+
 	// Store the entry_refs of the fDirectoryFilters to a BMessage
 	// So that it can be serialized.
 	BMessage message;
-	int32 count = fDirectoryFilters.CountItems();
 	for (int32 i = 0; i < count; i++) {
 		entry_ref* ref = fDirectoryFilters.ItemAt(i);
 		if (message.AddRef("refs", ref) != B_OK)
@@ -1521,7 +1550,7 @@ FindPanel::ShowVolumeMenuLabel()
 }
 
 
-const char*
+BString
 FindPanel::MultipleSelectionsTitle(int32 count)
 {
 	static BStringFormat format(B_TRANSLATE_COMMENT(
@@ -1736,9 +1765,10 @@ FindPanel::MessageReceived(BMessage* message)
 		{
 			BMenuItem* item;
 			if (message->FindPointer("source", (void**)&item) == B_OK) {
-				// don't add the "All files and folders" to the list
-				if (fMimeTypeMenu->IndexOf(item) != 0)
+				if (item->Menu() != fMimeTypeMenu) {
+					// submenu, add mime type
 					gMostUsedMimeTypes.AddName(item->Label());
+				}
 
 				SetCurrentMimeType(item);
 			}
@@ -2377,44 +2407,8 @@ FindPanel::AddOneMimeTypeToMenu(const ShortMimeInfo* info, void* castToMenu)
 void
 FindPanel::AddMimeTypesToMenu()
 {
-	BMessage* itemMessage = new BMessage(kMIMETypeItem);
-	itemMessage->AddString("mimetype", kAllMimeTypes);
-
-	IconMenuItem* firstItem = new IconMenuItem(
-		B_TRANSLATE("All files and folders"), itemMessage,
-		static_cast<BBitmap*>(NULL));
-	MimeTypeMenu()->AddItem(firstItem);
-	MimeTypeMenu()->AddSeparatorItem();
-
-	// add recent MIME types
-
 	TTracker* tracker = dynamic_cast<TTracker*>(be_app);
 	ASSERT(tracker != NULL);
-
-	BList list;
-	if (tracker != NULL && gMostUsedMimeTypes.ObtainList(&list)) {
-		int32 count = 0;
-		for (int32 index = 0; index < list.CountItems(); index++) {
-			const char* name = (const char*)list.ItemAt(index);
-
-			MimeTypeList* mimeTypes = tracker->MimeTypes();
-			if (mimeTypes != NULL) {
-				const ShortMimeInfo* info = mimeTypes->FindMimeType(name);
-				if (info == NULL)
-					continue;
-
-				BMessage* message = new BMessage(kMIMETypeItem);
-				message->AddString("mimetype", info->InternalName());
-
-				MimeTypeMenu()->AddItem(new BMenuItem(name, message));
-				count++;
-			}
-		}
-		if (count != 0)
-			MimeTypeMenu()->AddSeparatorItem();
-
-		gMostUsedMimeTypes.ReleaseList();
-	}
 
 	// add MIME type tree list
 
@@ -2429,33 +2423,76 @@ FindPanel::AddMimeTypesToMenu()
 			BMessage* message = new BMessage(kMIMETypeItem);
 			message->AddString("mimetype", superType);
 
-			MimeTypeMenu()->AddItem(new IconMenuItem(superMenu, message,
-				superType));
+			fMimeTypeMenu->AddItem(new IconMenuItem(superMenu, message, superType));
 
 			// the MimeTypeMenu's font is not correct at this time
 			superMenu->SetFont(be_plain_font);
 		}
 	}
 
-	if (tracker != NULL) {
-		tracker->MimeTypes()->EachCommonType(
-			&FindPanel::AddOneMimeTypeToMenu, MimeTypeMenu());
-	}
+	tracker->MimeTypes()->EachCommonType(&FindPanel::AddOneMimeTypeToMenu, fMimeTypeMenu);
 
 	// remove empty super type menus (and set target)
+	{
+		BMenuItem* item;
+		int32 index = fMimeTypeMenu->CountItems();
+		while (index-- > 0 && (item = fMimeTypeMenu->ItemAt(index)) != NULL) {
+			BMenu* submenu = item->Submenu();
+			if (submenu == NULL)
+				continue;
 
-	for (int32 index = MimeTypeMenu()->CountItems(); index-- > 2;) {
-		BMenuItem* item = MimeTypeMenu()->ItemAt(index);
-		BMenu* submenu = item->Submenu();
-		if (submenu == NULL)
-			continue;
-
-		if (submenu->CountItems() == 0) {
-			MimeTypeMenu()->RemoveItem(item);
-			delete item;
-		} else
-			submenu->SetTargetForItems(this);
+			if (submenu->CountItems() == 0) {
+				fMimeTypeMenu->RemoveItem(item);
+				delete item;
+			} else
+				submenu->SetTargetForItems(this);
+		}
 	}
+
+	// sort super types
+	fMimeTypeMenu->SortItems(CompareLabels);
+
+	// add most used MIME types
+
+	BStringList list;
+	if (tracker != NULL && gMostUsedMimeTypes.ObtainList(&list)) {
+		int32 count = 0;
+		for (int32 index = 0; index < list.CountStrings(); index++) {
+			BString name = list.StringAt(index);
+
+			MimeTypeList* mimeTypes = tracker->MimeTypes();
+			if (mimeTypes == NULL)
+				break;
+
+			const ShortMimeInfo* info = mimeTypes->FindMimeType(name);
+			if (info == NULL)
+				continue;
+
+			BMessage* message = new BMessage(kMIMETypeItem);
+			const char* type = info->InternalName();
+			message->AddString("mimetype", type);
+			fMimeTypeMenu->AddItem(new IconMenuItem(name, message, type), 0);
+
+			count++;
+		}
+
+		if (count > 0) {
+			BSeparatorItem* separator = new BSeparatorItem();
+			fMimeTypeMenu->AddItem(separator, count);
+		}
+
+		gMostUsedMimeTypes.ReleaseList();
+	}
+
+	// add "All files and folders"
+
+	BMessage* allMessage = new BMessage(kMIMETypeItem);
+	allMessage->AddString("mimetype", kAllMimeTypes);
+	IconMenuItem* allItem = new IconMenuItem(B_TRANSLATE("All files and folders"),
+		allMessage, static_cast<BBitmap*>(NULL));
+	fMimeTypeMenu->AddItem(allItem, 0);
+	BSeparatorItem* separator = new BSeparatorItem();
+	fMimeTypeMenu->AddItem(separator, 1);
 }
 
 
@@ -2475,9 +2512,11 @@ FindPanel::AddVolumes()
 
 	BVolumeRoster roster;
 	BVolume volume;
+	BVolume boot;
+	roster.GetBootVolume(&boot);
 	roster.Rewind();
 	while (roster.GetNextVolume(&volume) == B_OK) {
-		if (volume.IsPersistent() && volume.KnowsQuery()) {
+		if (volume.IsPersistent() && volume.Capacity() > 0 && volume.KnowsQuery()) {
 			BDirectory root;
 			if (volume.GetRootDirectory(&root) != B_OK)
 				continue;
@@ -2491,6 +2530,8 @@ FindPanel::AddVolumes()
 
 			message = new BMessage(kVolumeItem);
 			message->AddInt32("device", volume.Device());
+			if (volume == boot)
+				message->AddBool("boot", true);
 			fVolMenu->AddItem(new ModelMenuItem(&model, model.Name(), message));
 			fVolumeItemsCount++;
 		}
@@ -2969,11 +3010,11 @@ FindPanel::RestoreWindowState(const BNode* node)
 
 	attr_info info;
 	if (node->GetAttrInfo(kAttrQueryVolume, &info) == B_OK) {
-		char* buffer = new char[info.size];
-		if (node->ReadAttr(kAttrQueryVolume, B_MESSAGE_TYPE, 0, buffer,
+		BStackOrHeapArray<char, 512> buffer(info.size);
+		if (buffer.IsValid() && node->ReadAttr(kAttrQueryVolume, B_MESSAGE_TYPE, 0, buffer,
 				(size_t)info.size) == info.size) {
 			BMessage message;
-			if (message.Unflatten(buffer) == B_OK) {
+			if (message.Unflatten(buffer, info.size) == B_OK) {
 				for (int32 index = 0; ;index++) {
 					ASSERT(index < 100);
 					BVolume volume;
@@ -2994,7 +3035,6 @@ FindPanel::RestoreWindowState(const BNode* node)
 				}
 			}
 		}
-		delete[] buffer;
 	}
 
 	LoadDirectoryFiltersFromFile(node);
@@ -3014,16 +3054,15 @@ FindPanel::RestoreWindowState(const BNode* node)
 			attr_info info;
 			if (node->GetAttrInfo(kAttrQueryInitialAttrs, &info) != B_OK)
 				break;
-			char* buffer = new char[info.size];
-			if (node->ReadAttr(kAttrQueryInitialAttrs, B_MESSAGE_TYPE, 0,
+			BStackOrHeapArray<char, 512> buffer(info.size);
+			if (buffer.IsValid() && node->ReadAttr(kAttrQueryInitialAttrs, B_MESSAGE_TYPE, 0,
 					buffer, (size_t)info.size) == info.size) {
 				BMessage message;
-				if (message.Unflatten(buffer) == B_OK) {
+				if (message.Unflatten(buffer, info.size) == B_OK) {
 					for (int32 index = 0; index < count; index++)
 						RestoreAttrState(message, index);
 				}
 			}
-			delete[] buffer;
 			break;
 		}
 
@@ -3811,8 +3850,7 @@ DraggableQueryIcon::DragStarted(BMessage* dragMessage)
 //	#pragma mark -
 
 
-MostUsedNames::MostUsedNames(const char* fileName, const char* directory,
-	int32 maxCount)
+MostUsedNames::MostUsedNames(const char* fileName, const char* directory, int32 maxCount)
 	:
 	fFileName(fileName),
 	fDirectory(directory),
@@ -3838,10 +3876,9 @@ MostUsedNames::~MostUsedNames()
 
 	BFile file(path.Path(), B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
 	if (file.InitCheck() == B_OK) {
-		for (int32 i = 0; i < fList.CountItems(); i++) {
-			list_entry* entry = static_cast<list_entry*>(fList.ItemAt(i));
-
-			char line[B_FILE_NAME_LENGTH + 5];
+		int32 count = fList.CountItems();
+		for (int32 index = 0; index < count; index++) {
+			list_entry* entry = fList.ItemAt(index);
 
 			// limit upper bound to react more dynamically to changes
 			if (--entry->count > 20)
@@ -3849,11 +3886,12 @@ MostUsedNames::~MostUsedNames()
 
 			// if the item hasn't been chosen in a while, remove it
 			// (but leave at least one item in the list)
-			if (entry->count < -10 && i > 0)
+			if (entry->count < -10 && index > 0)
 				continue;
 
-			sprintf(line, "%" B_PRId32 " %s\n", entry->count, entry->name);
-			if (file.Write(line, strlen(line)) < B_OK)
+			BString line;
+			line.SetToFormat("%" B_PRId32 " %s\n", entry->count, entry->name.String());
+			if (file.Write(line.String(), line.Length()) < B_OK)
 				break;
 		}
 	}
@@ -3861,16 +3899,15 @@ MostUsedNames::~MostUsedNames()
 
 	// free data
 
-	for (int32 i = fList.CountItems(); i-- > 0;) {
-		list_entry* entry = static_cast<list_entry*>(fList.ItemAt(i));
-		free(entry->name);
+	for (int32 index = fList.CountItems(); index-- > 0;) {
+		list_entry* entry = fList.ItemAt(index);
 		delete entry;
 	}
 }
 
 
 bool
-MostUsedNames::ObtainList(BList* list)
+MostUsedNames::ObtainList(BStringList* list)
 {
 	if (list == NULL)
 		return false;
@@ -3881,13 +3918,14 @@ MostUsedNames::ObtainList(BList* list)
 	fLock.Lock();
 
 	list->MakeEmpty();
-	for (int32 i = 0; i < fCount; i++) {
-		list_entry* entry = static_cast<list_entry*>(fList.ItemAt(i));
+	for (int32 index = 0; index < fCount; index++) {
+		list_entry* entry = fList.ItemAt(index);
 		if (entry == NULL)
 			return true;
 
-		list->AddItem(entry->name);
+		list->Add(entry->name);
 	}
+
 	return true;
 }
 
@@ -3900,49 +3938,55 @@ MostUsedNames::ReleaseList()
 
 
 void
-MostUsedNames::AddName(const char* name)
+MostUsedNames::AddName(const BString& name)
 {
 	fLock.Lock();
 
 	if (!fLoaded)
 		LoadList();
 
-	// remove last entry if there are more than
-	// 2*fCount entries in the list
-
 	list_entry* entry = NULL;
 
-	if (fList.CountItems() > fCount * 2) {
-		entry = static_cast<list_entry*>(
-			fList.RemoveItem(fList.CountItems() - 1));
-
-		// is this the name we want to add here?
-		if (strcmp(name, entry->name)) {
-			free(entry->name);
-			delete entry;
-			entry = NULL;
-		} else
-			fList.AddItem(entry);
+	// set entry to existing entry with this name if found
+	for (int32 i = 0; (entry = fList.ItemAt(i)) != NULL; i++) {
+		if (entry->name == name)
+			break;
 	}
 
 	if (entry == NULL) {
-		for (int32 i = 0;
-				(entry = static_cast<list_entry*>(fList.ItemAt(i))) != NULL; i++) {
-			if (strcmp(entry->name, name) == 0)
-				break;
-		}
-	}
-
-	if (entry == NULL) {
+		// add new entry
 		entry = new list_entry;
-		entry->name = strdup(name);
+		entry->name = name;
 		entry->count = 1;
+		entry->index = fList.CountItems();
+
+		// remove item if over limit
+		if (entry->index >= kMaxMostUsedItems) {
+			// find the smallest count
+			int32 smallest = fList.ItemAt(0)->count;
+			for (int32 index = 0; index < kMaxMostUsedItems; index++)
+				smallest = std::min(smallest, fList.ItemAt(index)->count);
+
+			// delete the first item with the smallest count
+			for (int32 index = 0; index < kMaxMostUsedItems; index++) {
+				if (smallest == fList.ItemAt(index)->count) {
+					delete fList.RemoveItemAt(index);
+					break;
+				}
+			}
+		}
 
 		fList.AddItem(entry);
-	} else if (entry->count < 0)
-		entry->count = 1;
-	else
-		entry->count++;
+	} else {
+		// update existing entry
+		if (entry->count < 0) {
+			// negative count means old known mime type, put count back to 1
+			entry->count = 1;
+		} else {
+			// mime type queried again
+			entry->count++;
+		}
+	}
 
 	fLock.Unlock();
 	UpdateList();
@@ -3950,13 +3994,10 @@ MostUsedNames::AddName(const char* name)
 
 
 int
-MostUsedNames::CompareNames(const void* a,const void* b)
+MostUsedNames::CompareNames(const list_entry* entryA, const list_entry* entryB)
 {
-	list_entry* entryA = *(list_entry**)a;
-	list_entry* entryB = *(list_entry**)b;
-
 	if (entryA->count == entryB->count)
-		return strcasecmp(entryA->name,entryB->name);
+		return entryB->index < entryA->index;
 
 	return entryB->count - entryA->count;
 }
@@ -3967,6 +4008,7 @@ MostUsedNames::LoadList()
 {
 	if (fLoaded)
 		return;
+
 	fLoaded = true;
 
 	// load the most used names list
@@ -3981,6 +4023,7 @@ MostUsedNames::LoadList()
 	if (file == NULL)
 		return;
 
+	int32 index = 0;
 	char line[B_FILE_NAME_LENGTH + 5];
 	while (fgets(line, sizeof(line), file) != NULL) {
 		int32 length = (int32)strlen(line) - 1;
@@ -3994,10 +4037,12 @@ MostUsedNames::LoadList()
 			continue;
 
 		list_entry* entry = new list_entry;
-		entry->name = strdup(name);
+		entry->name = name;
 		entry->count = count;
+		entry->index = index;
 
 		fList.AddItem(entry);
+		index++;
 	}
 	fclose(file);
 }
@@ -4014,6 +4059,11 @@ MostUsedNames::UpdateList()
 	// sort list items
 
 	fList.SortItems(MostUsedNames::CompareNames);
+
+	// reindex list
+	int32 itemCount = fList.CountItems();
+	for (int32 index = 0; index < itemCount; index++)
+		fList.ItemAt(index)->index = index;
 }
 
 }	// namespace BPrivate

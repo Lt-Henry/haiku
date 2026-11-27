@@ -3,6 +3,7 @@
  * Copyright 2022, Haiku, Inc. All rights reserved.
  * Distributed under the terms of the MIT License.
  */
+
 #include "MemoryBarMenuItem.h"
 
 #include "Colors.h"
@@ -11,6 +12,7 @@
 
 #include <Bitmap.h>
 #include <ControlLook.h>
+#include <KernelExport.h>
 #include <StringForSize.h>
 
 #include <stdio.h>
@@ -76,6 +78,7 @@ MemoryBarMenuItem::DrawBar(bool force)
 
 	BFont font;
 	menu->GetFont(&font);
+	const float margin = font.Size();
 	BRect rect = bar_rect(frame, &font);
 
 	// draw the bar itself
@@ -163,8 +166,8 @@ MemoryBarMenuItem::DrawBar(bool force)
 	else
 		menu->SetLowColor(gMenuBackColor);
 
-	BRect textRect(rect.left - kMargin - gMemoryTextWidth, frame.top,
-		rect.left - kMargin, frame.bottom);
+	BRect textRect(rect.left - margin - gMemoryTextWidth, frame.top,
+		rect.left - margin, frame.bottom);
 	menu->FillRect(textRect, B_SOLID_LOW);
 
 	fLastWrite = fWriteMemory;
@@ -178,12 +181,12 @@ MemoryBarMenuItem::DrawBar(bool force)
 	char infos[128];
 	string_for_size(fWriteMemory * 1024.0, infos, sizeof(infos));
 
-	BPoint loc(rect.left - kMargin - gMemoryTextWidth / 2 - menu->StringWidth(infos),
+	BPoint loc(rect.left - margin - gMemoryTextWidth / 2 - menu->StringWidth(infos),
 		rect.bottom + 1);
 	menu->DrawString(infos, loc);
 
 	string_for_size(fAllMemory * 1024.0, infos, sizeof(infos));
-	loc.x = rect.left - kMargin - menu->StringWidth(infos);
+	loc.x = rect.left - margin - menu->StringWidth(infos);
 	menu->DrawString(infos, loc);
 	menu->SetHighColor(highColor);
 }
@@ -193,12 +196,15 @@ void
 MemoryBarMenuItem::GetContentSize(float* _width, float* _height)
 {
 	IconMenuItem::GetContentSize(_width, _height);
+
+	BFont font;
+	Menu()->GetFont(&font);
 	*_width += ceilf(be_control_look->DefaultLabelSpacing() * 2.0f)
-		+ kBarWidth + kMargin + gMemoryTextWidth;
+		+ kBarWidth + font.Size() + gMemoryTextWidth;
 }
 
 
-int
+int64
 MemoryBarMenuItem::UpdateSituation(int64 committedMemory)
 {
 	fCommittedMemory = committedMemory;
@@ -216,27 +222,44 @@ MemoryBarMenuItem::BarUpdate()
 	int64 lwram_size = 0;
 	bool exists = false;
 
+	const bool isAppServer = (strcmp(Label(), "app_server") == 0);
+
 	while (get_next_area_info(fTeamID, &cookie, &areaInfo) == B_OK) {
 		exists = true;
 		lram_size += areaInfo.ram_size;
 
-		// TODO: this won't work this way anymore under Haiku!
-//		int zone = (int (areaInfo.address) & 0xf0000000) >> 24;
+		if (isAppServer && strncmp(areaInfo.name, "a:", 2) == 0) {
+			// app_server side of client memory (e.g. bitmaps), ignore.
+			continue;
+		}
+		if (fTeamID == B_SYSTEM_TEAM) {
+			if ((areaInfo.protection & B_KERNEL_WRITE_AREA) != 0)
+				areaInfo.protection |= B_WRITE_AREA;
+		}
+		// TODO: Exclude media buffers
+
 		if ((areaInfo.protection & B_WRITE_AREA) != 0)
 			lwram_size += areaInfo.ram_size;
-//			&& (zone & 0xf0) != 0xA0			// Exclude media buffers
-//			&& (fTeamID != gAppServerTeamID || zone != 0x90))	// Exclude app_server side of bitmaps
 	}
-	if (!exists) {
+	if (fTeamID == B_SYSTEM_TEAM) {
+		system_info info;
+		status_t status = get_system_info(&info);
+		if (status == B_OK) {
+			// block_cache memory will be in writable areas
+			lwram_size -= info.block_cache_pages * B_PAGE_SIZE;
+		}
+	} else if (!exists) {
 		team_info info;
 		exists = get_team_info(fTeamID, &info) == B_OK;
+		if (!exists) {
+			fWriteMemory = -1;
+			return;
+		}
 	}
-	if (exists) {
-		fWriteMemory = lwram_size / 1024;
-		fAllMemory = lram_size / 1024;
-		DrawBar(false);
-	} else
-		fWriteMemory = -1;
+
+	fWriteMemory = lwram_size / 1024;
+	fAllMemory = lram_size / 1024;
+	DrawBar(false);
 }
 
 

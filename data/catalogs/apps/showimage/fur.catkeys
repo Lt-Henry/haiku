@@ -1,7 +1,6 @@
-1	friulian	x-vnd.Haiku-ShowImage	2453396430
+1	friulian	x-vnd.Haiku-ShowImage	549474543
 ShowImage	System name		MostreImagjin
 Page setup…	Menus		Impostazions pagjine…
-The document '%s' (page %d) has been changed. Do you want to close the document?	ClosePrompt		Il document '%s' (pagjine %d) al è stât modificât. Sierâ il document?
 Previous file	Menus		File precedent
 View	Menus		Visualize
 Leave full screen	Menus		Lasse mût plen visôr
@@ -13,6 +12,7 @@ Height: 	PrintOptionsWindow		Altece:
 Next file	Menus		Prossim file
 Slide show	Menus		Proiezion diapositivis
 Original size	Menus		Dimensions origjinâls
+The document '%filename%' has been changed. Do you want to close the document?	ClosePrompt		Il document '%filename%' al è stât modificât. Desideristu sierâ il document?
 Width:	PrintOptionsWindow		Largjece:
 Resize to (in 1/72 inches):	PrintOptionsWindow		Ridimensione a (in 1/72 oncis):
 Zoom factor in %:	PrintOptionsWindow		Fatôr di ingrandiment in %:
@@ -26,8 +26,8 @@ Zoom in	Menus		Ingrandìs
 Last page	Menus		Ultime pagjine
 Cancel	ClosePrompt		Anule
 Attributes	Menus		Atribûts
+Show boundaries marks	Menus		Mostre i segns dai confins
 High-quality zooming	Menus		Ingrandiment alte-cualitât
-The document '%s' has been changed. Do you want to close the document?	ClosePrompt		Il document '%s' al è stât modificât. Sierâ il document?
 Close	Menus		Siere
 Selection mode	Menus		Modalitât selezion
 Reset rating	Menus		Azere valutazion
@@ -46,14 +46,13 @@ Stretch to window	Menus		Slungje al barcon
 Job setup	PrintOptionsWindow		Configure lavôr
 Clear selection	Menus		Nete selezion
 Rotate clockwise	Menus		Volte in sens orari
-Could not load image! Either the file or an image translator for it does not exist.	LoadAlerts		Impussibil cjariâ la imagjin! O nol esist il file o nol esist un tradutôr di imagjin par chel file.
 Open with…	Menus		Vierç cun…
 Rotate counterclockwise	Menus		Volte in sens antiorari
+The document '%filename%' (page %number%) has been changed. Do you want to close the document?	ClosePrompt		Il document '%filename%' (pagjine %number%) al è stât modificât. Desideristu sierâ il document?
 Previous page	Menus		Pagjine precedente
 Fit to window	Menus		Adate al barcon
 Go to page	Menus		Va ae pagjine
 Browse	Menus		Sgarfe
-Progress monitor	ProgressWindow		Control di avanzament
 Edit	Menus		Modifiche
 Move to Trash	Menus		Sposte te Scovacere
 Use as background…	Menus		Dopre come fonts…

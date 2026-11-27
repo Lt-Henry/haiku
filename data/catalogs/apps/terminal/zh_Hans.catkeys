@@ -1,7 +1,6 @@
-1	english	x-vnd.Haiku-Terminal	686383766
+1	english	x-vnd.Haiku-Terminal	3127241236
 Close other tabs	Terminal TermWindow		关闭其他标签
 Insert path	Terminal TermView		插入路径  
-Terminal couldn't start the shell. Sorry.	Terminal TermApp		终端无法启动shell，非常抱歉。
 Text encoding	Terminal TermWindow		文字编码
 Colors	Terminal ThemeWindow		颜色
 OK	Terminal SetTitleWindow		确定
@@ -35,7 +34,6 @@ Cancel	Terminal TermView		取消
 Defaults	Terminal PrefWindow		默认主题
 black	Terminal ThemeView		黑
 Revert	Terminal PrefWindow		恢复
-Terminal	Terminal TermWindow	The title for the main window menubar entry related to terminal sessions	终端
 Use selection	Terminal FindWindow		使用选择
 Find next	Terminal TermWindow		查找下一个
 Copy link location	Terminal TermView		复制链接位置
@@ -43,24 +41,21 @@ Background	Terminal ThemeView		背景
 Window title:	Terminal AppearancePrefView		窗口标题：
 New tab	Terminal TermWindow		新建标签
 magenta	Terminal ThemeView		洋红
-Allow bold text	Terminal AppearancePrefView		允许粗体字
 Window title…	Terminal TermWindow		窗口标题...
 ANSI blue color	Terminal ThemeView		ANSI 蓝
 blue	Terminal ThemeView		蓝色
-Open path	Terminal TermView		打开路径
 Cannot execute \"%command\":\n\t%error	Terminal Shell		无法运行\"%command\":\n\t%error
+Open path	Terminal TermView		打开路径
 Terminal	System name		终端
 Custom	Terminal colors scheme		自定义
 Really close?	Terminal TermWindow		确定关闭吗？
 Font size	Terminal TermWindow		字体大小
 OK	Terminal TermApp		确定
 ANSI bright blue color	Terminal ThemeView		ANSI 亮蓝
-The process \"%1\" is still running.\nIf you close the Terminal, the process will be killed.	Terminal TermWindow		\"%1\" 进程仍在运行。\n如果关闭终端，该进程将被杀死。
 Unrecognized option \"%s\"\n	Terminal arguments parsing		无法识别的选项\"%s\"\n
 Tab title:	Terminal AppearancePrefView		标签标题：
 Text not found.	Terminal TermWindow		文本未搜索到。
 Match word	Terminal FindWindow		匹配单词
-New Terminal	Terminal TermWindow		新建窗口
 Find failed	Terminal TermWindow		查找失败
 Quit	Terminal TermWindow		退出
 Match case	Terminal FindWindow		匹配大小写
@@ -80,20 +75,20 @@ Full screen	Terminal TermWindow		全屏
 Shell 	Terminal TermWindow		Shell
 Revert	Terminal ThemeWindow		恢复
 ANSI green color	Terminal ThemeView		ANSI 绿
-\t%%\t-\tThe character '%'.\n\t%<\t-\tStarts a section that will only be shown if a placeholder\n\t\t\tafterwards is not empty.\n\t%>\t-\tStarts a section that will only be shown if a placeholder\n\t\t\tbetween a previous %< section and this one is not empty.\n\t%-\t-\tEnds a %< or %> section.\n\nAny non alpha numeric character between '%' and the format letter will insert a space only\nif the placeholder value is not empty. It will add to the %< section.	Terminal ToolTips		\t%%\t-\t字符 '%' 。\n\t%<\t-\t开始新区块，仅当其后的\n\t\t\t占位符不为空时显示。\n\t%>\t-\t开始新区块，仅当\n\t\t\t之前的区块 %< 和该区块不为空时显示。\n\t%-\t-\t结束一个 %< or %> 区块。\n\n'%' 和格式字母之间的任何非字母数字字符将仅插入一个空格\n如果占位符值不是空的。它将添加到 %< 部分。
+\t%%\t-\tThe character '%'.\n\t%<\t-\tStarts a section that will only be shown if a placeholder\n\t\t\tafterwards is not empty.\n\t%>\t-\tStarts a section that will only be shown if a placeholder\n\t\t\tbetween a previous %< section and this one is not empty.\n\t%-\t-\tEnds a %< or %> section.\n\nAny non alpha numeric character between '%' and the format letter will insert a space only\nif the placeholder value is not empty. It will add to the %< section.	Terminal ToolTips		\t%%\t-\tThe character '%'.\n\t%<\t-\tStarts a section that will only be shown if a placeholder\n\t\t\tafterwards is not empty.\n\t%>\t-\tStarts a section that will only be shown if a placeholder\n\t\t\tbetween a previous %< section and this one is not empty.\n\t%-\t-\tEnds a %< or %> section.\n\n只有当占位符值不为空时， '%' 和格式字母之间的任何非字母数字字符才会插入一个空格。\n它将添加到 %< 部分。
 ANSI bright cyan color	Terminal ThemeView		ANSI 亮青
 Tab title:	Terminal TermWindow		标签标题：
 Window title:	Terminal TermWindow		窗口标题：
 ANSI white color	Terminal ThemeView		ANSI 白
+Switch Terminals	Terminal TermWindow	'Terminals' being this application's name	切换终端
 Window size:	Terminal AppearancePrefView		窗口大小:
-Switch Terminals	Terminal TermWindow		切换终端
 Decrease	Terminal TermWindow		缩小
 Settings…	Terminal TermWindow		设置…
 Cancel	Terminal SetTitleWindow		取消
 Blinking cursor	Terminal AppearancePrefView		闪烁游标
+The pattern specifying the window title. The following placeholders\ncan be used:\n	Terminal TermWindow		该图案指定了窗口标题。可以使用下述的\n占位符：\n
 Use text:	Terminal FindWindow		使用文本：
 Close active tab	Terminal TermWindow		关闭活动标签
-The pattern specifying the window title. The following placeholders\ncan be used:\n	Terminal TermWindow		该图案指定了窗口标题。可以使用下述的\n占位符：\n
 Selected background	Terminal ThemeView		所选背景
 Save as default	Terminal TermWindow		默认保存
 Nothing is selected.	Terminal TermWindow		未选中任何文件。
@@ -119,7 +114,6 @@ Find…	Terminal TermWindow		查找…
 No search string was entered.	Terminal TermWindow		未输入任何字符。
 Move here	Terminal TermView		移动到此
 Abort	Terminal Shell		放弃
-The following processes are still running:\n\n\t%1\n\nIf you close the Terminal, the processes will be killed.	Terminal TermWindow		下述进程仍在运行：\n\n\t%1\n\n如果您关闭终端，这些进程将被杀死。
 Set window title	Terminal TermWindow		设置窗口标题
 ANSI red color	Terminal ThemeView		ANSI 红色
 Increase	Terminal TermWindow		增大

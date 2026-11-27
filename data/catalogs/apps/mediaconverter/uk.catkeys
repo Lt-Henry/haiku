@@ -3,7 +3,7 @@ Input file not recognized as Audio or Video	MediaConverter		Вхідний фа�
 Source files	MediaConverter		Початкові файли
 Error writing video frame %lld	MediaConverter		Помилка запису відеофрейму %lld
 Audio quality: %s	MediaConverter		Якість аудіо: %s
-Error converting '%filename'	MediaConverter		Помилка конвертації '%filename'
+Error converting '%filename'	MediaConverter		Помилка конвертації «%filename»
 Selected directory not found. Defaulting to /boot/home	MediaConverter		Вибраний коталог не знайдено. За замовчуванням: /boot/home
 Conversion completed	MediaConverter		Конвертація завершена
 Audio:	MediaConverter-FileInfo		Аудіо:
@@ -21,7 +21,7 @@ Output format	MediaConverter		Формат виводу
 %.1f kHz mono	MediaFileInfo		%.1f кГц монo
 %.1f kHz stereo	MediaFileInfo		%.1f кГц стерео
 OK	MediaConverter		ОК
-Error creating '%filename'	MediaConverter		Помилка створення '%filename'
+Error creating '%filename'	MediaConverter		Помилка створення «%filename»
 Error loading a file	MediaConverter		Помилка завантаження файлу
 Encoder parameters	MediaConverter-EncoderWindow		Параметри декодера
 Open…	Menu		Відкрити…
@@ -46,7 +46,7 @@ OK	MediaConverter-FileInfo		ОК
 Video encoding:	MediaConverter		Кодування відео:
 An error has occurred reading the file info.\n\nError : 	MediaConverter-FileInfo		Сталася помилка при зчитуванні даних про файл.\n\nПомилка : 
 Error	MediaConverter		Помилка
-File details	MediaConverter		Деталі файлу
+File details	MediaConverter		Параметри файлу
 No audio	Audio codecs list		Без аудіо
 Drop media files onto this window	MediaConverter		Перенесіть медіафайли у це вікно
 {0, plural, one{# frame} other{# frames}}	MediaFileInfo		{0, plural, one{# кадр} few{# кадра} other{# кадрів}}

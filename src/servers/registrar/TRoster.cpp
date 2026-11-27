@@ -1141,39 +1141,14 @@ TRoster::HandleSaveRecentLists(BMessage* request)
 
 
 void
-TRoster::HandleRestartAppServer(BMessage* request)
+TRoster::HandleAppServerStarted(BMessage* request)
 {
 	BAutolock _(fLock);
 
-	// TODO: if an app_server is still running, stop it first
-
-	const char* pathString;
-	if (request->FindString("path", &pathString) != B_OK)
-		pathString = "/boot/system/servers";
-	BPath path(pathString);
-	path.Append("app_server");
-	// NOTE: its required at some point that the binary name is "app_server"
-
-	const char **argv = new const char * [2];
-	argv[0] = strdup(path.Path());
-	argv[1] = NULL;
-
-	thread_id threadId = load_image(1, argv, (const char**)environ);
-	int i;
-	for (i = 0; i < 1; i++)
-		delete argv[i];
-	delete [] argv;
-
-	resume_thread(threadId);
-	// give the server some time to create the server port
-	snooze(100000);
-
-	// notify all apps
-	// TODO: whats about ourself?
 	AppInfoListMessagingTargetSet targetSet(fRegisteredApps);
 	if (targetSet.HasNext()) {
 		// send the messages
-		BMessage message(kMsgAppServerRestarted);
+		BMessage message(kMsgAppServerStarted);
 		MessageDeliverer::Default()->DeliverMessage(&message, targetSet);
 	}
 }
@@ -1215,7 +1190,7 @@ TRoster::ClearRecentApps()
 /*!	\brief Initializes the roster.
 
 	Currently only adds the registrar to the roster.
-	The application must already be running, more precisly Run() must have
+	The application must already be running, more precisely Run() must have
 	been called.
 
 	\return
@@ -1370,7 +1345,7 @@ TRoster::CheckSanity()
 }
 
 
-/*!	\brief Tells the roster whether a shutdown process is in progess at the
+/*!	\brief Tells the roster whether a shutdown process is in progress at the
 		   moment.
 
 	After this method is called with \a shuttingDown == \c true, no more
@@ -1910,7 +1885,7 @@ TRoster::_LoadRosterSettings(const char* path)
 	}
 	if (!error) {
 		data[size] = 0;
-		error = stream.SetTo(std::string(data));
+		error = stream.SetTo(BString(data));
 	}
 
 	delete[] data;
@@ -2035,7 +2010,7 @@ TRoster::_LoadRosterSettings(const char* path)
 		}
 
 		// Now we must sort our lists of documents and folders by the
-		// indicies we read for each entry (largest index first)
+		// indices we read for each entry (largest index first)
 		fRecentDocuments.fEntryList.sort(larger_index);
 		fRecentFolders.fEntryList.sort(larger_index);
 

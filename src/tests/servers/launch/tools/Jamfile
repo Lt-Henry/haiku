@@ -2,7 +2,7 @@ SubDir HAIKU_TOP src tests servers launch tools ;
 
 AddSubDirSupportedPlatforms libbe_test ;
 
-UsePrivateHeaders app kernel libroot shared storage support ;
+UsePrivateHeaders app libroot shared storage support ;
 UsePrivateSystemHeaders ;
 
 UseHeaders [ FDirName $(HAIKU_TOP) src bin multiuser ] ;
@@ -16,7 +16,7 @@ local defines = [ FDefines TEST_MODE=1 ] ;
 SubDirCcFlags $(defines) ;
 SubDirC++Flags $(defines) ;
 
-Server test_launch_daemon :
+Application test_launch_daemon :
 	LaunchDaemon.cpp
 
 	BaseJob.cpp
@@ -36,7 +36,7 @@ Server test_launch_daemon :
 	LaunchDaemon.rdef
 ;
 
-BinCommand test_launch_roster :
+Application test_launch_roster :
 	LaunchRoster.cpp
 	launch_roster.cpp
 	:

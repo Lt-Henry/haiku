@@ -66,6 +66,7 @@ BCountView::BCountView(BPoseView* view)
 	:
 	BView("CountVw", B_PULSE_NEEDED | B_WILL_DRAW),
 	fLastCount(-1),
+	fLastCountSelected(-1),
 	fPoseView(view),
 	fShowingBarberPole(false),
 	fBarberPoleMap(NULL),
@@ -74,8 +75,13 @@ BCountView::BCountView(BPoseView* view)
 	fTypeAheadString(""),
 	fFilterString("")
 {
-	GetTrackerResources()->GetBitmapResource(B_MESSAGE_TYPE,
-		R_BarberPoleBitmap, &fBarberPoleMap);
+	GetTrackerResources()->GetBitmapResource(B_MESSAGE_TYPE, R_BarberPoleBitmap, &fBarberPoleMap);
+
+	SetFont(be_plain_font);
+	SetFontSize(std::max(kMinFontSize, ceilf(be_plain_font->Size() * 0.75f)));
+
+	SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+	SetLowUIColor(ViewUIColor());
 }
 
 
@@ -99,7 +105,7 @@ BCountView::TrySpinningBarberPole()
 	// After this the text needs no updating since only the pole changes.
 	if (fStartSpinningAfter) {
 		fStartSpinningAfter = 0;
-		Invalidate(TextAndBarberPoleRect());
+		Invalidate();
 	} else
 		Invalidate(BarberPoleInnerRect());
 }
@@ -157,24 +163,14 @@ BCountView::BarberPoleOuterRect() const
 
 
 BRect
-BCountView::TextInvalRect() const
-{
-	BRect result = TextAndBarberPoleRect();
-
-	// if the barber pole is not present, use its space for text
-	if (fShowingBarberPole)
-		result.right -= 10;
-
-	return result;
-}
-
-
-BRect
-BCountView::TextAndBarberPoleRect() const
+BCountView::TextRect() const
 {
 	BRect result = Bounds();
 	result.InsetBy(be_control_look->ComposeSpacing(B_USE_SMALL_SPACING) / 2,
 		floorf(result.Height() * 0.25f));
+
+	if (fShowingBarberPole)
+		result.right -= 10;
 
 	return result;
 }
@@ -183,14 +179,20 @@ BCountView::TextAndBarberPoleRect() const
 void
 BCountView::CheckCount()
 {
-	// invalidate the count text area if necessary
+	bool invalidate = false;
+
 	if (fLastCount != fPoseView->CountItems()) {
 		fLastCount = fPoseView->CountItems();
-		Invalidate(TextInvalRect());
+		invalidate = true;
 	}
 
-	// invalidate barber pole area if necessary
-	TrySpinningBarberPole();
+	if (fLastCountSelected != fPoseView->CountSelected()) {
+		fLastCountSelected = fPoseView->CountSelected();
+		invalidate = true;
+	}
+
+	if (invalidate)
+		Invalidate();
 }
 
 
@@ -213,32 +215,75 @@ BCountView::Draw(BRect updateRect)
 	if (IsTypingAhead())
 		itemString << TypeAhead();
 	else if (IsFiltering()) {
-		itemString << fLastCount << " " << Filter();
+		BString lastCountStr;
+		fNumberFormat.Format(lastCountStr, fLastCount);
+
+		if (fLastCountSelected != 0) {
+			static BStringFormat selectedFilteredFormat(B_TRANSLATE_COMMENT(
+				"{0, plural, other{#/%total %filter}}",
+				"Number of selected items from a filtered set: \"10/30 view\""));
+
+			selectedFilteredFormat.Format(itemString, fLastCountSelected);
+			itemString.ReplaceFirst("%total", lastCountStr);
+			itemString.ReplaceFirst("%filter", Filter());
+		} else
+			itemString << lastCountStr << " " << Filter();
 	} else {
 		if (fLastCount == 0)
 			itemString << B_TRANSLATE("no items");
-		else {
-			static BStringFormat format(B_TRANSLATE_COMMENT(
+		else if (fLastCountSelected == 0) {
+			static BStringFormat itemFormat(B_TRANSLATE_COMMENT(
 				"{0, plural, one{# item} other{# items}}",
 				"Number of selected items: \"1 item\" or \"2 items\""));
-			format.Format(itemString, fLastCount);
+			itemFormat.Format(itemString, fLastCount);
+		} else {
+			static BStringFormat selectedFormat(B_TRANSLATE_COMMENT(
+				"{0, plural, other{#/%total selected}}",
+				"Number of selected items out of a total: \"10/30 selected\""));
+
+			BString lastCountStr;
+			fNumberFormat.Format(lastCountStr, fLastCount);
+
+			selectedFormat.Format(itemString, fLastCountSelected);
+			itemString.ReplaceFirst("%total", lastCountStr);
 		}
 	}
 
-	BRect textRect(TextInvalRect());
+	BRect textRect(TextRect());
 
-	TruncateString(&itemString, IsTypingAhead() ? B_TRUNCATE_BEGINNING
-			: IsFiltering() ? B_TRUNCATE_MIDDLE : B_TRUNCATE_END,
-		textRect.Width());
+	// leave room for pop up indicator
+	float popUpWidth = be_control_look->DefaultItemSpacing();
+	bool popsUp = ShouldHaveDirectoryPopUpMenu();
+	if (popsUp)
+		textRect.right -= popUpWidth;
 
-	if (IsTypingAhead()) {
-		// use a muted gray for the typeahead
+	int32 truncateMode;
+	if (IsTypingAhead())
+		truncateMode = B_TRUNCATE_BEGINNING;
+	else if (IsFiltering())
+		truncateMode = B_TRUNCATE_MIDDLE;
+	else
+		truncateMode = B_TRUNCATE_END;
+
+	TruncateString(&itemString, truncateMode, textRect.Width());
+
+	// use a muted gray for typeahead filtering
+	if (IsTypingAhead())
 		SetHighUIColor(B_DOCUMENT_TEXT_COLOR);
-	} else
+	else
 		SetHighUIColor(B_PANEL_TEXT_COLOR);
 
 	MovePenTo(textRect.LeftBottom());
 	DrawString(itemString.String());
+
+	// draw pop up indicator
+	if (popsUp) {
+		BRect arrowRect(bounds);
+		arrowRect.left = bounds.right - popUpWidth;
+		float fgTint = (color.IsLight() ? B_DARKEN_4_TINT : 2.f - B_DARKEN_4_TINT);
+		be_control_look->DrawArrowShape(this, arrowRect, updateRect, color,
+			BControlLook::B_DOWN_ARROW, 0, fgTint);
+	}
 
 	bounds.top++;
 
@@ -288,39 +333,37 @@ BCountView::MouseDown(BPoint)
 	window->Activate();
 	window->UpdateIfNeeded();
 
-	if (fPoseView->IsFilePanel() || fPoseView->TargetModel() == NULL)
+	if (fPoseView->TargetModel() == NULL || !ShouldHaveDirectoryPopUpMenu())
 		return;
 
-	if (!window->TargetModel()->IsRoot()) {
-		BDirMenu* menu = new BDirMenu(NULL, be_app, B_REFS_RECEIVED);
-		BEntry entry;
-		if (entry.SetTo(window->TargetModel()->EntryRef()) == B_OK)
-			menu->Populate(&entry, Window(), false, false, true, false, true);
-		else
-			menu->Populate(NULL, Window(), false, false, true, false, true);
+	BDirMenu menu(NULL, be_app, B_REFS_RECEIVED);
+	BEntry entry;
+	if (entry.SetTo(window->TargetModel()->EntryRef()) == B_OK)
+		menu.Populate(&entry, Window(), false, false, true, false, true);
+	else
+		menu.Populate(NULL, Window(), false, false, true, false, true);
 
-		BPoint point = Bounds().LeftBottom();
-		point.y += 3;
-		ConvertToScreen(&point);
-		BRect clickToOpenRect(Bounds());
-		ConvertToScreen(&clickToOpenRect);
-		menu->Go(point, true, true, clickToOpenRect);
-		delete menu;
-	}
+	BPoint point = Bounds().LeftBottom();
+	point.y += 3;
+	ConvertToScreen(&point);
+	BRect clickToOpenRect(Bounds());
+	ConvertToScreen(&clickToOpenRect);
+	menu.Go(point, true, true, clickToOpenRect);
 }
 
 
 void
 BCountView::AttachedToWindow()
 {
-	SetFont(be_plain_font);
-	SetFontSize(std::max(kMinFontSize,
-		ceilf(be_plain_font->Size() * 0.75f)));
-
-	SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
-	SetLowUIColor(ViewUIColor());
-
 	CheckCount();
+}
+
+
+bool
+BCountView::ShouldHaveDirectoryPopUpMenu()
+{
+	return !(fPoseView->TargetModel()->IsRoot() || fPoseView->IsFilePanel()
+		|| fPoseView->IsOpenWithView());
 }
 
 

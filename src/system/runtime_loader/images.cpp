@@ -33,7 +33,7 @@
 	// page segment alignment.
 #	define RLD_PROGRAM_BASE	0x600000
 #	define MAX_PAGE_SIZE	0x200000
-#elif __arm__
+#elif defined(__arm__) || defined(__aarch64__)
 #	define RLD_PROGRAM_BASE	0x200000
 #	define MAX_PAGE_SIZE	0x10000
 #else
@@ -459,9 +459,12 @@ remap_images()
 				continue;
 
 			uint32 protection = B_READ_AREA;
-			if (image->abi < B_HAIKU_ABI_GCC_2_HAIKU) {
+#ifdef __HAIKU_BEOS_COMPATIBLE
+			if (image->abi < B_HAIKU_ABI_GCC_2_HAIKU)
 				protection |= B_WRITE_AREA | B_EXECUTE_AREA;
-			} else {
+			else
+#endif
+			{
 				if ((region.flags & RFLAG_WRITABLE) != 0)
 					protection |= B_WRITE_AREA;
 				if ((region.flags & RFLAG_EXECUTABLE) != 0)
@@ -538,6 +541,12 @@ register_image(image_t* image, int fd, const char* path)
 	info.text_delta = image->regions[0].delta;
 	info.symbol_table = image->syms;
 	info.symbol_hash = image->symhash;
+
+	info.gnuhash.buckets = image->gnuhash.buckets;
+	if (info.gnuhash.buckets != NULL) {
+		info.gnuhash.bucket_count = image->gnuhash.bucket_count;
+		info.gnuhash.chain0 = image->gnuhash.chain0;
+	}
 	info.string_table = image->strtab;
 	image->id = _kern_register_image(&info, sizeof(info));
 }

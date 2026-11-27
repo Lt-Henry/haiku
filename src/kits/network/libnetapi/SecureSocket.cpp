@@ -172,15 +172,13 @@ BSecureSocket::Private::ErrorCode(int returnValue)
 				fprintf(stderr, "SSL ERR %s\n", ERR_error_string(error2, NULL));
 			}
 
-			if (returnValue == 0)
-			{
+			if (returnValue == 0) {
 				// unexpected EOF, the remote host closed the socket without
 				// telling us why.
 				return ECONNREFUSED;
 			}
 
-			if (returnValue == -1)
-			{
+			if (returnValue == -1) {
 				fprintf(stderr, "SSL rv -1 %s\n", ERR_error_string(error, NULL));
 				return errno;
 			}
@@ -320,6 +318,12 @@ BSecureSocket::Private::_CreateContext()
 
 	// Setup certificate verification
 	SSL_CTX_set_default_verify_file(sContext);
+
+	// Setup certificate callback
+	// OpenSSL defaults to SSL_VERIFY_NONE, which will trust any certificate
+	// regardless of the callback result. SSL_VERIFY_PEER respects the callback
+	// result.
+	SSL_CTX_set_verify(sContext, SSL_VERIFY_PEER, VerifyCallback);
 
 	// OpenSSL 1.0.2 and later: use the alternate "trusted first" algorithm to
 	// validate certificate chains. This makes the validation stop as soon as a
@@ -554,9 +558,8 @@ BSecureSocket::_SetupCommon(const char* host)
 	// Do this only after BSocket::Connect has checked wether we're already
 	// connected. We don't want to kill an existing SSL session, as that would
 	// likely crash the protocol loop for it.
-	if (fPrivate->fSSL != NULL) {
+	if (fPrivate->fSSL != NULL)
 		SSL_free(fPrivate->fSSL);
-	}
 
 	fPrivate->fSSL = SSL_new(BSecureSocket::Private::Context());
 	if (fPrivate->fSSL == NULL) {
@@ -566,6 +569,8 @@ BSecureSocket::_SetupCommon(const char* host)
 
 	BIO_set_fd(fPrivate->fBIO, fSocket, BIO_NOCLOSE);
 	SSL_set_bio(fPrivate->fSSL, fPrivate->fBIO, fPrivate->fBIO);
+	BIO_set_nbio(fPrivate->fBIO, 0);
+
 	SSL_set_ex_data(fPrivate->fSSL, Private::sDataIndex, this);
 	if (host != NULL && host[0] != '\0') {
 		SSL_set_tlsext_host_name(fPrivate->fSSL, host);
@@ -583,11 +588,20 @@ BSecureSocket::_SetupConnect(const char* host)
 	if (error != B_OK)
 		return error;
 
-	int returnValue = SSL_connect(fPrivate->fSSL);
-	if (returnValue <= 0) {
+	int result;
+	int retry;
+	do {
+		result = SSL_connect(fPrivate->fSSL);
+		if (result >= 0)
+			break;
+
+		retry = BIO_should_retry(SSL_get_rbio(fPrivate->fSSL));
+	} while (retry != 0);
+
+	if (result <= 0) {
 		TRACE("SSLConnection can't connect\n");
 		BSocket::Disconnect();
-		return fPrivate->ErrorCode(returnValue);
+		return fPrivate->ErrorCode(result);
 	}
 
 #ifdef TRACE_SESSION_KEY

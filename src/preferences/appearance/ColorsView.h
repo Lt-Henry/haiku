@@ -32,12 +32,6 @@
 #include <DecorInfo.h>
 
 
-class APRWindow;
-
-
-using BPrivate::BColorPreview;
-
-
 class ColorsView : public BView {
 public:
 								ColorsView(const char *name);
@@ -58,8 +52,8 @@ private:
 			void				_CreateItems();
 			void				_UpdatePreviews(const BMessage& colors);
 
+			void				_SetColor(int32 index, rgb_color color);
 			void				_SetColor(color_which which, rgb_color color);
-			void				_SetOneColor(color_which which, rgb_color color);
 			void				_SetCurrentColor(rgb_color color);
 			void				_SetUIColors(const BMessage& colors);
 
@@ -73,11 +67,12 @@ private:
 
 			BScrollView*		fScrollView;
 
-			BColorPreview*		fColorPreview;
+			BPrivate::BColorPreview*	fColorPreview;
 
 			BMessage			fPrevColors;
 			BMessage			fDefaultColors;
 			BMessage			fCurrentColors;
 };
+
 
 #endif	// COLORS_VIEW_H_

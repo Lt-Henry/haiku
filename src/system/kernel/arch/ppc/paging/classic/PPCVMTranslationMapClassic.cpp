@@ -79,7 +79,7 @@
 
 #include <arch/cpu.h>
 #include <arch_mmu.h>
-#include <int.h>
+#include <interrupts.h>
 #include <thread.h>
 #include <slab/Slab.h>
 #include <smp.h>
@@ -138,8 +138,8 @@ PPCVMTranslationMapClassic::~PPCVMTranslationMapClassic()
 #endif
 
 	if (fMapCount > 0) {
-		panic("vm_translation_map.destroy_tmap: map %p has positive map count %ld\n",
-			this, fMapCount);
+		panic("vm_translation_map.destroy_tmap: map %p has positive map count %d\n", this,
+			fMapCount);
 	}
 
 	// mark the vsid base not in use
@@ -582,65 +582,6 @@ PPCVMTranslationMapClassic::RemapAddressRange(addr_t *_virtualAddress,
 		ppc_unmap_address_range(virtualAddress, size);
 
 	return B_OK;
-}
-
-
-status_t
-PPCVMTranslationMapClassic::DebugMarkRangePresent(addr_t start, addr_t end,
-	bool markPresent)
-{
-	panic("%s: UNIMPLEMENTED", __FUNCTION__);
-	return B_ERROR;
-#if 0//X86
-	start = ROUNDDOWN(start, B_PAGE_SIZE);
-	if (start >= end)
-		return B_OK;
-
-	page_directory_entry *pd = fPagingStructures->pgdir_virt;
-
-	do {
-		int index = VADDR_TO_PDENT(start);
-		if ((pd[index] & PPC_PDE_PRESENT) == 0) {
-			// no page table here, move the start up to access the next page
-			// table
-			start = ROUNDUP(start + 1, kPageTableAlignment);
-			continue;
-		}
-
-		Thread* thread = thread_get_current_thread();
-		ThreadCPUPinner pinner(thread);
-
-		page_table_entry* pt = (page_table_entry*)fPageMapper->GetPageTableAt(
-			pd[index] & PPC_PDE_ADDRESS_MASK);
-
-		for (index = VADDR_TO_PTENT(start); (index < 1024) && (start < end);
-				index++, start += B_PAGE_SIZE) {
-			if ((pt[index] & PPC_PTE_PRESENT) == 0) {
-				if (!markPresent)
-					continue;
-
-				PPCPagingMethodClassic::SetPageTableEntryFlags(&pt[index],
-					PPC_PTE_PRESENT);
-			} else {
-				if (markPresent)
-					continue;
-
-				page_table_entry oldEntry
-					= PPCPagingMethodClassic::ClearPageTableEntryFlags(&pt[index],
-						PPC_PTE_PRESENT);
-
-				if ((oldEntry & PPC_PTE_ACCESSED) != 0) {
-					// Note, that we only need to invalidate the address, if the
-					// accessed flags was set, since only then the entry could
-					// have been in any TLB.
-					InvalidatePage(start);
-				}
-			}
-		}
-	} while (start != 0 && start < end);
-
-	return B_OK;
-#endif
 }
 
 
@@ -1121,7 +1062,7 @@ PPCVMTranslationMapClassic::ClearAccessedAndModified(VMArea* area,
 
 	locker.Unlock();
 
-	UnmapPage(area, address, false);
+	UnmapPage(area, address, false, false, NULL);
 		// TODO: Obvious race condition: Between querying and unmapping the
 		// page could have been accessed. We try to compensate by considering
 		// vm_page::{accessed,modified} (which would have been updated by

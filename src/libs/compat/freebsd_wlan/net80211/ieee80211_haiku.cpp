@@ -165,8 +165,6 @@ start_wlan(device_t device)
 	KASSERT(gDevices[gDeviceCount - 1] == vap->iv_ifp,
 		("start_wlan: gDevices[i] != vap->iv_ifp"));
 
-	vap->iv_ifp->scan_done_sem = create_sem(0, "wlan scan done");
-
 	// We aren't connected to a WLAN, yet.
 	if_link_state_change(vap->iv_ifp, LINK_STATE_DOWN);
 
@@ -183,8 +181,6 @@ stop_wlan(device_t device)
 	struct ifnet* ifp = get_ifnet(device, i);
 	if (ifp == NULL)
 		return B_BAD_VALUE;
-
-	delete_sem(ifp->scan_done_sem);
 
 	struct ieee80211vap* vap = (ieee80211vap*)ifp->if_softc;
 	struct ieee80211com* ic = vap->iv_ic;
@@ -222,7 +218,7 @@ wlan_close(void* cookie)
 	ifp->if_flags &= ~IFF_UP;
 	ifp->if_ioctl(ifp, SIOCSIFFLAGS, NULL);
 
-	return release_sem_etc(ifp->scan_done_sem, 1, B_RELEASE_ALL);
+	return B_OK;
 }
 
 
@@ -671,6 +667,78 @@ ieee80211_get_vap_ifname(struct ieee80211vap *vap)
 	return vap->iv_ifp->if_xname;
 }
 
+
+void
+ieee80211_vap_sync_mac_address(struct ieee80211vap *vap)
+{
+	const struct ifnet *ifp = vap->iv_ifp;
+
+	/*
+	 * Check if the MAC address was changed
+	 * via SIOCSIFLLADDR ioctl.
+	 *
+	 * NB: device may be detached during initialization;
+	 * use if_ioctl for existence check.
+	 */
+	if (ifp->if_ioctl == ieee80211_ioctl &&
+		(ifp->if_flags & IFF_UP) == 0 &&
+		!IEEE80211_ADDR_EQ(vap->iv_myaddr, IF_LLADDR(ifp)))
+		IEEE80211_ADDR_COPY(vap->iv_myaddr, IF_LLADDR(ifp));
+}
+
+
+void
+ieee80211_vap_copy_mac_address(struct ieee80211vap *vap)
+{
+	IEEE80211_ADDR_COPY(vap->iv_myaddr, IF_LLADDR(vap->iv_ifp));
+}
+
+
+void
+ieee80211_vap_deliver_data(struct ieee80211vap *vap, struct mbuf *m)
+{
+	if_input(vap->iv_ifp, m);
+}
+
+
+bool
+ieee80211_vap_ifp_check_is_monitor(struct ieee80211vap *vap)
+{
+	return ((if_getflags(vap->iv_ifp) & IFF_MONITOR) != 0);
+}
+
+
+bool
+ieee80211_vap_ifp_check_is_simplex(struct ieee80211vap *vap)
+{
+	return ((if_getflags(vap->iv_ifp) & IFF_SIMPLEX) != 0);
+}
+
+
+bool
+ieee80211_vap_ifp_check_is_running(struct ieee80211vap *vap)
+{
+	return ((if_getdrvflags(vap->iv_ifp) & IFF_DRV_RUNNING) != 0);
+}
+
+
+void
+ieee80211_vap_ifp_set_running_state(struct ieee80211vap *vap, bool state)
+{
+	if (state)
+		if_setdrvflagbits(vap->iv_ifp, IFF_DRV_RUNNING, 0);
+	else
+		if_setdrvflagbits(vap->iv_ifp, 0, IFF_DRV_RUNNING);
+}
+
+
+const uint8_t *
+ieee80211_vap_get_broadcast_address(struct ieee80211vap *vap)
+{
+	return (if_getbroadcastaddr(vap->iv_ifp));
+}
+
+
 #ifdef DEBUGNET
 static void
 ieee80211_debugnet_init(struct ifnet *ifp, int *nrxr, int *ncl, int *clsize)
@@ -830,9 +898,6 @@ ieee80211_notify_node_leave(struct ieee80211_node* ni)
 void
 ieee80211_notify_scan_done(struct ieee80211vap* vap)
 {
-	release_sem_etc(vap->iv_ifp->scan_done_sem, 1,
-		B_DO_NOT_RESCHEDULE | B_RELEASE_ALL);
-
 	TRACE("%s\n", __FUNCTION__);
 
 	if (sNotificationModule != NULL) {
@@ -858,7 +923,7 @@ ieee80211_notify_replay_failure(struct ieee80211vap* vap,
 
 void
 ieee80211_notify_michael_failure(struct ieee80211vap* vap,
-	const struct ieee80211_frame* wh, u_int keyix)
+	const struct ieee80211_frame* wh, ieee80211_keyix keyix)
 {
 	dprintf("%s not implemented, yet.\n", __func__);
 }
@@ -942,4 +1007,34 @@ void
 ieee80211_sysctl_detach(struct ieee80211com* ic)
 {
 	dprintf("%s not implemented, yet.\n", __func__);
+}
+
+void
+net80211_printf(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vprintf(fmt, ap);
+	va_end(ap);
+}
+
+void
+net80211_vap_printf(const struct ieee80211vap *vap, const char *fmt, ...)
+{
+	va_list ap;
+	printf("%s: ", if_name(vap->iv_ifp));
+	va_start(ap, fmt);
+	vprintf(fmt, ap);
+	va_end(ap);
+}
+
+void
+net80211_ic_printf(const struct ieee80211com *ic, const char *fmt, ...)
+{
+	va_list ap;
+	printf("%s: ", ic->ic_name);
+	va_start(ap, fmt);
+	vprintf(fmt, ap);
+	va_end(ap);
 }

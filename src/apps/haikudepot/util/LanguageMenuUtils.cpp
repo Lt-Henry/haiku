@@ -1,12 +1,12 @@
 /*
- * Copyright 2019-2024, Andrew Lindesay <apl@lindesay.co.nz>.
+ * Copyright 2019-2026, Andrew Lindesay <apl@lindesay.co.nz>.
  * All rights reserved. Distributed under the terms of the MIT License.
  */
+
+
 #include "LanguageMenuUtils.h"
 
 #include <algorithm>
-
-#include <string.h>
 
 #include <Application.h>
 #include <Collator.h>
@@ -19,67 +19,58 @@
 #include "Logger.h"
 
 
-static const char* kLanguageIdKey = "id";
-
-
 /*! This method will add the supplied languages to the menu.  It will
-    add first the popular languages, followed by a separator and then
-    other less popular languages.
+	add first the popular languages, followed by a separator and then
+	other less popular languages.
 */
 
 /* static */ void
-LanguageMenuUtils::AddLanguagesToMenu(const LanguageRepository* repository, BMenu* menu)
+LanguageMenuUtils::AddLanguagesToMenu(const std::vector<LanguageRef>& languages, BMenu* menu)
 {
-	if (repository->IsEmpty())
+	if (languages.empty())
 		HDINFO("there are no languages defined");
 
 	// collect all of the languages into a vector so that they can be sorted
 	// and used.
 
-	int32 count = repository->CountLanguages();
-	std::vector<LanguageRef> languages(count);
-
-	for (int32 i = count - 1; i >= 0; i--)
-		languages[i] = repository->LanguageAtIndex(i);
-
-	std::sort(languages.begin(), languages.end(), IsLanguageBefore);
+	std::vector<LanguageRef> languagesAssembly = languages;
+	std::sort(languagesAssembly.begin(), languagesAssembly.end(), IsLanguageRefLess);
 
 	// now add the sorted languages to the menu.
 
-	int32 addedPopular = LanguageMenuUtils::_AddLanguagesToMenu(languages, menu, true);
+	int32 addedPopular = LanguageMenuUtils::_AddLanguagesToMenu(languagesAssembly, menu, true);
 
 	if (addedPopular > 0)
 		menu->AddSeparatorItem();
 
-	int32 addedNonPopular = LanguageMenuUtils::_AddLanguagesToMenu(languages, menu, false);
+	int32 addedNonPopular = LanguageMenuUtils::_AddLanguagesToMenu(languagesAssembly, menu, false);
 
 	HDDEBUG("did add %" B_PRId32 " popular languages and %" B_PRId32
-		" non-popular languages to a menu", addedPopular,
-		addedNonPopular);
+			" non-popular languages to a menu",
+		addedPopular, addedNonPopular);
 }
 
 
 /* static */ void
-LanguageMenuUtils::MarkLanguageInMenu(
-	const BString& languageId, BMenu* menu) {
-	AppUtils::MarkItemWithKeyValueInMenuOrFirst(menu, kLanguageIdKey, languageId);
+LanguageMenuUtils::MarkLanguageInMenu(const BString& languageId, BMenu* menu)
+{
+	AppUtils::MarkItemWithKeyValueInMenuOrFirst(menu, shared_message_keys::kKeyLanguageId,
+		languageId);
 }
 
 
 /* static */ void
-LanguageMenuUtils::_AddLanguageToMenu(
-	const BString& id, const BString& name, BMenu* menu)
+LanguageMenuUtils::_AddLanguageToMenu(const BString& id, const BString& name, BMenu* menu)
 {
 	BMessage* message = new BMessage(MSG_LANGUAGE_SELECTED);
-	message->AddString(kLanguageIdKey, id);
+	message->AddString(shared_message_keys::kKeyLanguageId, id);
 	BMenuItem* item = new BMenuItem(name, message);
 	menu->AddItem(item);
 }
 
 
 /* static */ void
-LanguageMenuUtils::_AddLanguageToMenu(
-	const LanguageRef& language, BMenu* menu)
+LanguageMenuUtils::_AddLanguageToMenu(const LanguageRef& language, BMenu* menu)
 {
 	BString name;
 	if (language->GetName(name) != B_OK || name.IsEmpty())
@@ -89,8 +80,8 @@ LanguageMenuUtils::_AddLanguageToMenu(
 
 
 /* static */ int32
-LanguageMenuUtils::_AddLanguagesToMenu(const std::vector<LanguageRef>& languages,
-	BMenu* menu, bool isPopular)
+LanguageMenuUtils::_AddLanguagesToMenu(const std::vector<LanguageRef>& languages, BMenu* menu,
+	bool isPopular)
 {
 	int32 count = 0;
 

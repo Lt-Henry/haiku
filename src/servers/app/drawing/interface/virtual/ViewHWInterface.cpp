@@ -35,7 +35,6 @@
 #include "PortLink.h"
 #include "ServerConfig.h"
 #include "ServerCursor.h"
-#include "UpdateQueue.h"
 
 
 #ifdef DEBUG_DRIVER_MODULE
@@ -52,8 +51,6 @@ const unsigned char kEmptyCursor[] = { 16, 1, 0, 0,
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
-static const bool kDefaultDoubleBuffered = true;
-
 enum {
 	MSG_UPDATE = 'updt'
 };
@@ -62,7 +59,7 @@ enum {
 const char*
 string_for_color_space(color_space format)
 {
-	const char* name = "<unkown format>";
+	const char* name = "<unknown format>";
 	switch (format) {
 		case B_RGBA64:
 			name = "B_RGBA64";
@@ -410,8 +407,6 @@ ViewHWInterface::ViewHWInterface()
 	fFrontBuffer(NULL),
 	fWindow(NULL)
 {
-	SetAsyncDoubleBuffered(kDefaultDoubleBuffered);
-
 	fDisplayMode.virtual_width = 640;
 	fDisplayMode.virtual_height = 480;
 	fDisplayMode.space = B_RGBA32;
@@ -615,20 +610,6 @@ ViewHWInterface::GetDeviceInfo(accelerant_device_info* info)
 
 
 status_t
-ViewHWInterface::GetFrameBufferConfig(frame_buffer_config& config)
-{
-	if (!fFrontBuffer.IsSet())
-		return B_ERROR;
-
-	config.frame_buffer = fFrontBuffer->Bits();
-	config.frame_buffer_dma = NULL;
-	config.bytes_per_row = fFrontBuffer->BytesPerRow();
-
-	return B_OK;
-}
-
-
-status_t
 ViewHWInterface::GetModeList(display_mode** _modes, uint32* _count)
 {
 	AutoReadLocker _(this);
@@ -707,7 +688,7 @@ ViewHWInterface::ProposeMode(display_mode* candidate, const display_mode* low,
 {
 	// We should be able to get away with this because we're not dealing with
 	// any specific hardware. This is a Good Thing(TM) because we can support
-	// any hardware we wish within reasonable expectaions and programmer
+	// any hardware we wish within reasonable expectations and programmer
 	// laziness. :P
 	return B_OK;
 }

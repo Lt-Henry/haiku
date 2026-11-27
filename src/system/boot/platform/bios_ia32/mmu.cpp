@@ -70,6 +70,7 @@ struct extended_memory {
 
 
 segment_descriptor gBootGDT[BOOT_GDT_SEGMENT_COUNT];
+struct gdt_idt_descr gBootGDTDescriptor;
 
 static const uint32 kDefaultPageTableFlags = 0x07;	// present, user, R/W
 static const size_t kMaxKernelSize = 0x1000000;		// 16 MB for the kernel
@@ -296,10 +297,13 @@ static uint32
 get_memory_map(extended_memory **_extendedMemory)
 {
 	extended_memory *block = (extended_memory *)kExtraSegmentScratch;
-	bios_regs regs = {0, 0, sizeof(extended_memory), 0, 0, (uint32)block, 0, 0};
+	bios_regs regs;
 	uint32 count = 0;
 
 	TRACE("get_memory_map()\n");
+
+	regs.ecx = sizeof(extended_memory);
+	regs.edi = (uint32)block;
 
 	do {
 		regs.eax = 0xe820;
@@ -369,8 +373,7 @@ init_page_directory(void)
 	// switch to the new pgdir and enable paging
 	asm("movl %0, %%eax;"
 		"movl %%eax, %%cr3;" : : "m" (sPageDirectory) : "eax");
-	// Important.  Make sure supervisor threads can fault on read only pages...
-	asm("movl %%eax, %%cr0" : : "a" ((1 << 31) | (1 << 16) | (1 << 5) | 1));
+	x86_write_cr0(x86_read_cr0() | CR0_PAGING);
 }
 
 
@@ -549,10 +552,7 @@ mmu_get_virtual_mapping(addr_t virtualAddress, addr_t *_physicalAddress)
 }
 
 
-/*!	Sets up the final and kernel accessible GDT and IDT tables.
-	BIOS calls won't work any longer after this function has
-	been called.
-*/
+/*!	Sets up the final and kernel accessible GDT and IDT tables. */
 extern "C" void
 mmu_init_for_kernel(void)
 {
@@ -584,12 +584,8 @@ mmu_init_for_kernel(void)
 	set_segment_descriptor(&gBootGDT[USER_DATA_SEGMENT], 0, 0xffffffff,
 		DT_DATA_WRITEABLE, DPL_USER);
 
-	// load the GDT
-	struct gdt_idt_descr gdtDescriptor;
-	gdtDescriptor.limit = sizeof(gBootGDT);
-	gdtDescriptor.base = gBootGDT;
-
-	asm("lgdt %0" : : "m" (gdtDescriptor));
+	gBootGDTDescriptor.limit = sizeof(gBootGDT);
+	gBootGDTDescriptor.base = gBootGDT;
 
 	TRACE("gdt at virtual address %p\n", gBootGDT);
 
@@ -806,8 +802,7 @@ mmu_init(void)
 
 
 extern "C" status_t
-platform_allocate_region(void **_address, size_t size, uint8 protection,
-	bool /*exactAddress*/)
+platform_allocate_region(void **_address, size_t size, uint8 protection)
 {
 	void *address = mmu_allocate(*_address, size);
 	if (address == NULL)

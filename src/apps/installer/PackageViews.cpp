@@ -20,6 +20,7 @@
 #include <package/PackageInfo.h>
 #include <Path.h>
 #include <ScrollBar.h>
+#include <StackOrHeapArray.h>
 #include <String.h>
 #include <View.h>
 #include <Window.h>
@@ -98,11 +99,11 @@ Package::PackageFromEntry(BEntry &entry)
 
 	attr_info attributes;
 	if (node.GetAttrInfo(ICON_ATTRIBUTE, &attributes) == B_OK) {
-		char buffer[attributes.size];
+		BStackOrHeapArray<char, 512> buffer(attributes.size);
 		BMessage msg;
-		if ((node.ReadAttr(ICON_ATTRIBUTE, attributes.type, 0, buffer,
+		if (buffer.IsValid() && (node.ReadAttr(ICON_ATTRIBUTE, attributes.type, 0, buffer,
 				attributes.size) == attributes.size)
-			&& (msg.Unflatten(buffer) == B_OK)) {
+			&& (msg.Unflatten(buffer, attributes.size) == B_OK)) {
 			package->SetIcon(new BBitmap(&msg));
 		}
 	}
@@ -150,6 +151,13 @@ PackageCheckBox::~PackageCheckBox()
 
 
 void
+PackageCheckBox::AttachedToWindow()
+{
+	SetViewUIColor(B_DOCUMENT_BACKGROUND_COLOR);
+}
+
+
+void
 PackageCheckBox::Draw(BRect update)
 {
 	BCheckBox::Draw(update);
@@ -160,8 +168,9 @@ PackageCheckBox::Draw(BRect update)
 	float width = StringWidth(string);
 	BRect sizeRect = Bounds();
 	sizeRect.left = sizeRect.right - width;
+	rgb_color documentText = ui_color(B_DOCUMENT_TEXT_COLOR);
 	be_control_look->DrawLabel(this, string, NULL, sizeRect, update,
-		ui_color(B_DOCUMENT_BACKGROUND_COLOR), be_control_look->Flags(this));
+		ui_color(B_DOCUMENT_BACKGROUND_COLOR), be_control_look->Flags(this), &documentText);
 }
 
 
@@ -303,8 +312,9 @@ PackagesView::Draw(BRect updateRect)
 	if (CountChildren() > 0)
 		return;
 
+	rgb_color highColor = HighColor();
 	be_control_look->DrawLabel(this,
 		B_TRANSLATE("No optional packages available."),
 		Bounds(), updateRect, ViewColor(), BControlLook::B_DISABLED,
-		BAlignment(B_ALIGN_CENTER, B_ALIGN_MIDDLE));
+		BAlignment(B_ALIGN_CENTER, B_ALIGN_MIDDLE), &highColor);
 }

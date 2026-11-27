@@ -51,7 +51,7 @@ AttributeIterator::GetNext(char* name, size_t* _nameLength)
 {
 	btrfs_dir_entry* entries;
 	uint32 entries_length;
-	status_t status = fIterator->GetPreviousEntry((void**)&entries,
+	status_t status = fIterator->GetNextEntry((void**)&entries,
 		&entries_length);
 	if (status != B_OK)
 		return status;
@@ -68,7 +68,7 @@ AttributeIterator::GetNext(char* name, size_t* _nameLength)
 	TRACE("DirectoryIterator::GetNext() entries_length %ld name_length %d\n",
 		entries_length, entry->NameLength());
 
-	memcpy(name, entry + 1, entry->NameLength());
+	memcpy(name, entry->name, entry->NameLength());
 	name[entry->NameLength()] = '\0';
 	*_nameLength = entry->NameLength();
 	free(entries);

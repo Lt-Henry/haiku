@@ -64,6 +64,8 @@ public:
 
 			int32		SegmentReceived(tcp_segment_header& segment,
 							net_buffer* buffer);
+			status_t	ErrorReceived(net_error error, net_error_data* errorData,
+							net_buffer* data);
 
 			void		Dump() const;
 
@@ -81,6 +83,7 @@ private:
 			status_t	_PrepareAndSend(tcp_segment_header& segment, net_buffer* buffer,
 							bool isRetransmit);
 			status_t	_SendAcknowledge(bool force = false);
+			status_t	_SendReset(bool force = false);
 			status_t	_SendQueued(bool force = false);
 
 			status_t	_Disconnect(bool closing);
@@ -178,6 +181,7 @@ private:
 	uint32			fSendTime;
 	tcp_sequence	fRoundTripStartSequence;
 	bigtime_t		fRetransmitTimeout;
+	uint32			fRetransmitInitialCount;
 
 	uint32			fReceivedTimestamp;
 
