@@ -444,6 +444,8 @@ init_hardware(void)
 
 	cpu_ent* cpu = &gCPU[0];
 	uint32 family = cpu->arch.family + cpu->arch.extended_family;
+	
+	TRACE_ALWAYS("Looking for rapl support on family %d\n",family);
 
 	if (cpu->arch.vendor == VENDOR_INTEL) {
 		if (cpu->arch.family != 6)
@@ -454,7 +456,7 @@ init_hardware(void)
 	} else if (cpu->arch.vendor == VENDOR_AMD) {
 		/* Family 17h (Zen/Zen 2) and 19h (Zen 3/Zen 4) share the same
 		 * RAPL MSR layout. AMD has no RAPL CPUID bit to check. */
-		if (family != 0x17 && family != 0x19)
+		if (family != 0x17 && family != 0x19 && family!=0x1A)
 			return B_ERROR;
 		sVendor = VENDOR_AMD;
 	} else {
