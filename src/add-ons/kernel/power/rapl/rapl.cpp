@@ -32,48 +32,6 @@ static const DomainName kDomainNames[] = {
 	{0, 0}
 };
 
-struct ModelDomains {
-	uint8	model;
-	uint32	domains;
-};
-
-static const ModelDomains kModelDomains[] = {
-	{ 0x2a, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Sandy Bridge
-	{ 0x2d, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Sandy Bridge EP
-	{ 0x3a, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Ivy Bridge
-	{ 0x3c, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Haswell
-	{ 0x3d, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Haswell EP
-	{ 0x3e, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Haswell
-	{ 0x3f, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Haswell EP
-	{ 0x45, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Haswell ULT
-	{ 0x46, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Haswell GT3
-	{ 0x47, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Haswell GT3e
-	{ 0x4a, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Haswell ULT
-	{ 0x4d, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Broadwell EP
-	{ 0x4e, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Broadwell
-	{ 0x4f, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Broadwell
-	{ 0x55, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Skylake SP
-	{ 0x56, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Broadwell DE
-	{ 0x57, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Broadwell DE
-	{ 0x5a, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Broadwell ULT
-	{ 0x5c, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Broadwell GT3
-	{ 0x5e, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Skylake Y/U
-	{ 0x5f, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Skylake S
-	{ 0x75, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Skylake X
-	{ 0x7a, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Skylake SP
-	{ 0x85, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Skylake / Kaby Lake
-	{ 0x8c, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Kaby Lake U
-	{ 0x8e, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Kaby Lake / Coffee Lake
-	{ 0x9e, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Coffee Lake
-	{ 0x66, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Ice Lake
-	{ 0x6a, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Ice Lake
-	{ 0x6c, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Tiger Lake
-	{ 0x7d, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Rocket Lake
-	{ 0x97, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Alder Lake
-	{ 0x9f, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM },	// Alder Lake
-	{ 0xbf, RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM }	// Raptor Lake
-};
-
 
 struct Package {
 	int32	id;				/* package id */
@@ -138,11 +96,12 @@ domains_for_cpu(cpu_ent* cpu)
 
 	uint8 model = cpu->arch.model + (cpu->arch.extended_model << 4);
 
-	for (uint32 i = 0; i < sizeof(kModelDomains) / sizeof(kModelDomains[0]); i++) {
-		if (kModelDomains[i].model == model)
-			return kModelDomains[i].domains;
-	}
-
+	/* model is at least, a Sandy Bridge */
+	if (model >= 0x2a)
+		return RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0 | RAPL_DOMAIN_DRAM;
+		
+	/* Newest models may need an updated domain list */
+	
 	return RAPL_DOMAIN_PKG | RAPL_DOMAIN_PP0;
 }
 
@@ -444,8 +403,6 @@ init_hardware(void)
 
 	cpu_ent* cpu = &gCPU[0];
 	uint32 family = cpu->arch.family + cpu->arch.extended_family;
-	
-	TRACE_ALWAYS("Looking for rapl support on family %d\n",family);
 
 	if (cpu->arch.vendor == VENDOR_INTEL) {
 		if (cpu->arch.family != 6)
@@ -454,8 +411,6 @@ init_hardware(void)
 			return B_ERROR;
 		sVendor = VENDOR_INTEL;
 	} else if (cpu->arch.vendor == VENDOR_AMD) {
-		/* Family 17h (Zen/Zen 2) and 19h (Zen 3/Zen 4) share the same
-		 * RAPL MSR layout. AMD has no RAPL CPUID bit to check. */
 		if (family != 0x17 && family != 0x19 && family!=0x1A)
 			return B_ERROR;
 		sVendor = VENDOR_AMD;
